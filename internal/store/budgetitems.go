@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"time"
 
@@ -42,15 +43,20 @@ type BudgetItem struct {
 
 	// Who is covering this line. Its own table, so a sponsor reference cannot
 	// outlive the sponsor; `db:"-"` because it is not a column.
-	SponsorIDs []uuid.UUID `db:"-"`
+	//
+	// The `audit` tag opts it into the change log anyway. It is not a column,
+	// but changing who is covering a line is a change to who owes what, which
+	// is the one thing this history exists to answer.
+	SponsorIDs []uuid.UUID `db:"-" audit:"sponsor_ids"`
 }
 
 const budgetItemColumns = `id, phase_id, parent_id, item, vendor, unit, qty, paid, lock_by, note, position, revision, updated_at, updated_by`
 
-// CreateBudgetItem inserts a line and its sponsor attributions together, so a
-// failure halfway leaves neither.
+// CreateBudgetItem inserts a line, its sponsor attributions and its history
+// entry together, so a failure halfway leaves none of them.
 func (s *Store) CreateBudgetItem(ctx context.Context, in BudgetItem, actor *uuid.UUID) (BudgetItem, error) {
-	return inTx(ctx, s, func(tx pgx.Tx) (BudgetItem, error) {
+	who := resolveActor(ctx, actor)
+	return createAudited(ctx, s, EntityBudgetItems, who, func(tx pgx.Tx) (BudgetItem, error) {
 		out, err := queryOne[BudgetItem](ctx, tx, "budget_items",
 			`INSERT INTO budget_items
 			    (id, phase_id, parent_id, item, vendor, unit, qty, paid, lock_by, note, position, updated_by)
@@ -109,8 +115,19 @@ func (s *Store) BudgetItems(ctx context.Context) ([]BudgetItem, error) {
 // with exactly what is passed, so a caller that built the struct by hand
 // instead of reading the row first will clear them. The revision check is what
 // stops that happening behind somebody else's back, not this method.
+// The line's history is written last, after the attributions, so the entry
+// describes the row as it ends up — and so a failure attaching a sponsor rolls
+// the history back with the write it describes.
 func (s *Store) UpdateBudgetItem(ctx context.Context, in BudgetItem, actor *uuid.UUID) (BudgetItem, error) {
+	who := resolveActor(ctx, actor)
 	out, err := inTx(ctx, s, func(tx pgx.Tx) (BudgetItem, error) {
+		// Not the shared updateAudited path: a budget line's state spans two
+		// tables, and an entry that missed the sponsor attributions would be
+		// silent about who stopped covering a cost.
+		before, err := lockBudgetItem(ctx, tx, in.ID)
+		if err != nil {
+			return BudgetItem{}, err
+		}
 		out, err := queryOne[BudgetItem](ctx, tx, "budget_items",
 			`UPDATE budget_items
 			    SET phase_id = $1, parent_id = $2, item = $3, vendor = $4, unit = $5,
@@ -130,6 +147,9 @@ func (s *Store) UpdateBudgetItem(ctx context.Context, in BudgetItem, actor *uuid
 			return BudgetItem{}, err
 		}
 		out.SponsorIDs = normaliseSponsors(in.SponsorIDs)
+		if err := recordUpdate(ctx, tx, EntityBudgetItems, out.ID, &out.Revision, before, out, who); err != nil {
+			return BudgetItem{}, err
+		}
 		return out, nil
 	})
 	if err == nil {
@@ -146,17 +166,93 @@ func (s *Store) UpdateBudgetItem(ctx context.Context, in BudgetItem, actor *uuid
 // DeleteBudgetItem removes a line, refusing if revision is no longer current.
 // Its children go with it, by cascade: a component of a quote that outlived
 // the quote would start counting towards the total on its own.
+//
+// Every one of them gets a history entry, not just the line that was asked for.
+// The children are budget rows carrying real amounts, and the cascade takes
+// them without this layer issuing a statement — so they are read and recorded
+// first, or a caterer's whole breakdown would leave no trace of what it said.
 func (s *Store) DeleteBudgetItem(ctx context.Context, id uuid.UUID, revision int64) error {
-	n, err := s.exec(ctx, "budget_items",
-		`DELETE FROM budget_items WHERE id = $1 AND revision = $2`, id, revision)
-	if err != nil {
+	actor := resolveActor(ctx, nil)
+	_, err := inTx(ctx, s, func(tx pgx.Tx) (struct{}, error) {
+		doomed, err := lockBudgetItemTree(ctx, tx, id)
+		if err != nil {
+			return struct{}{}, err
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM budget_items WHERE id = $1 AND revision = $2`, id, revision)
+		if err != nil {
+			return struct{}{}, fmt.Errorf("budget_items: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return struct{}{}, notFoundErr("budget_items")
+		}
+		for _, item := range doomed {
+			if err := recordDelete(ctx, tx, EntityBudgetItems, item.ID, &item.Revision, item, actor); err != nil {
+				return struct{}{}, err
+			}
+		}
+		return struct{}{}, nil
+	})
+	if err == nil {
+		return nil
+	}
+	if !isNotFound(err) {
 		return err
 	}
-	if n == 0 {
-		current, err := s.BudgetItem(ctx, id)
-		return conflict("budget_items", id, revision, current, err)
+
+	current, err := s.BudgetItem(ctx, id)
+	return conflict("budget_items", id, revision, current, err)
+}
+
+// lockBudgetItem reads one line with its sponsors and holds it for the rest of
+// the transaction. This is the "before" a change is recorded against.
+func lockBudgetItem(ctx context.Context, tx pgx.Tx, id uuid.UUID) (BudgetItem, error) {
+	item, err := lockRow[BudgetItem](ctx, tx, EntityBudgetItems, budgetItemColumns, id)
+	if err != nil {
+		return BudgetItem{}, err
 	}
-	return nil
+	item.SponsorIDs, err = queryScalars[uuid.UUID](ctx, tx, "budget_item_sponsors",
+		`SELECT sponsor_id FROM budget_item_sponsors WHERE budget_item_id = $1 ORDER BY sponsor_id`, id)
+	if err != nil {
+		return BudgetItem{}, err
+	}
+	return item, nil
+}
+
+// lockBudgetItemTree reads a line and every line that rolls up into it, however
+// deep, and holds them all.
+//
+// Two statements rather than one: FOR UPDATE cannot be applied to a recursive
+// query, so the recursion collects ids and the second read locks them. Without
+// the lock a child edited between the read and the delete would be recorded
+// with the wrong final amount — and the amount is the whole point.
+func lockBudgetItemTree(ctx context.Context, tx pgx.Tx, root uuid.UUID) ([]BudgetItem, error) {
+	ids, err := queryScalars[uuid.UUID](ctx, tx, "budget_items",
+		`WITH RECURSIVE subtree AS (
+		     SELECT id FROM budget_items WHERE id = $1
+		     UNION ALL
+		     SELECT child.id FROM budget_items child JOIN subtree ON child.parent_id = subtree.id
+		 )
+		 SELECT id FROM subtree`, root)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, notFoundErr("budget_items")
+	}
+
+	items, err := queryAll[BudgetItem](ctx, tx, "budget_items",
+		`SELECT `+budgetItemColumns+` FROM budget_items WHERE id = ANY($1) ORDER BY position, id FOR UPDATE`, ids)
+	if err != nil {
+		return nil, err
+	}
+	links, err := sponsorLinks(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].SponsorIDs = links[items[i].ID]
+	}
+	return items, nil
 }
 
 // BudgetItemChildren lists the components that roll up into one line.

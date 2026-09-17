@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // ProgrammeEntry is one moment in the run of show: guests arrive, speeches,
@@ -31,11 +32,14 @@ const programmeColumns = `id, title, note, position, budget_item_id, revision, u
 
 // CreateProgrammeEntry inserts a moment in the evening.
 func (s *Store) CreateProgrammeEntry(ctx context.Context, in ProgrammeEntry) (ProgrammeEntry, error) {
-	return queryOne[ProgrammeEntry](ctx, s.pool, "programme_entries",
-		`INSERT INTO programme_entries (id, title, note, position, budget_item_id)
-		 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5)
-		 RETURNING `+programmeColumns,
-		newID(in.ID), in.Title, in.Note, in.Position, in.BudgetItemID)
+	actor := resolveActor(ctx, nil)
+	return createAudited(ctx, s, EntityProgrammeEntries, actor, func(tx pgx.Tx) (ProgrammeEntry, error) {
+		return queryOne[ProgrammeEntry](ctx, tx, "programme_entries",
+			`INSERT INTO programme_entries (id, title, note, position, budget_item_id)
+			 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5)
+			 RETURNING `+programmeColumns,
+			newID(in.ID), in.Title, in.Note, in.Position, in.BudgetItemID)
+	})
 }
 
 // ProgrammeEntry reads one entry.
@@ -53,13 +57,17 @@ func (s *Store) Programme(ctx context.Context) ([]ProgrammeEntry, error) {
 // UpdateProgrammeEntry writes every mutable field, refusing the write if
 // in.Revision is no longer current.
 func (s *Store) UpdateProgrammeEntry(ctx context.Context, in ProgrammeEntry) (ProgrammeEntry, error) {
-	out, err := queryOne[ProgrammeEntry](ctx, s.pool, "programme_entries",
-		`UPDATE programme_entries
-		    SET title = $1, note = $2, position = $3, budget_item_id = $4,
-		        revision = revision + 1, updated_at = now()
-		  WHERE id = $5 AND revision = $6
-		RETURNING `+programmeColumns,
-		in.Title, in.Note, in.Position, in.BudgetItemID, in.ID, in.Revision)
+	actor := resolveActor(ctx, nil)
+	out, err := updateAudited(ctx, s, EntityProgrammeEntries, programmeColumns, in.ID, actor,
+		func(tx pgx.Tx, _ ProgrammeEntry) (ProgrammeEntry, error) {
+			return queryOne[ProgrammeEntry](ctx, tx, "programme_entries",
+				`UPDATE programme_entries
+				    SET title = $1, note = $2, position = $3, budget_item_id = $4,
+				        revision = revision + 1, updated_at = now()
+				  WHERE id = $5 AND revision = $6
+				RETURNING `+programmeColumns,
+				in.Title, in.Note, in.Position, in.BudgetItemID, in.ID, in.Revision)
+		})
 	if err == nil {
 		return out, nil
 	}
@@ -76,14 +84,14 @@ func (s *Store) UpdateProgrammeEntry(ctx context.Context, in ProgrammeEntry) (Pr
 // of the cake does not disappear because the cake stopped being a scheduled
 // moment.
 func (s *Store) DeleteProgrammeEntry(ctx context.Context, id uuid.UUID, revision int64) error {
-	n, err := s.exec(ctx, "programme_entries",
-		`DELETE FROM programme_entries WHERE id = $1 AND revision = $2`, id, revision)
-	if err != nil {
+	err := deleteAudited[ProgrammeEntry](ctx, s, EntityProgrammeEntries, programmeColumns, id, revision)
+	if err == nil {
+		return nil
+	}
+	if !isNotFound(err) {
 		return err
 	}
-	if n == 0 {
-		current, err := s.ProgrammeEntry(ctx, id)
-		return conflict("programme_entries", id, revision, current, err)
-	}
-	return nil
+
+	current, err := s.ProgrammeEntry(ctx, id)
+	return conflict("programme_entries", id, revision, current, err)
 }

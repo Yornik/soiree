@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Settings is the singleton row of plan-wide knobs. One deployment serves one
@@ -35,14 +36,34 @@ func (s *Store) Settings(ctx context.Context) (Settings, error) {
 
 // UpdateSettings writes the singleton, refusing the write if in.Revision is
 // no longer current.
+//
+// The ceiling is money and gets the same history as every other figure: "who
+// raised the budget, and when" is one of the questions that starts the
+// argument. The singleton has no id, so its history is recorded under a null
+// entity_id and read back with uuid.Nil.
 func (s *Store) UpdateSettings(ctx context.Context, in Settings) (Settings, error) {
-	out, err := queryOne[Settings](ctx, s.pool, "settings",
-		`UPDATE settings
-		    SET ceiling = $1, inflation_pct = $2, fx_rate = $3, split_evenly = $4,
-		        revision = revision + 1, updated_at = now()
-		  WHERE id = true AND revision = $5
-		RETURNING `+settingsColumns,
-		in.Ceiling, in.InflationPct, in.FxRate, in.SplitEvenly, in.Revision)
+	actor := resolveActor(ctx, nil)
+	out, err := inTx(ctx, s, func(tx pgx.Tx) (Settings, error) {
+		before, err := queryOne[Settings](ctx, tx, "settings",
+			`SELECT `+settingsColumns+` FROM settings WHERE id = true FOR UPDATE`)
+		if err != nil {
+			return Settings{}, err
+		}
+		after, err := queryOne[Settings](ctx, tx, "settings",
+			`UPDATE settings
+			    SET ceiling = $1, inflation_pct = $2, fx_rate = $3, split_evenly = $4,
+			        revision = revision + 1, updated_at = now()
+			  WHERE id = true AND revision = $5
+			RETURNING `+settingsColumns,
+			in.Ceiling, in.InflationPct, in.FxRate, in.SplitEvenly, in.Revision)
+		if err != nil {
+			return Settings{}, err
+		}
+		if err := recordUpdate(ctx, tx, EntitySettings, uuid.Nil, &after.Revision, before, after, actor); err != nil {
+			return Settings{}, err
+		}
+		return after, nil
+	})
 	if err == nil {
 		return out, nil
 	}
