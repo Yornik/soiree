@@ -1,0 +1,191 @@
+# Contributing
+
+Thanks for looking. This is a small project with a narrow purpose — a tool a
+dozen people use to plan one evening — so the fastest way to get a change
+merged is to open an issue first and check the idea fits. Bug fixes and
+anything in the roadmap in [docs/architecture.md](docs/architecture.md) never
+need that conversation.
+
+Everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). Security flaws go through
+[SECURITY.md](SECURITY.md), not a pull request or a public issue.
+
+## Running it
+
+The Go toolchain is the only dependency for the application itself. The
+frontend is embedded with `//go:embed` and processed at startup, so there is no
+asset build and nothing to install for `web/src`.
+
+```bash
+go run ./cmd/soiree                        # http://localhost:8080
+SOIREE_DEMO_DATA=true go run ./cmd/soiree  # with obviously fake sample data
+```
+
+The image is built with Go 1.27 and CI tests on the same version; `go.mod`
+declares 1.25 as the floor.
+
+## Tests
+
+```bash
+go test -short ./...    # no Docker required
+go test -race ./...     # the full suite: needs Docker
+```
+
+`-short` is the everyday loop. Anything that talks to PostgreSQL skips itself
+under it, because those tests start a real `postgres:18-alpine` container
+through testcontainers — the same major version the production cluster runs.
+Mocking that layer would defeat its purpose: a fake would happily accept a
+cascade that does not exist and a `CHECK` that never fires.
+
+Note that `-short` is a local convenience, not a lower bar: CI runs
+`go test -race -cover ./...`, the full suite rather than the `-short` subset.
+Run it yourself before opening a pull request if your change goes anywhere near
+`internal/store`, `internal/migrate` or `migrations/`.
+
+For work against a database by hand, `compose.yaml` brings up a throwaway
+PostgreSQL alongside the app:
+
+```bash
+docker compose up --build   # http://localhost:8080
+docker compose down         # leaves nothing behind
+```
+
+Its data directory is a tmpfs and durability is off, so every run starts from
+the migrations rather than from whatever a previous branch left behind. That is
+a development-only setting — never point it at data you care about.
+
+Worth knowing before you go looking for it: `cmd/soiree` does not read
+`DATABASE_URL` yet. The store and migration layers live in `internal/` with
+their own tests against a real database, and get wired into the binary in a
+later roadmap step, so today this stack is a database to point tests and `psql`
+at rather than one the running app is using.
+
+## Commits
+
+The release is cut by
+[release-please](https://github.com/googleapis/release-please), which reads
+commit subjects, so the
+[Conventional Commits](https://www.conventionalcommits.org/) format is load
+bearing rather than a style preference:
+
+```
+feat(store): record who last changed a budget line
+fix(httpd): serve the service worker with no-cache
+docs(security): add a disclosure policy
+```
+
+- `feat:` — a minor bump and a changelog entry
+- `fix:` — a patch bump and a changelog entry
+- `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `build:` — no release
+- `!` after the type, or a `BREAKING CHANGE:` footer — a major bump. The
+  repository does not set `bump-minor-pre-major`, so this takes a 0.x version
+  straight to 1.0.0. Use it only when you mean that.
+
+A wrong type is not cosmetic: `feat:` on a documentation-only change mints a
+release nobody meant to cut. Whatever subject lands on `main` is what
+release-please reads, so if your pull request is squashed, its title is the
+thing that matters.
+
+Branches follow `feat/<scope>`, `fix/<scope>` and so on, branched from current
+`main`.
+
+## What CI checks
+
+Five jobs run on every pull request
+([`.github/workflows/ci.yaml`](.github/workflows/ci.yaml)). All of them must
+pass.
+
+| Job | What it does |
+|---|---|
+| Lint | `gofmt -l .` must print nothing, then `go vet ./...`, then `golangci-lint` |
+| Test | `go test -race -cover ./...` — the full suite, Docker included |
+| Vulnerabilities | `govulncheck ./...` |
+| Build image | Builds the `Dockerfile`, runs the image, and smoke tests it |
+| Reproducible build | Builds the binary twice and compares the bytes |
+
+Three of those are worth expanding on.
+
+**golangci-lint** runs with no configuration file in the repository, so it uses
+its default linter set — which includes `errcheck`. An ignored error is a
+failure, including in tests; write `_ =` where dropping the value is genuinely
+what you mean.
+
+**The smoke test** exists because a green unit suite does not prove the image
+boots. It starts the built image, waits for `/healthz`, checks that
+`SOIREE_EVENT_NAME` actually reaches the rendered page, and fetches `/sw.js`.
+If you change the startup pipeline in `internal/httpd/assets.go`, this is the
+job that catches an asset that no longer resolves.
+
+**The reproducibility check** builds the binary on two independent BuildKit
+instances with caching off and fails if the two are not byte-identical. So
+nothing may make the build depend on when or where it ran: no embedded build
+timestamp, no generated file that is not committed, no absolute path leaking
+into the binary. It compares the binary, not the image digest — BuildKit stamps
+a build time into the image config, so identical source still yields different
+image digests. That is expected.
+
+Releases add cosign signing, SBOM publication and a verification step that
+re-runs the exact commands in
+[docs/verifying-releases.md](docs/verifying-releases.md) against the image that
+was just pushed. Actions are pinned to commit digests with the readable version
+in a trailing comment; Renovate maintains both, so leave the comment format
+alone.
+
+## Two house rules
+
+These are the ones that get a pull request sent back, and neither is obvious
+from reading the code.
+
+### No third-party origins in the frontend
+
+Not a font from a CDN, not a script, not an icon set, not an analytics beacon,
+not a preconnect to somewhere else. The people using an instance are spread
+across the world and there is no CDN in front of the origin. Each extra origin
+costs a DNS lookup, a TCP connection and a TLS handshake before first paint —
+about a second on a 300 ms link, which is more than the entire rest of the
+page. First paint is currently about 4.6 kB.
+
+The deployed setup also applies a strict Content-Security-Policy at the
+ingress, which is why the page carries no inline script that executes and no inline
+`style=` attribute anywhere. Configuration reaches the browser as a
+`<script type="application/json">` data block — data, not executable script, so
+`script-src 'self'` permits it.
+
+Nothing in CI enforces this; it is enforced in review. If you need something a
+third party provides, vendor it into `web/src` or do without it. The right
+place to argue the point is an issue, not a pull request.
+
+### Migrations are append-only
+
+`internal/migrate` takes a SHA-256 of every migration file and records it in
+`schema_migrations` when it applies it. On the next run it compares them, and a
+recorded migration whose bytes have changed is a hard error:
+
+```
+migration 0003_plan.sql was modified after it was applied (recorded …, file …)
+```
+
+That is deliberate. A changed migration means two databases that both report
+the same schema version no longer have the same schema, and refusing to proceed
+is the only honest response.
+
+So: never edit a migration that has been applied anywhere, including on someone
+else's development database. Add `NNNN_name.sql` with the next number instead —
+versions must be unique and are applied in numeric order. Editing an unapplied
+migration you added in the same, unmerged pull request is fine; recreate your
+local database (`docker compose down && docker compose up --build`) if it has
+already run.
+
+## Style
+
+Follow what is there. Comments explain *why* a thing is the way it is, not what
+the line does — the existing code and `docs/architecture.md` are the reference
+for the tone. Prose wraps at about 80 columns. Add the reasoning for a
+non-obvious decision where a reader will meet it, and put anything longer in
+`docs/`.
+
+## Licensing
+
+Contributions are accepted under the MIT license in [LICENSE](LICENSE). There
+is no CLA. The bundled Fraunces font is separately licensed under the SIL Open
+Font License 1.1 and is not covered by that.

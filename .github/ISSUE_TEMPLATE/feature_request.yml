@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest something soiree should do and currently does not.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things worth reading first, so an idea is not turned down for a reason
+        you could not have known:
+
+        - The roadmap in [docs/architecture.md](https://github.com/Yornik/soiree/blob/main/docs/architecture.md)
+          lists what is already planned and roughly in what order. If your idea is
+          there, say so — a comment on how you would use it is more useful than a
+          duplicate.
+        - Explicitly out of scope: multi-event tenancy, a plugin system, analytics,
+          and a marketing site. This is a tool a dozen people use for one evening.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to do that soiree makes hard or impossible? Describe the
+        situation rather than the solution — the planning habit behind the request is
+        usually the useful part.
+      placeholder: >
+        Three of us pay deposits at different times and there is no way to see who
+        has actually transferred money and who has only promised to.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: Optional. If you already have a shape in mind, describe it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead today
+      description: >
+        Optional, and more useful than it sounds. A workaround that nearly works
+        often shows where the real gap is.
+    validations:
+      required: false
