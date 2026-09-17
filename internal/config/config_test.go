@@ -102,6 +102,45 @@ func TestSecondaryLocaleFallsBackToPrimary(t *testing.T) {
 	}
 }
 
+// A missing DATABASE_URL is a supported configuration, not an error: with no
+// DSN the binary serves the frontend alone, which is what a bare `docker run`
+// with no database does and what the image smoke test in CI depends on.
+func TestDatabaseURLIsOptional(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with no DATABASE_URL: %v", err)
+	}
+	if c.DatabaseURL != "" {
+		t.Errorf("DatabaseURL = %q, want empty when unset", c.DatabaseURL)
+	}
+}
+
+func TestDatabaseURLIsReadAndNeverPublished(t *testing.T) {
+	const dsn = "postgres://soiree:soiree@db.example.test:5432/soiree?sslmode=require"
+	t.Setenv("DATABASE_URL", "  "+dsn+"  ")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.DatabaseURL != dsn {
+		t.Errorf("DatabaseURL = %q, want it trimmed to %q", c.DatabaseURL, dsn)
+	}
+
+	// The client config is embedded in the page. A DSN carries a password.
+	raw, err := c.ClientJSON()
+	if err != nil {
+		t.Fatalf("ClientJSON(): %v", err)
+	}
+	for _, leak := range []string{dsn, "db.example.test", "soiree:soiree"} {
+		if strings.Contains(raw, leak) {
+			t.Fatalf("the client config leaks the database credentials: %s", raw)
+		}
+	}
+}
+
 // The client payload is embedded in the page, so it must stay free of
 // anything that is not meant to be public.
 func TestClientJSONShape(t *testing.T) {

@@ -3,6 +3,7 @@ package httpd
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -129,7 +130,31 @@ func routeClass(path string) string {
 		return "metrics"
 	case len(path) >= 8 && path[:8] == "/assets/":
 		return "asset"
+	case strings.HasPrefix(path, apiPrefix):
+		return apiRouteClass(path)
 	default:
 		return "other"
 	}
+}
+
+// apiRoutes maps an API collection to its metrics label. A map lookup rather
+// than the URL segment itself, because every API path after the collection is
+// a row id: labelling by path would mint a time series per budget line, and the
+// segment is caller-controlled, so an unknown one must never become a label.
+var apiRoutes = map[string]string{
+	"plan":              "api-plan",
+	"budget-items":      "api-budget-items",
+	"sponsors":          "api-sponsors",
+	"tasks":             "api-tasks",
+	"notes":             "api-notes",
+	"phases":            "api-phases",
+	"programme-entries": "api-programme-entries",
+}
+
+func apiRouteClass(path string) string {
+	collection, _, _ := strings.Cut(strings.TrimPrefix(path, apiPrefix), "/")
+	if label, ok := apiRoutes[collection]; ok {
+		return label
+	}
+	return "api-other"
 }

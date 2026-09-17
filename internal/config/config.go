@@ -17,6 +17,17 @@ import (
 type Config struct {
 	ListenAddr string
 
+	// DatabaseURL is the PostgreSQL DSN. Empty is a supported configuration
+	// rather than a missing one: with no DSN the binary serves the frontend
+	// alone and the API is not mounted at all, which is exactly what a bare
+	// `docker run` — and the image smoke test in CI — does.
+	//
+	// Unprefixed, unlike everything else here, because DATABASE_URL is the
+	// name every Postgres tool and the CloudNativePG connection secret already
+	// uses. It is also not part of the event's identity, so it does not belong
+	// to the SOIREE_* de-personalisation boundary.
+	DatabaseURL string
+
 	EventName string
 	Tagline   string
 	EventDate string // RFC3339, UTC. Empty means no countdown.
@@ -73,6 +84,7 @@ func (c Config) ClientJSON() (string, error) {
 func Load() (Config, error) {
 	c := Config{
 		ListenAddr:        env("SOIREE_LISTEN_ADDR", ":8080"),
+		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		EventName:         env("SOIREE_EVENT_NAME", "A Celebration"),
 		Tagline:           env("SOIREE_EVENT_TAGLINE", ""),
 		EventDate:         strings.TrimSpace(os.Getenv("SOIREE_EVENT_DATE")),
