@@ -1,0 +1,16 @@
+{
+  "name": "soiree-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Browser-level tests for soiree. Opt-in: nothing here is part of the Go build or of `go test ./...`.",
+  "license": "MIT",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

@@ -48,6 +48,66 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - run: go test -race -cover ./...
 
+  # The Go tests prove the right bytes are served. They cannot prove the page
+  # works, and soiree is mostly frontend — so this drives the real binary in a
+  # real browser. The suite lives in e2e/ and is outside the Go module: it adds
+  # nothing to go.mod, so neither `go test ./...` nor the image build notice it.
+  #
+  # Blocking, like every other job here, and with no retry budget. The app is
+  # static, makes no third-party requests and has no animation, so the usual
+  # sources of browser-test flake are absent; every wait in the suite is on a
+  # condition rather than on a clock. A job that is allowed to fail is a job
+  # nobody reads, and an unread test is a deleted test. If it ever does turn
+  # flaky, `continue-on-error: true` here is the honest stopgap — better than
+  # papering over it with retries.
+  #
+  # A failing `playwright install` is infrastructure, not test logic: re-run
+  # the job rather than treating it as a finding.
+  browser:
+    name: Browser tests (Playwright)
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Playwright builds and starts the real binary itself, so this job needs
+      # the same toolchain the others use.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      # From the lockfile, so CI runs the versions that were reviewed.
+      - name: Install the test harness
+        working-directory: e2e
+        run: npm ci
+
+      # The browser is pinned by the Playwright version in that lockfile, so it
+      # moves only when a reviewed dependency bump moves it.
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the browser tests
+        working-directory: e2e
+        run: npm test
+
+      # Traces are kept only for failures, so this is usually a near-empty
+      # upload — and exactly what is wanted on the run where it is not.
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   vuln:
     name: Vulnerabilities (govulncheck)
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}

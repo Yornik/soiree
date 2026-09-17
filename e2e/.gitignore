@@ -1,0 +1,10 @@
+node_modules/
+
+# The server binary Playwright builds and starts (see playwright.config.js).
+.tmp/
+
+# Reporter and trace output.
+test-results/
+playwright-report/
+blob-report/
+.playwright/
