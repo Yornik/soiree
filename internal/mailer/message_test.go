@@ -1,0 +1,200 @@
+package mailer
+
+import (
+	"io"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
+	"net/mail"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Every address here is at example.test, a name reserved for exactly this and
+// guaranteed never to resolve.
+var testConfig = Config{
+	Host: "smtp.example.test",
+	Port: 465,
+	From: "Soirée <plans@example.test>",
+}
+
+var testTime = time.Date(2027, time.February, 25, 9, 30, 0, 0, time.UTC)
+
+func buildMessage(t *testing.T, cfg Config, m Message) *mail.Message {
+	t.Helper()
+	raw, err := cfg.Build(m, testTime, "<abc@example.test>")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	msg, err := mail.ReadMessage(strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatalf("parse built message: %v\n%s", err, raw)
+	}
+	return msg
+}
+
+func TestBuildIsAMultipartAlternative(t *testing.T) {
+	msg := buildMessage(t, testConfig, Message{
+		To:      []string{"ada@example.test", "Grace Hopper <grace@example.test>"},
+		Subject: "Venue deposit",
+		Text:    "Venue deposit is due on Friday.",
+		HTML:    "<p>Venue deposit is due on Friday.</p>",
+	})
+
+	mediaType, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("content type: %v", err)
+	}
+	if mediaType != "multipart/alternative" {
+		t.Fatalf("content type = %q, want multipart/alternative", mediaType)
+	}
+	if got := msg.Header.Get("To"); !strings.Contains(got, "ada@example.test") || !strings.Contains(got, "grace@example.test") {
+		t.Errorf("To = %q, want both recipients", got)
+	}
+
+	mr := multipart.NewReader(msg.Body, params["boundary"])
+	var types []string
+	var bodies []string
+	for {
+		p, err := mr.NextPart()
+		if err != nil {
+			break
+		}
+		types = append(types, p.Header.Get("Content-Type"))
+		body, err := io.ReadAll(quotedprintable.NewReader(p))
+		if err != nil {
+			t.Fatalf("read part: %v", err)
+		}
+		bodies = append(bodies, string(body))
+	}
+
+	// Text first, HTML second: a client renders the last alternative it
+	// understands, so this order means "HTML if you can, text if you cannot".
+	if len(types) != 2 {
+		t.Fatalf("got %d parts, want 2: %v", len(types), types)
+	}
+	if !strings.HasPrefix(types[0], "text/plain") {
+		t.Errorf("first part is %q, want text/plain", types[0])
+	}
+	if !strings.HasPrefix(types[1], "text/html") {
+		t.Errorf("second part is %q, want text/html", types[1])
+	}
+	if !strings.Contains(bodies[0], "due on Friday") || !strings.Contains(bodies[1], "<p>") {
+		t.Errorf("part bodies did not survive the round trip: %q / %q", bodies[0], bodies[1])
+	}
+}
+
+// The event names this serves are Dutch and Indonesian, so a subject is not
+// ASCII and a raw 8-bit header is not portable.
+func TestSubjectIsEncoded(t *testing.T) {
+	msg := buildMessage(t, testConfig, Message{
+		To:      []string{"ada@example.test"},
+		Subject: "Soirée: 2 items past their date",
+		Text:    "body",
+	})
+
+	raw := msg.Header.Get("Subject")
+	if strings.ContainsAny(raw, "é") {
+		t.Errorf("Subject header carries a raw non-ASCII byte: %q", raw)
+	}
+	decoded, err := new(mime.WordDecoder).DecodeHeader(raw)
+	if err != nil {
+		t.Fatalf("decode subject: %v", err)
+	}
+	if decoded != "Soirée: 2 items past their date" {
+		t.Errorf("decoded subject = %q", decoded)
+	}
+}
+
+// A newline in the subject is header injection: everything after it is read by
+// the server as a header of its own, which is how a subject becomes a Bcc.
+func TestBuildRejectsHeaderInjection(t *testing.T) {
+	_, err := testConfig.Build(Message{
+		To:      []string{"ada@example.test"},
+		Subject: "Deadlines\r\nBcc: someone@example.test",
+		Text:    "body",
+	}, testTime, "<abc@example.test>")
+	if err == nil {
+		t.Fatal("expected a subject with a line break to be refused")
+	}
+}
+
+func TestBuildRejectsBadAddresses(t *testing.T) {
+	for name, m := range map[string]Message{
+		"no recipients": {Subject: "x", Text: "y"},
+		"not an address": {
+			To: []string{"ada at example.test"}, Subject: "x", Text: "y",
+		},
+		"injected recipient": {
+			To: []string{"ada@example.test\r\nRCPT TO:<eve@example.test>"}, Subject: "x", Text: "y",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := testConfig.Build(m, testTime, "<abc@example.test>"); err == nil {
+				t.Error("expected an error")
+			}
+		})
+	}
+}
+
+// Long lines are what quoted-printable is here for: RFC 5321 caps a line at
+// 998 octets and a planner's note in a budget row is not bounded by anything.
+func TestLongLinesAreWrapped(t *testing.T) {
+	raw, err := testConfig.Build(Message{
+		To:      []string{"ada@example.test"},
+		Subject: "x",
+		Text:    strings.Repeat("deadline ", 400),
+	}, testTime, "<abc@example.test>")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, line := range strings.Split(string(raw), "\r\n") {
+		if len(line) > 998 {
+			t.Fatalf("line of %d octets exceeds the SMTP limit", len(line))
+		}
+	}
+}
+
+func TestLoadConfigIsEmptyWithoutEnv(t *testing.T) {
+	for _, k := range []string{"SOIREE_SMTP_HOST", "SOIREE_SMTP_PORT", "SOIREE_SMTP_USER", "SOIREE_SMTP_PASSWORD", "SOIREE_SMTP_FROM"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("an unconfigured mailer must not be an error: %v", err)
+	}
+	if cfg.Configured() {
+		t.Error("an empty environment reported as configured")
+	}
+}
+
+func TestLoadConfigRejectsMalformedValues(t *testing.T) {
+	t.Run("port", func(t *testing.T) {
+		t.Setenv("SOIREE_SMTP_PORT", "cinq")
+		if _, err := LoadConfig(); err == nil {
+			t.Error("expected an error for a non-numeric port")
+		}
+	})
+	t.Run("from", func(t *testing.T) {
+		t.Setenv("SOIREE_SMTP_FROM", "plans at example.test")
+		if _, err := LoadConfig(); err == nil {
+			t.Error("expected an error for a malformed from address")
+		}
+	})
+}
+
+func TestLoadConfigDefaultsToImplicitTLS(t *testing.T) {
+	t.Setenv("SOIREE_SMTP_HOST", "smtp.example.test")
+	t.Setenv("SOIREE_SMTP_FROM", "plans@example.test")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Port != DefaultPort {
+		t.Errorf("port = %d, want %d", cfg.Port, DefaultPort)
+	}
+	if !cfg.Configured() {
+		t.Error("host and from set, but not reported as configured")
+	}
+}
