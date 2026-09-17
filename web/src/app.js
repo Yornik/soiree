@@ -674,13 +674,23 @@
 
   function closePop(returnFocus) {
     if (!openPop) return;
-    openPop.remove();
+
+    // Take both references and clear the shared state *before* removing the
+    // node. Removing a focused element fires focusout synchronously, and that
+    // handler calls back in here — while openPop was still set, the re-entrant
+    // call ran to completion and nulled openBtn, so by the time the outer call
+    // reached focus() there was nothing left to focus and the ring landed on
+    // <body>. Clearing first makes the re-entrant call a no-op at the guard.
+    var pop = openPop;
+    var btn = openBtn;
     openPop = null;
-    if (openBtn) {
-      openBtn.setAttribute('aria-expanded', 'false');
-      if (returnFocus) openBtn.focus();
-    }
     openBtn = null;
+
+    pop.remove();
+    if (btn) {
+      btn.setAttribute('aria-expanded', 'false');
+      if (returnFocus) btn.focus();
+    }
   }
   document.addEventListener('click', function (e) {
     if (openPop && !openPop.contains(e.target) && !e.target.classList.contains('by-btn')) closePop();
@@ -1160,6 +1170,11 @@
     if (!f) return;
     var reader = new FileReader();
     reader.onload = function () {
+      // Clear the input first, not last. An <input type="file"> fires no
+      // change event when the same filename is picked again, so leaving a
+      // rejected or cancelled file in place meant a second attempt at the
+      // same file did nothing at all — no import, no message, no clue why.
+      importFile.value = '';
       try {
         var incoming = JSON.parse(reader.result);
         if (!incoming || !Array.isArray(incoming.budgetItems) || !Array.isArray(incoming.tasks)) {
@@ -1179,7 +1194,6 @@
       } catch (e) {
         flash('Could not read that file.');
       }
-      importFile.value = '';
     };
     reader.readAsText(f);
   });
