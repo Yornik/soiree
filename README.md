@@ -17,8 +17,9 @@ everyone at once.
 - **Any currency** — primary currency plus an optional second readout, so people
   in different countries can each see a number that means something to them.
 
-Configured entirely by environment variables. No build step, no database (yet),
-no third-party requests.
+Configured entirely by environment variables. No build step, no third-party
+requests, and nothing to run alongside it yet — the database layer exists but
+is not wired in, so today it is a single binary and a browser.
 
 ```bash
 docker run --rm -p 8080:8080 \
@@ -88,35 +89,51 @@ write path is already async-shaped for the API that replaces it.
 
 ## Status
 
-Usable today, with one significant limitation: **state lives in the browser's
-`localStorage`**, so it is per-browser and not yet shared between people. Use
-Export / Import JSON to move data around in the meantime.
+Usable today, with one significant limitation: **the running app still keeps
+state in the browser's `localStorage`**, so it is per-browser and not yet shared
+between people. Use Export / Import JSON to move data around in the meantime.
 
-Shared state is the point of the project and is next:
+Shared state is the point of the project. The database layer exists —
+`migrations/`, `internal/migrate` and `internal/store` are in the tree and
+tested against a real PostgreSQL — but the binary does not read `DATABASE_URL`
+yet, so nothing is wired through to it.
 
 1. ~~Configurable, self-hostable single binary~~ — done
-2. PostgreSQL persistence and a REST API. Per-row revisions so concurrent
-   edits are detected rather than silently overwritten; schema and migrations
-   embedded and applied at startup.
-3. Accounts with roles (admin / editor / viewer). An admin creates each account
+2. ~~Schema and store layer.~~ Migrations applied at startup under an advisory
+   lock; per-row revisions so concurrent edits are detected rather than
+   silently overwritten — done, not yet wired in
+3. REST API over that store, and the browser's `Store` becoming async
+4. Accounts with roles (admin / editor / viewer). An admin creates each account
    from an email address and a role; the person receives a single-use link to
    set their own password. Passwords are stored as Argon2id hashes with a
    per-password salt — never encrypted, never emailed.
-4. Live sync over SSE, with per-field writes and conflict detection
+5. Live sync over SSE, with per-field writes and conflict detection
 
-All persistence goes through a single `Store` object in `web/src/app.js`; see
+Browser-side persistence goes through a single `Store` object in
+`web/src/app.js` — that is the seam the API replaces. See
 [docs/architecture.md](docs/architecture.md).
 
 ## Development
 
-The Go compiler is the only dependency. The frontend is embedded and processed
-at startup, so there is no asset build.
+The Go compiler is enough to build and run. The frontend is embedded and
+processed at startup, so there is no asset build and no Node toolchain.
 
 ```bash
-go test ./...
+go test -short ./...           # no Docker needed
 go run ./cmd/soiree            # http://localhost:8080
 SOIREE_DEMO_DATA=true go run ./cmd/soiree
 ```
+
+The full suite additionally exercises the store and migrations against a real
+PostgreSQL via testcontainers, so it needs Docker and will pull
+`postgres:18-alpine`:
+
+```bash
+go test ./...
+```
+
+`-short` skips exactly those tests, which is why it is the default suggestion
+above.
 
 For work that needs a database, `compose.yaml` brings up a throwaway Postgres
 alongside the app:
@@ -134,11 +151,34 @@ disposable — that is a development-only setting.
 Layout:
 
 ```
-cmd/soiree/       entrypoint
-internal/config/  environment parsing and validation
-internal/httpd/   asset pipeline and HTTP handlers
-web/src/          frontend sources, embedded via //go:embed
+cmd/soiree/          entrypoint
+cmd/soiree-import/   spreadsheet importer CLI
+internal/config/     environment parsing and validation
+internal/httpd/      asset pipeline, HTTP handlers, metrics
+internal/migrate/    migration runner, advisory-locked
+internal/store/      typed data access (pgx)
+internal/sheetimport/ .ods / .csv reader
+migrations/          numbered SQL, embedded and append-only
+web/src/             frontend sources, embedded via //go:embed
 ```
+
+### Importing a spreadsheet
+
+`soiree-import` converts a planning spreadsheet into the JSON the app's
+**Import data** button accepts. It takes an explicit column mapping rather than
+guessing, and reports every row it skipped and why:
+
+```bash
+go run ./cmd/soiree-import -list-sheets plan.ods
+go run ./cmd/soiree-import -detect plan.ods > mapping.json   # proposes only
+go run ./cmd/soiree-import -mapping mapping.json -o plan.json plan.ods
+```
+
+Real planning spreadsheets are written for people, not parsers — two unrelated
+tables stacked in one sheet, headers repeating mid-data, `"22,500,000"` as text,
+totals inline with the rows they total, and sub-items marked with a leading
+dash. The importer handles those and refuses loudly rather than guessing when
+it cannot.
 
 ### Regenerating the font subset
 
