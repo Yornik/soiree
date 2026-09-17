@@ -3,7 +3,8 @@
   "extends": [
     "config:recommended",
     "docker:enableMajor",
-    ":separateMultipleMajorReleases"
+    ":separateMultipleMajorReleases",
+    "helpers:pinGitHubActionDigests"
   ],
   "labels": [
     "renovate",
@@ -18,6 +19,7 @@
       "automerge": true
     },
     {
+      "description": "Actions are pinned to commit digests (helpers:pinGitHubActionDigests). Renovate bumps the digest and rewrites the trailing '# vX.Y.Z' comment, so pinning stays maintainable rather than rotting.",
       "matchManagers": [
         "github-actions"
       ],
