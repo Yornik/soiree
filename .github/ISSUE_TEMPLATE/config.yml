@@ -1,0 +1,24 @@
+# Blank issues stay enabled on purpose. SECURITY.md tells a reporter who cannot
+# see the private advisory form to open a plain issue asking for a private
+# channel, and forcing that person through the bug form would work against it.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/Yornik/soiree/security/advisories/new
+    about: >
+      Do not open a public issue for a security flaw. This form is visible only to
+      you and the maintainer, and becomes the advisory when the fix ships. See
+      SECURITY.md for scope and what to expect.
+
+  - name: Verify a release before you run it
+    url: https://github.com/Yornik/soiree/blob/main/docs/verifying-releases.md
+    about: >
+      Images are signed with cosign and ship an SBOM and build provenance. This is
+      the exact set of commands to check them.
+
+  - name: Building, testing and contributing
+    url: https://github.com/Yornik/soiree/blob/main/CONTRIBUTING.md
+    about: >
+      How to run the tests with and without Docker, what CI enforces, and the two
+      house rules that are not obvious from the code.

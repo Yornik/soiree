@@ -158,6 +158,18 @@ inst.save('web/src/fonts/fraunces-display.woff2')
 "
 ```
 
+## Contributing and security
+
+How to build and test it, what CI enforces, and the two house rules that are
+not obvious from the code: [CONTRIBUTING.md](CONTRIBUTING.md). What is expected
+of everyone taking part: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+Security flaws go to the repository's Security tab —
+[Report a vulnerability](https://github.com/Yornik/soiree/security/advisories/new)
+— and not into a public issue. [SECURITY.md](SECURITY.md) covers what is in
+scope and what to expect. To check a release you already have, see
+[docs/verifying-releases.md](docs/verifying-releases.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE). The bundled Fraunces font is licensed separately

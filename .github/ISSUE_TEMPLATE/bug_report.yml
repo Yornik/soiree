@@ -1,0 +1,93 @@
+name: Bug report
+description: Something in soiree does not work the way it says it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. If this is a **security** issue, close this form and
+        use [Report a vulnerability](https://github.com/Yornik/soiree/security/advisories/new)
+        instead, so the details stay private until there is a fix.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+      placeholder: |
+        The countdown shows one day fewer than the event date, but only for people in UTC+7.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: >
+        The commands and steps that get there from a fresh instance. A `docker run`
+        line with the environment variables involved is ideal.
+      placeholder: |
+        1. docker run --rm -p 8080:8080 -e SOIREE_EVENT_DATE=... ghcr.io/yornik/soiree:v0.2.1
+        2. Open http://localhost:8080
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Image tag or commit
+      description: >
+        Exactly which build this is. A running instance reports it two ways:
+        `soiree_build_info{version,commit}` on `/metrics`, and the startup line in
+        its log. Either one answers this precisely — please do not guess.
+      placeholder: "version=v0.2.1 commit=e68e0ab, or ghcr.io/yornik/soiree@sha256:..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How are you running it
+      options:
+        - docker run
+        - docker compose (the repository's compose.yaml)
+        - go run ./cmd/soiree
+        - Kubernetes or another orchestrator
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: proxy
+    attributes:
+      label: What is in front of it
+      description: >
+        Reverse proxy or ingress, if any, and whether it terminates TLS. Several
+        behaviours — client IPs, caching, the Content-Security-Policy — depend on
+        this.
+      placeholder: "Traefik, TLS terminated there; or: nothing, straight to the container"
+    validations:
+      required: false
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: >
+        The `SOIREE_*` variables you set. **Replace real names, dates and amounts
+        with stand-ins** — an instance holds other people's details.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Relevant lines from the container's stdout. They are JSON, one object per
+        line. Redact as above.
+      render: shell
+    validations:
+      required: false
