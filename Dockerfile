@@ -25,8 +25,13 @@ RUN CGO_ENABLED=0 go build \
 
 FROM scratch
 
-# Serves over plain HTTP behind a TLS-terminating proxy, so no CA bundle is
-# needed. Add one here if the app ever makes outbound HTTPS calls.
+# Inbound traffic is plain HTTP behind a TLS-terminating proxy, but the binary
+# makes outbound TLS connections of its own — SMTP for the reminder digest and
+# account mail — so it needs a trust store. On scratch there is none, and the
+# failure is an unhelpful "certificate signed by unknown authority" at the
+# moment the first mail is sent, long after deploy.
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
 COPY --from=build /out/soiree /soiree
 
 # Unprivileged, and nothing in the image is writable — the whole site lives in

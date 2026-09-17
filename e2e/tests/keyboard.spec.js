@@ -70,22 +70,21 @@ test('the picker can be operated and dismissed entirely from the keyboard', asyn
 });
 
 /*
- * KNOWN BUG — this is expected to fail until web/src/app.js is fixed.
+ * REGRESSION GUARD. This failed when it was written, and the fix is subtle
+ * enough to be worth spelling out so it is not undone by a tidy-up.
  *
- * closePop() intends to hand focus back to the button it opened from. It does
- * not, and the popup's own focusout handler is why: removing the focused
- * element fires focusout synchronously, so `openPop.remove()` re-enters
- * closePop(false) — which runs to completion and sets `openBtn = null` — before
- * the outer call reaches `openBtn.focus()`. Focus lands on <body> instead, so
- * the next Tab restarts from the top of the page. For someone assigning costs
- * line by line, that is the whole journey lost on every Escape.
+ * closePop() hands focus back to the button it opened from. It used to remove
+ * the popup first — and removing the focused element fires focusout
+ * synchronously, so the removal re-entered closePop(false), sailed past the
+ * guard because openPop was still set, and nulled openBtn before the outer
+ * call reached focus(). Focus landed on <body>, so the next Tab restarted at
+ * the top of the page. For someone assigning costs line by line, that is the
+ * whole journey lost on every Escape.
  *
- * Nulling `openPop` before removing the element, or capturing `openBtn` into a
- * local first, is enough to fix it. Drop the test.fail() when it is.
+ * The fix is ordering: clear openPop and openBtn *before* removing the node,
+ * so the re-entrant call stops at the guard.
  */
 test('Escape hands focus back to the button the picker was opened from', async ({ page }) => {
-  test.fail();
-
   await byButton(page).focus();
   await page.keyboard.press('Enter');
   await expect(popup(page).locator('input[type="checkbox"]').first()).toBeFocused();
