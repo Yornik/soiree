@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/Yornik/soiree/compare/v0.2.0...v0.2.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* **ci:** test on the same Go toolchain the image ships ([e68e0ab](https://github.com/Yornik/soiree/commit/e68e0ab44d173597037589507592718b4729e3cb))
+
 ## [0.2.0](https://github.com/Yornik/soiree/compare/v0.1.0...v0.2.0) (2026-09-17)
 
 
