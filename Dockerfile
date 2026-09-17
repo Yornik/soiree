@@ -1,6 +1,6 @@
 # The frontend is embedded into the binary and processed at startup, so there
 # is no asset build stage — the Go compiler is the only build dependency.
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 
 WORKDIR /src
 
