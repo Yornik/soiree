@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>{{ .EventName }}</title>
+<link rel="icon" href="{{ .Asset "favicon.svg" }}" type="image/svg+xml">
+<link rel="preload" href="{{ .Asset "fraunces-display.woff2" }}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{ .Asset "styles.css" }}">
+<link rel="manifest" href="{{ .Asset "manifest.webmanifest" }}">
+<!--
+  Runtime configuration, injected by the server from environment variables.
+  A data block, not executable script, so it is not affected by a strict
+  script-src CSP. Inlining it here rather than fetching /api/v1/config saves a
+  full round trip, which is the difference between a fast and a slow first
+  paint for anyone far from the origin.
+-->
+<script type="application/json" id="soiree-config">{{ .ConfigJSON }}</script>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <div>
+      <span class="hero-num" id="daysNum">–</span>
+      <span class="hero-num-label" id="daysLabel">days to go</span>
+    </div>
+    <div class="hero-title">
+      <h1>{{ .EventName }}</h1>
+      <p>{{ .Tagline }}</p>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="overview">Overview</button>
+    <button class="tab-btn" data-tab="budget">Budget</button>
+    <button class="tab-btn" data-tab="tasks">Tasks</button>
+  </div>
+
+  <!-- OVERVIEW -->
+  <div class="tab-panel active" id="panel-overview">
+    <div class="stat-row">
+      <div class="stat-card">
+        <div class="num" id="statDays">–</div>
+        <div class="label" id="statDaysLabel">days until the event</div>
+      </div>
+      <div class="stat-card">
+        <div class="num" id="statTasks">0/0</div>
+        <div class="label">tasks done</div>
+      </div>
+      <div class="stat-card">
+        <div class="num" id="statBudget">–</div>
+        <div class="label">of ceiling committed</div>
+        <div class="sub" id="statBudgetSub">–</div>
+      </div>
+    </div>
+
+    <section class="block">
+      <h2>Money at a glance</h2>
+      <div class="stat-row four">
+        <div class="stat-card">
+          <div class="num small" id="mCommitted">–</div>
+          <div class="label">committed (quoted)</div>
+          <div class="sub" id="mCommittedEur">–</div>
+        </div>
+        <div class="stat-card">
+          <div class="num small" id="mForecast">–</div>
+          <div class="label">with inflation buffer</div>
+          <div class="sub" id="mForecastSub">–</div>
+        </div>
+        <div class="stat-card">
+          <div class="num small" id="mPaid">–</div>
+          <div class="label">paid so far</div>
+          <div class="sub" id="mPaidSub">–</div>
+        </div>
+        <div class="stat-card">
+          <div class="num small" id="mOutstanding">–</div>
+          <div class="label">still to pay</div>
+          <div class="sub" id="mOutstandingEur">–</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block">
+      <h2>Progress</h2>
+      <div class="bar-block">
+        <div class="bar-top"><span>Tasks completed</span><span id="taskBarPct">0%</span></div>
+        <div class="bar-track"><div class="bar-fill" id="taskBarFill" style="width:0%"></div></div>
+      </div>
+      <div class="bar-block">
+        <div class="bar-top"><span>Committed vs ceiling</span><span id="budgetBarPct">–</span></div>
+        <div class="bar-track"><div class="bar-fill gold" id="budgetBarFill" style="width:0%"></div></div>
+      </div>
+      <div class="bar-block">
+        <div class="bar-top"><span>Settled vs committed</span><span id="paidBarPct">–</span></div>
+        <div class="bar-track"><div class="bar-fill" id="paidBarFill" style="width:0%"></div></div>
+      </div>
+    </section>
+
+    <section class="block">
+      <h2>Watch list<span class="h2-note">things to keep an eye on</span></h2>
+      <div id="watchList"></div>
+      <div class="empty-note" id="watchEmpty" style="display:none;">Nothing flagged yet.</div>
+      <button class="add-row-btn" id="addWatch">+ Add note</button>
+    </section>
+
+    <section class="block">
+      <h2>Up next</h2>
+      <ul class="upnext-list" id="upNextList"></ul>
+      <div class="empty-note" id="upNextEmpty" style="display:none;">No open tasks — add some in the Tasks tab.</div>
+    </section>
+  </div>
+
+  <!-- BUDGET -->
+  <div class="tab-panel" id="panel-budget">
+    <div class="settings-row">
+      <div class="field">
+        <label for="ceilingInput">Ceiling / mark-up (<span class="cur-code">–</span>)</label>
+        <input type="number" id="ceilingInput" min="0" step="1000" placeholder="0">
+      </div>
+      <div class="field">
+        <label for="inflationInput">Inflation buffer (%)</label>
+        <input type="number" id="inflationInput" class="narrow" min="0" step="0.5" placeholder="0">
+      </div>
+      <div class="field" id="rateField">
+        <label for="rateInput" id="rateLabel">Exchange rate</label>
+        <input type="number" id="rateInput" class="narrow" min="1" step="1" placeholder="0">
+      </div>
+    </div>
+
+    <section class="block">
+      <h2>Sponsors<span class="h2-note">callsigns used in the “cost by” column</span></h2>
+      <div class="sponsor-grid" id="sponsorGrid"></div>
+      <button class="add-row-btn" id="addSponsor">+ Add sponsor</button>
+    </section>
+
+    <div class="table-wrap">
+      <table class="budget" id="budgetTable">
+        <colgroup id="budgetCols"></colgroup>
+        <thead>
+          <tr>
+            <th style="width:22%">Item</th>
+            <th class="right">Unit (<span class="cur-code">–</span>)</th>
+            <th class="right">Qty</th>
+            <th class="right">Total</th>
+            <th class="right">Paid</th>
+            <th class="right">To pay</th>
+            <th>Cost by</th>
+            <th>Remarks</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="budgetBody"></tbody>
+      </table>
+      <div class="totals-line">
+        <span>Committed: <strong id="sumTotal">–</strong></span>
+        <span>Paid: <strong id="sumPaid">–</strong></span>
+        <span>To pay: <strong id="sumOwing">–</strong></span>
+        <span>With buffer: <strong id="sumForecast">–</strong></span>
+        <span>Headroom: <strong id="sumHeadroom">–</strong></span>
+      </div>
+    </div>
+    <div class="size-tools">
+      <button class="add-row-btn" id="addBudgetRow">+ Add budget line</button>
+      <button class="ghost-btn" id="resetSizes">Reset column &amp; row sizes</button>
+    </div>
+
+    <section class="block" style="margin-top:30px;">
+      <h2>Who's covering what</h2>
+      <div class="toggle-line">
+        <input type="checkbox" id="splitEvenly">
+        <label for="splitEvenly">Split shared lines evenly between their sponsors</label>
+      </div>
+      <ul class="split-list" id="splitList"></ul>
+    </section>
+  </div>
+
+  <!-- TASKS -->
+  <div class="tab-panel" id="panel-tasks">
+    <div class="filter-pills" id="taskFilters">
+      <button class="pill active" data-filter="all">All</button>
+      <button class="pill" data-filter="not-started">Not started</button>
+      <button class="pill" data-filter="in-progress">In progress</button>
+      <button class="pill" data-filter="done">Done</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:34%">Task</th>
+            <th>Owner</th>
+            <th>Due date</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="tasksBody"></tbody>
+      </table>
+    </div>
+    <button class="add-row-btn" id="addTaskRow">+ Add task</button>
+  </div>
+
+  <div class="data-tools">
+    <button class="ghost-btn" id="exportData">Export data (JSON)</button>
+    <button class="ghost-btn" id="importData">Import data…</button>
+    <input type="file" id="importFile" accept="application/json,.json" style="display:none">
+    <span class="data-msg" id="dataMsg"></span>
+  </div>
+
+</div>
+<script src="{{ .Asset "app.js" }}" defer></script>
+</body>
+</html>
