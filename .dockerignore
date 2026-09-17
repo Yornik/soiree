@@ -1,7 +1,4 @@
 .git
 .github
 docs
-*.md
-!README.md
-web/dist
 soiree

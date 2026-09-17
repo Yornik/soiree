@@ -96,9 +96,10 @@ Shared state is the point of the project and is next:
 
 1. ~~Configurable, self-hostable single binary~~ — done
 2. Postgres persistence and a REST API
-3. Accounts with roles (admin / editor / viewer), with sign-up by **invite
-   link** — an admin generates a link valid for 7 days and shares it however
-   they like, so there is no mail server to run
+3. Accounts with roles (admin / editor / viewer). An admin creates each account
+   from an email address and a role; the person receives a single-use link to
+   set their own password. Passwords are stored as Argon2id hashes with a
+   per-password salt — never encrypted, never emailed.
 4. Live sync over SSE, with per-field writes and conflict detection
 
 All persistence goes through a single `Store` object in `web/src/app.js`; see

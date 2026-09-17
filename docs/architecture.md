@@ -147,43 +147,57 @@ Step 4 is where the current last-write-wins behaviour gets fixed. It is
 acceptable for a single-user browser store and is not acceptable once two
 people edit at once.
 
-### Sign-up by invite link (planned, step 3)
+### Accounts (planned, step 3)
 
-There is no mail server in this design and there will not be one. An admin
-creates an invite and shares the resulting link however they already talk to
-the people involved; the recipient sets their own name and password.
+There is no self-service sign-up and no open invite link. An **admin creates
+each account** by entering an email address and a role. The server mails that
+person a single-use link to set their own password.
 
 ```
-admin  ──create invite──►  /invite/aG9sZGVyLW9mLXRoZS1zZWNyZXQ…
-                                    │  shared over any channel
-recipient opens it  ────────────────┘
-   └─► choose display name + password  ──►  account created with the
-                                            role the invite carries
+admin ──► email + role ──► account created (no password yet)
+                                  │
+                                  ▼
+                    mail: "set your password" link
+                                  │
+              recipient sets a password ──► account active
 ```
 
-Shape of it:
+The password is never chosen by the admin and never travels by email. Only a
+one-time link does, and it is useless once used or expired.
 
 | Field | Purpose |
 |---|---|
-| `id` | Lookup key, carried in the link alongside the secret |
-| `token_hash` | argon2id of the secret. The plaintext exists only in the link. |
-| `role` | Role the created account receives (`editor` by default) |
-| `expires_at` | Default **7 days**, set at creation |
-| `max_uses` / `uses` | Default 1; an admin can raise it for a group |
-| `created_by`, `revoked_at` | Attribution, and the ability to kill a leaked link |
+| `email` | Identity and delivery address, unique |
+| `role` | `admin` \| `editor` \| `viewer`, chosen by the admin at creation |
+| `password_hash` | Argon2id (see below). Null until the person sets one. |
+| `status` | `invited` \| `active` \| `disabled` |
+| `created_by` | Attribution |
 
-Rules that make this safe enough to paste into a group chat:
+Set-password and reset both use the same short-lived token: ≥128 bits from a
+CSPRNG, stored only as a hash, single-use, expiring in 24 hours, consumed
+inside a transaction so it cannot be redeemed twice, and rate-limited per IP.
+Requesting a reset returns the same response whether or not the address exists,
+so the endpoint cannot be used to enumerate accounts.
 
-- The secret is ≥128 bits from a CSPRNG, so it cannot be guessed.
-- Only a hash is stored. A database leak does not yield working invite links.
-- Expiry and use count are enforced server-side on redemption, in a
-  transaction, so a link cannot be redeemed twice concurrently.
-- Redemption is rate-limited per IP, and an admin can revoke any outstanding
-  invite.
-- An invite grants exactly the role it was created with. It can never create
-  an admin unless an admin explicitly chose that.
+Mail goes out over SMTP (`SOIREE_SMTP_*`). If SMTP is not configured, account
+creation still succeeds and the admin is shown the set-password link to pass on
+directly — so a deployment without mail is degraded, not broken.
 
-The honest trade-off: anyone holding the link can make an account until it
-expires or is used up. That is the deliberate cost of not sending email, and
-it is why invites are short-lived, single-use by default, revocable, and
-role-limited.
+### Password storage
+
+Hashed with **Argon2id**, the current password-hashing standard and the winner
+of the Password Hashing Competition. Never encrypted — encryption is reversible
+and that is the wrong property for a password.
+
+- Per-password salt, 16 bytes from `crypto/rand`. Never reused, stored
+  alongside the hash in the standard encoded form.
+- Parameters at least the OWASP-recommended floor: 19 MiB memory, 2 iterations,
+  1 degree of parallelism, 32-byte output. Memory cost is what makes GPU and
+  ASIC attacks expensive, which is the property that matters.
+- Parameters are stored in the encoded hash, so they can be raised later and
+  existing passwords are transparently re-hashed on next successful login.
+- Verification is constant-time.
+- Login is rate-limited per account and per IP.
+
+The implementation uses `golang.org/x/crypto/argon2` — no hand-rolled
+cryptography.
