@@ -16,8 +16,18 @@ import (
 	"github.com/Yornik/soiree/web"
 )
 
+// Overridden at link time with -ldflags. Surfaced in the startup log and in
+// the soiree_build_info metric, so a running pod can be tied to a commit.
+var (
+	version = "dev"
+	commit  = "none"
+)
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	httpd.Version = version
+	httpd.Commit = commit
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -46,6 +56,8 @@ func main() {
 	go func() {
 		log.Info("soiree listening",
 			"addr", cfg.ListenAddr,
+			"version", version,
+			"commit", commit,
 			"event", cfg.EventName,
 			"currency", cfg.Currency,
 			"demoData", cfg.DemoData,

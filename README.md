@@ -95,7 +95,9 @@ Export / Import JSON to move data around in the meantime.
 Shared state is the point of the project and is next:
 
 1. ~~Configurable, self-hostable single binary~~ — done
-2. Postgres persistence and a REST API
+2. PostgreSQL persistence and a REST API. Per-row revisions so concurrent
+   edits are detected rather than silently overwritten; schema and migrations
+   embedded and applied at startup.
 3. Accounts with roles (admin / editor / viewer). An admin creates each account
    from an email address and a role; the person receives a single-use link to
    set their own password. Passwords are stored as Argon2id hashes with a
@@ -115,6 +117,19 @@ go test ./...
 go run ./cmd/soiree            # http://localhost:8080
 SOIREE_DEMO_DATA=true go run ./cmd/soiree
 ```
+
+For work that needs a database, `compose.yaml` brings up a throwaway Postgres
+alongside the app:
+
+```bash
+docker compose up --build      # http://localhost:8080
+docker compose down            # leaves nothing behind
+```
+
+Its data directory is a tmpfs, so every run starts from the migrations instead
+of from whatever a previous branch left behind. It matches the major version of
+the production cluster, and it runs with durability off because the data is
+disposable — that is a development-only setting.
 
 Layout:
 

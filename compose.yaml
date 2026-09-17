@@ -1,0 +1,49 @@
+# Development stack: a throwaway Postgres plus the app.
+#
+#   docker compose up --build
+#   -> http://localhost:8080
+#
+# The database is deliberately ephemeral. Its data directory is a tmpfs, so
+# `docker compose down` leaves nothing behind and every run starts from the
+# migrations rather than from whatever state a previous branch left lying
+# around. Nothing here is meant for production — the real deployment uses a
+# CloudNativePG cluster.
+services:
+  postgres:
+    # Matches the major version of the CloudNativePG cluster in production, so
+    # development does not pass on a version the real database would reject.
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: soiree
+      POSTGRES_PASSWORD: soiree
+      POSTGRES_DB: soiree
+      # The data is disposable; skipping the durability barrier makes the
+      # test suite noticeably faster. Never do this to a database you care about.
+      PGOPTIONS: -c fsync=off -c full_page_writes=off -c synchronous_commit=off
+    ports:
+      - "5432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soiree -d soiree"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+
+  soiree:
+    build:
+      context: .
+      args:
+        VERSION: dev
+        COMMIT: local
+    environment:
+      DATABASE_URL: postgres://soiree:soiree@postgres:5432/soiree?sslmode=disable
+      SOIREE_EVENT_NAME: Development Instance
+      SOIREE_EVENT_TAGLINE: Local stack, disposable data
+      SOIREE_DEMO_DATA: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy

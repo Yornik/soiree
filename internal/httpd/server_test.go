@@ -271,6 +271,65 @@ func TestHealthzAndNotFound(t *testing.T) {
 	}
 }
 
+func TestReadyzAndMetrics(t *testing.T) {
+	h := newTestServer(t, config.Config{EventName: "X"})
+
+	ready := get(t, h, "/readyz", nil)
+	_ = ready.Body.Close()
+	if ready.StatusCode != http.StatusOK {
+		t.Errorf("/readyz -> %d", ready.StatusCode)
+	}
+
+	// Drive a request through first so the counters have something in them.
+	warm := get(t, h, "/", nil)
+	_ = warm.Body.Close()
+
+	res := get(t, h, "/metrics", nil)
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("/metrics -> %d", res.StatusCode)
+	}
+	for _, want := range []string{
+		"soiree_http_requests_total",
+		"soiree_http_request_duration_seconds",
+		"soiree_build_info",
+		"go_goroutines",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("metrics output missing %s", want)
+		}
+	}
+	if !strings.Contains(string(body), `route="shell"`) {
+		t.Error("expected the shell request to be counted under route=shell")
+	}
+}
+
+// Asset URLs carry a content hash. Labelling metrics by raw path would create
+// a new time series on every deploy, so the route label must stay bounded.
+func TestMetricsRouteLabelIsBounded(t *testing.T) {
+	h := newTestServer(t, config.Config{EventName: "X"})
+
+	res := get(t, h, "/", nil)
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	for _, u := range regexp.MustCompile(`/assets/[A-Za-z0-9._-]+`).FindAllString(string(body), -1) {
+		r := get(t, h, u, nil)
+		_ = r.Body.Close()
+	}
+
+	m := get(t, h, "/metrics", nil)
+	mb, _ := io.ReadAll(m.Body)
+	_ = m.Body.Close()
+
+	if strings.Contains(string(mb), `route="/assets/`) {
+		t.Error("raw asset paths leaked into the route label")
+	}
+	if !strings.Contains(string(mb), `route="asset"`) {
+		t.Error("asset requests were not classified under route=asset")
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	h := newTestServer(t, config.Config{EventName: "X"})
 	res := get(t, h, "/", nil)

@@ -44,5 +44,12 @@ jobs:
           tags: |
             ghcr.io/yornik/soiree:${{ needs.release-please.outputs.tag_name }}
             ghcr.io/yornik/soiree:latest
+          build-args: |
+            VERSION=${{ needs.release-please.outputs.tag_name }}
+            COMMIT=${{ github.sha }}
+          # Ship a bill of materials and build provenance with the image, so
+          # what is in a release is verifiable rather than asserted.
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -10,11 +10,16 @@ RUN go mod download
 
 COPY . .
 
+# Stamped into the binary and surfaced as the soiree_build_info metric, so a
+# running pod can be traced back to a commit.
+ARG VERSION=dev
+ARG COMMIT=none
+
 # Static build: no cgo, trimmed paths, no symbol table. Produces a binary that
 # runs on scratch.
 RUN CGO_ENABLED=0 go build \
       -trimpath \
-      -ldflags="-s -w" \
+      -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
       -o /out/soiree \
       ./cmd/soiree
 

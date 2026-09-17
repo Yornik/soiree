@@ -17,10 +17,17 @@ import (
 	"github.com/Yornik/soiree/internal/config"
 )
 
+// Build information, overridden at link time with -ldflags.
+var (
+	Version = "dev"
+	Commit  = "none"
+)
+
 // Server is the HTTP handler set.
 type Server struct {
-	cfg    config.Config
-	assets *Assets
+	cfg     config.Config
+	assets  *Assets
+	metrics *Metrics
 
 	// Served at fixed paths, so they carry an ETag and are revalidated
 	// rather than cached hard — but still pre-compressed.
@@ -35,7 +42,7 @@ func New(cfg config.Config, srcFS fs.FS) (*Server, error) {
 		return nil, err
 	}
 
-	s := &Server{cfg: cfg, assets: assets}
+	s := &Server{cfg: cfg, assets: assets, metrics: NewMetrics(Version, Commit)}
 
 	if err := s.renderManifest(srcFS); err != nil {
 		return nil, err
@@ -138,13 +145,29 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/assets/", s.serveAsset)
 	mux.HandleFunc("/sw.js", s.serveServiceWorker)
+
+	// Liveness: the process is up. Deliberately checks nothing else — a
+	// liveness probe that depends on a downstream turns that downstream's
+	// outage into a restart loop here.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
+
+	// Readiness: this instance can serve traffic. Identical to liveness while
+	// everything is in memory; once the database lands this is where the
+	// connection check belongs, so it is split now rather than later.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready\n"))
+	})
+
+	mux.Handle("/metrics", s.metrics.Handler())
 	mux.HandleFunc("/", s.serveIndex)
-	return securityHeaders(mux)
+
+	return securityHeaders(s.metrics.instrument(mux))
 }
 
 // securityHeaders sets the headers that do not depend on the reverse proxy.
