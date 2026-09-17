@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -327,10 +328,15 @@ func constraintError(err error) (status int, code, message string, ok bool) {
 	}
 }
 
+// writeInternal reports a failure that is this server's fault.
+//
+// The error goes to the log and not to the client: it carries SQL and column
+// names, which are nobody else's business. It does have to go somewhere,
+// though — a 500 whose cause was dropped on the floor cannot be operated on.
+// main installs the process logger as the default, so this is the same JSON
+// stream as every other line.
 func writeInternal(w http.ResponseWriter, err error) {
-	// The error itself stays server-side: it carries SQL and column names, and
-	// neither is the client's business.
-	_ = err
+	slog.Error("api request failed", "err", err)
 	writeError(w, http.StatusInternalServerError, errInternal, "something went wrong")
 }
 

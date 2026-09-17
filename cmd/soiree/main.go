@@ -42,6 +42,10 @@ var (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// Also the default, so a library that has no logger handed to it — the
+	// API's 500 path — still lands in the JSON stream the cluster collects
+	// rather than in plain text on stderr.
+	slog.SetDefault(log)
 
 	httpd.Version = version
 	httpd.Commit = commit
