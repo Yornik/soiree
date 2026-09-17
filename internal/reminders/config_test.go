@@ -149,7 +149,7 @@ func TestLoadConfigRejectsMalformedSettings(t *testing.T) {
 func TestZoneDatabaseIsEmbedded(t *testing.T) {
 	// The shipped image is FROM scratch and has no /usr/share/zoneinfo. If
 	// this ever fails in CI it will already have failed in production.
-	if _, err := time.LoadLocation("Asia/Jakarta"); err != nil {
+	if _, err := time.LoadLocation("Asia/Bangkok"); err != nil {
 		t.Fatalf("no embedded zone database: %v", err)
 	}
 }

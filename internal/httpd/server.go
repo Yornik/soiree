@@ -40,6 +40,19 @@ type Server struct {
 	// rather than cached hard — but still pre-compressed.
 	index *Asset
 	sw    *Asset
+
+	// auth is the accounts surface, nil when the deployment has no database.
+	auth *Auth
+}
+
+// WithAuth attaches the accounts, sessions and roles surface.
+//
+// Separate from New because it is optional: a process with no DATABASE_URL
+// serves the static shell and nothing else, which is what `docker run` with no
+// arguments does and what the image smoke test checks.
+func (s *Server) WithAuth(a *Auth) *Server {
+	s.auth = a
+	return s
 }
 
 // Option adjusts a Server as it is built.
@@ -185,6 +198,12 @@ func (s *Server) Handler() http.Handler {
 	// and the frontend is served exactly as it was before this milestone.
 	if s.store != nil {
 		s.routeAPI(mux)
+	}
+
+	// /api/v1/auth/... and /api/v1/users/...; the rest of /api/v1 belongs to
+	// the REST API and registers on this same mux.
+	if s.auth != nil {
+		s.auth.Register(mux)
 	}
 
 	mux.HandleFunc("/", s.serveIndex)

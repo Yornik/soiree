@@ -164,3 +164,117 @@ func TestClientJSONShape(t *testing.T) {
 		t.Error("client config leaks server-only fields")
 	}
 }
+
+func TestAccountsConfigDefaultsToNoMailAndNoDatabase(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with no env: %v", err)
+	}
+	// A process with neither is the documented degraded deployment: it serves
+	// the shell, which is what a bare `docker run` and the image smoke test do.
+	if c.DatabaseURL != "" {
+		t.Errorf("DatabaseURL = %q, want empty when unset", c.DatabaseURL)
+	}
+	if c.SMTP.Enabled() {
+		t.Error("SMTP reports itself enabled with nothing configured")
+	}
+	if c.TrustProxyHeaders {
+		t.Error("X-Forwarded-For is trusted by default, so anyone can choose their own rate-limit bucket")
+	}
+}
+
+func TestAccountsConfigReadsEnv(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://soiree@localhost/soiree")
+	t.Setenv("SOIREE_BASE_URL", "https://soiree.example.test/")
+	t.Setenv("SOIREE_TRUST_PROXY_HEADERS", "true")
+	t.Setenv("SOIREE_BOOTSTRAP_ADMIN", "Ada <ada@example.test>")
+	t.Setenv("SOIREE_SMTP_HOST", "smtp.example.test")
+	t.Setenv("SOIREE_SMTP_USER", "resend")
+	t.Setenv("SOIREE_SMTP_PASSWORD", "not-a-real-key")
+	t.Setenv("SOIREE_SMTP_FROM", "soiree@example.test")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	// Trailing slash stripped, or every link built from it has two.
+	if c.BaseURL != "https://soiree.example.test" {
+		t.Errorf("BaseURL = %q, want the trailing slash gone", c.BaseURL)
+	}
+	if c.BootstrapAdmin != "ada@example.test" {
+		t.Errorf("BootstrapAdmin = %q, want the bare address", c.BootstrapAdmin)
+	}
+	if !c.TrustProxyHeaders {
+		t.Error("SOIREE_TRUST_PROXY_HEADERS=true was not read")
+	}
+	if !c.SMTP.Enabled() || c.SMTP.Port != "465" {
+		t.Errorf("SMTP = %+v, want enabled on the default implicit-TLS port", c.SMTP)
+	}
+
+	// The relay's password is a secret, and the browser gets this struct.
+	raw, err := c.ClientJSON()
+	if err != nil {
+		t.Fatalf("ClientJSON(): %v", err)
+	}
+	for _, secret := range []string{"not-a-real-key", "smtp.example.test", "postgres://", "resend"} {
+		if strings.Contains(raw, secret) {
+			t.Errorf("client config leaks %q", secret)
+		}
+	}
+}
+
+func TestAccountsConfigRejectsHalfConfigurations(t *testing.T) {
+	// Each of these otherwise fails days later, as a mail that never arrives
+	// or a link that goes nowhere, to somebody who cannot see the logs.
+	for name, env := range map[string]map[string]string{
+		"a relay with no sender": {
+			"SOIREE_SMTP_HOST": "smtp.example.test",
+			"SOIREE_BASE_URL":  "https://soiree.example.test",
+		},
+		"a sender with no relay": {
+			"SOIREE_SMTP_FROM": "soiree@example.test",
+		},
+		"a user with no password": {
+			"SOIREE_SMTP_HOST": "smtp.example.test",
+			"SOIREE_SMTP_FROM": "soiree@example.test",
+			"SOIREE_SMTP_USER": "resend",
+			"SOIREE_BASE_URL":  "https://soiree.example.test",
+		},
+		"mail with no base url": {
+			"SOIREE_SMTP_HOST": "smtp.example.test",
+			"SOIREE_SMTP_FROM": "soiree@example.test",
+		},
+		"a relative base url": {
+			"SOIREE_BASE_URL": "/soiree",
+		},
+		"a base url with no scheme": {
+			"SOIREE_BASE_URL": "soiree.example.test",
+		},
+		"a port that is not a number": {
+			"SOIREE_SMTP_HOST": "smtp.example.test",
+			"SOIREE_SMTP_FROM": "soiree@example.test",
+			"SOIREE_SMTP_PORT": "smtps",
+			"SOIREE_BASE_URL":  "https://soiree.example.test",
+		},
+		"a sender that is not an address": {
+			"SOIREE_SMTP_HOST": "smtp.example.test",
+			"SOIREE_SMTP_FROM": "soiree at example dot test",
+			"SOIREE_BASE_URL":  "https://soiree.example.test",
+		},
+		"a bootstrap admin that is not an address": {
+			"SOIREE_BOOTSTRAP_ADMIN": "ada",
+		},
+		"a non-boolean proxy setting": {
+			"SOIREE_TRUST_PROXY_HEADERS": "sometimes",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			if _, err := Load(); err == nil {
+				t.Errorf("Load() accepted %s", name)
+			}
+		})
+	}
+}

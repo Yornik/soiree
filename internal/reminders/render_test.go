@@ -80,7 +80,7 @@ func TestSubjectCarriesTheHeadline(t *testing.T) {
 // would move every deadline back a day.
 func TestDeadlineDayDoesNotShiftWithTheZone(t *testing.T) {
 	var rendered []string
-	for _, zone := range []string{"UTC", "America/New_York", "Asia/Jakarta", "Pacific/Kiritimati"} {
+	for _, zone := range []string{"UTC", "America/New_York", "Asia/Bangkok", "Pacific/Kiritimati"} {
 		_, text, html := renderFixture(t, zone)
 		for _, want := range []string{"Sat 20 Feb 2027", "Tue 2 Mar 2027"} {
 			if !strings.Contains(text, want) {

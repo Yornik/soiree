@@ -361,6 +361,19 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 // writeJSON writes an API response. Marshalling to a buffer first is what
 // allows a failure to still produce a 500 rather than a truncated 200 body.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	// Never cached: this is shared state that two people are editing.
+	h.Set("Cache-Control", "no-store")
+
+	// A nil payload means a bodiless response — 204 from a delete, or a
+	// logout. Marshalling it would write the four bytes "null" under a status
+	// that promises no body at all.
+	if payload == nil {
+		w.WriteHeader(status)
+		return
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		body = []byte(`{"error":"internal","message":"could not encode the response"}`)
@@ -368,10 +381,6 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 	body = append(body, '\n')
 
-	h := w.Header()
-	h.Set("Content-Type", "application/json; charset=utf-8")
-	// Never cached: this is shared state that two people are editing.
-	h.Set("Cache-Control", "no-store")
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
 	_, _ = w.Write(body)

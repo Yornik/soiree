@@ -7,6 +7,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/mail"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -39,7 +41,39 @@ type Config struct {
 
 	Ceiling  int64
 	DemoData bool
+
+	// BaseURL is the origin this deployment is reached at, e.g.
+	// https://soiree.example.test. Set-password links are built from it and
+	// never from the request's Host header: a Host header is attacker-supplied,
+	// and a reset link built from one points the recipient's one-time secret at
+	// whatever host the attacker asked for.
+	BaseURL string
+
+	// TrustProxyHeaders says whether X-Forwarded-For may be believed. Off by
+	// default: with it on and no proxy in front, anyone can pick their own
+	// client address and the per-IP rate limits stop meaning anything.
+	TrustProxyHeaders bool
+
+	// BootstrapAdmin is an address that becomes the first admin if the
+	// deployment has none. It breaks the circularity of "every account is
+	// created by an admin" on an empty database and does nothing thereafter.
+	BootstrapAdmin string
+
+	SMTP SMTPConfig
 }
+
+// SMTPConfig is the outgoing mail relay. The zero value means no mail, which
+// is a supported deployment rather than a broken one.
+type SMTPConfig struct {
+	Host     string
+	Port     string
+	Username string
+	Password string
+	From     string
+}
+
+// Enabled reports whether mail can be sent.
+func (s SMTPConfig) Enabled() bool { return s.Host != "" }
 
 // ClientConfig is the subset handed to the browser. It is marshalled into a
 // JSON data block in the page, so it must contain nothing secret.
@@ -135,7 +169,91 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("SOIREE_SECONDARY_CURRENCY must be a 3-letter ISO 4217 code, got %q", c.SecondaryCurrency)
 	}
 
+	if err := c.loadAccounts(); err != nil {
+		return Config{}, err
+	}
+
 	return c, nil
+}
+
+// loadAccounts reads everything the accounts milestone added and rejects the
+// half-configured states.
+//
+// The failures worth catching here are the ones that otherwise surface as a
+// mail that never arrives or a link that goes nowhere — days later, to someone
+// who cannot see the logs.
+func (c *Config) loadAccounts() error {
+	// DATABASE_URL rather than SOIREE_DATABASE_URL: it is the name the
+	// development compose file already uses, and the one every Postgres tool
+	// reads.
+	c.DatabaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	c.BootstrapAdmin = strings.TrimSpace(os.Getenv("SOIREE_BOOTSTRAP_ADMIN"))
+
+	if v := strings.TrimSpace(os.Getenv("SOIREE_TRUST_PROXY_HEADERS")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("SOIREE_TRUST_PROXY_HEADERS must be a boolean, got %q", v)
+		}
+		c.TrustProxyHeaders = b
+	}
+
+	if c.BootstrapAdmin != "" {
+		addr, err := mail.ParseAddress(c.BootstrapAdmin)
+		if err != nil {
+			return fmt.Errorf("SOIREE_BOOTSTRAP_ADMIN must be an email address, got %q", c.BootstrapAdmin)
+		}
+		c.BootstrapAdmin = addr.Address
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("SOIREE_BASE_URL")); raw != "" {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("SOIREE_BASE_URL must be an absolute http(s) URL, e.g. https://soiree.example.test, got %q", raw)
+		}
+		c.BaseURL = strings.TrimRight(u.String(), "/")
+	}
+
+	c.SMTP = SMTPConfig{
+		Host:     strings.TrimSpace(os.Getenv("SOIREE_SMTP_HOST")),
+		Port:     strings.TrimSpace(env("SOIREE_SMTP_PORT", "465")),
+		Username: os.Getenv("SOIREE_SMTP_USER"),
+		Password: os.Getenv("SOIREE_SMTP_PASSWORD"),
+		From:     strings.TrimSpace(os.Getenv("SOIREE_SMTP_FROM")),
+	}
+	if !c.SMTP.Enabled() {
+		// Half a relay is worse than none: it looks configured and silently
+		// sends nothing.
+		for _, f := range []struct{ name, value string }{
+			{"SOIREE_SMTP_FROM", c.SMTP.From},
+			{"SOIREE_SMTP_USER", c.SMTP.Username},
+		} {
+			if f.value != "" {
+				return fmt.Errorf("%s is set but SOIREE_SMTP_HOST is not, so no mail can be sent", f.name)
+			}
+		}
+		return nil
+	}
+
+	if _, err := strconv.Atoi(c.SMTP.Port); err != nil {
+		return fmt.Errorf("SOIREE_SMTP_PORT must be a port number, got %q", c.SMTP.Port)
+	}
+	if c.SMTP.From == "" {
+		return fmt.Errorf("SOIREE_SMTP_FROM is required when SOIREE_SMTP_HOST is set")
+	}
+	if _, err := mail.ParseAddress(c.SMTP.From); err != nil {
+		return fmt.Errorf("SOIREE_SMTP_FROM must be an email address, got %q", c.SMTP.From)
+	}
+	// One without the other is always a mistake, and the failure mode is an
+	// authentication error against the relay at the worst possible moment.
+	if (c.SMTP.Username == "") != (c.SMTP.Password == "") {
+		return fmt.Errorf("SOIREE_SMTP_USER and SOIREE_SMTP_PASSWORD must be set together")
+	}
+	// A mail whose link is relative is a mail that cannot be clicked.
+	if c.BaseURL == "" {
+		return fmt.Errorf("SOIREE_BASE_URL is required when SOIREE_SMTP_HOST is set, or the links in outgoing mail point nowhere")
+	}
+
+	return nil
 }
 
 func env(key, def string) string {

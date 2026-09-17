@@ -202,7 +202,7 @@ func TestTodayIsTheDayInTheConfiguredZone(t *testing.T) {
 		"UTC":              "2027-02-25",
 		"Europe/Amsterdam": "2027-02-26",
 		"America/New_York": "2027-02-25",
-		"Asia/Jakarta":     "2027-02-26",
+		"Asia/Bangkok":     "2027-02-26",
 	} {
 		d := Compose(testConfig(t, zone, 14), now, nil, nil)
 		if got := d.Today.Format(time.DateOnly); got != want {
