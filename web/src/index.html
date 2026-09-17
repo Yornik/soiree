@@ -21,102 +21,126 @@
 <body>
 <div class="wrap">
 
-  <div class="hero">
-    <div>
-      <span class="hero-num" id="daysNum">–</span>
-      <span class="hero-num-label" id="daysLabel">days to go</span>
-    </div>
-    <div class="hero-title">
+  <!-- Masthead. The event identifies the page on the left; the deadline is
+       the one figure that applies to every tab, so it sits in the corner the
+       way a date does on a ledger page. -->
+  <header class="masthead">
+    <div class="masthead-id">
       <h1>{{ .EventName }}</h1>
-      <p>{{ .Tagline }}</p>
+      <p class="tagline">{{ .Tagline }}</p>
     </div>
-  </div>
+    <p class="countdown">
+      <span class="countdown-num" id="daysNum">–</span>
+      <span class="countdown-unit" id="daysLabel">days to go</span>
+      <span class="countdown-date" id="statDaysLabel">–</span>
+    </p>
+  </header>
 
-  <div class="tabs">
-    <button class="tab-btn active" data-tab="overview">Overview</button>
-    <button class="tab-btn" data-tab="budget">Budget</button>
-    <button class="tab-btn" data-tab="tasks">Tasks</button>
-  </div>
+  <nav class="tabs" role="tablist" aria-label="Planner sections">
+    <button class="tab-btn active" type="button" role="tab" id="tab-overview"
+            aria-controls="panel-overview" aria-selected="true" data-tab="overview">Overview</button>
+    <button class="tab-btn" type="button" role="tab" id="tab-budget"
+            aria-controls="panel-budget" aria-selected="false" tabindex="-1" data-tab="budget">Budget</button>
+    <button class="tab-btn" type="button" role="tab" id="tab-tasks"
+            aria-controls="panel-tasks" aria-selected="false" tabindex="-1" data-tab="tasks">Tasks</button>
+  </nav>
 
   <!-- OVERVIEW -->
-  <div class="tab-panel active" id="panel-overview">
-    <div class="stat-row">
-      <div class="stat-card">
-        <div class="num" id="statDays">–</div>
-        <div class="label" id="statDaysLabel">days until the event</div>
-      </div>
-      <div class="stat-card">
-        <div class="num" id="statTasks">0/0</div>
-        <div class="label">tasks done</div>
-      </div>
-      <div class="stat-card">
-        <div class="num" id="statBudget">–</div>
-        <div class="label">of ceiling committed</div>
-        <div class="sub" id="statBudgetSub">–</div>
-      </div>
+  <div class="tab-panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+
+    <!-- Shown only while the ledger is completely empty: body.is-empty. -->
+    <section class="first-run">
+      <h2>Nothing in the ledger yet</h2>
+      <p>This planner holds one event's money and jobs in one place: what each
+         thing costs, who is covering it, what has been paid and what is still
+         owed. Everything stays in this browser until you export it.</p>
+      <ol class="start-steps">
+        <li>
+          <span class="step-title">Set the ceiling</span>
+          <span class="step-note">The number the total should not cross.</span>
+          <button class="add-row-btn" type="button" id="startCeiling">Set the ceiling</button>
+        </li>
+        <li>
+          <span class="step-title">Name who is paying</span>
+          <span class="step-note">Short callsigns you can tag each cost with.</span>
+          <button class="add-row-btn" type="button" id="startSponsor">Add a sponsor</button>
+        </li>
+        <li>
+          <span class="step-title">Enter the first cost</span>
+          <span class="step-note">One line per quote, with what has been paid so far.</span>
+          <button class="add-row-btn" type="button" id="startLine">Add a budget line</button>
+        </li>
+      </ol>
+    </section>
+
+    <div class="when-data">
+      <!-- The reckoning: four figures on one baseline, right-aligned so they
+           read down the page as a column of money rather than four cards. -->
+      <section class="reckoning" aria-label="Money at a glance">
+        <div class="fig">
+          <span class="fig-label">Committed</span>
+          <span class="fig-num committed" id="mCommitted">–</span>
+          <span class="fig-sub" id="mCommittedEur">–</span>
+        </div>
+        <div class="fig">
+          <span class="fig-label">With buffer</span>
+          <span class="fig-num committed" id="mForecast">–</span>
+          <span class="fig-sub" id="mForecastSub">–</span>
+        </div>
+        <div class="fig">
+          <span class="fig-label">Paid</span>
+          <span class="fig-num paid" id="mPaid">–</span>
+          <span class="fig-sub" id="mPaidSub">–</span>
+        </div>
+        <div class="fig">
+          <span class="fig-label">Outstanding</span>
+          <span class="fig-num owing" id="mOutstanding">–</span>
+          <span class="fig-sub" id="mOutstandingEur">–</span>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2>Progress</h2>
+        <div class="gauge">
+          <span class="gauge-label">Committed against ceiling</span>
+          <span class="gauge-fig" id="statBudget">–</span>
+          <span class="gauge-track"><span class="gauge-fill committed" id="budgetBarFill"></span></span>
+          <span class="gauge-sub" id="statBudgetSub">–</span>
+        </div>
+        <div class="gauge">
+          <span class="gauge-label">Paid against committed</span>
+          <span class="gauge-fig" id="paidBarPct">–</span>
+          <span class="gauge-track"><span class="gauge-fill paid" id="paidBarFill"></span></span>
+          <span class="gauge-sub" id="paidBarSub">–</span>
+        </div>
+        <div class="gauge">
+          <span class="gauge-label">Tasks done</span>
+          <span class="gauge-fig" id="taskBarPct">0%</span>
+          <span class="gauge-track"><span class="gauge-fill" id="taskBarFill"></span></span>
+          <span class="gauge-sub" id="statTasks">0 of 0</span>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2>Watch list<span class="h2-note">things to keep an eye on</span></h2>
+        <div id="watchList"></div>
+        <p class="empty-note" id="watchEmpty">Nothing flagged yet.</p>
+        <button class="add-row-btn" type="button" id="addWatch">Add note</button>
+      </section>
+
+      <section class="block">
+        <h2>Up next</h2>
+        <ul class="upnext-list" id="upNextList"></ul>
+        <p class="empty-note" id="upNextEmpty">No open tasks — add some in the Tasks tab.</p>
+      </section>
     </div>
-
-    <section class="block">
-      <h2>Money at a glance</h2>
-      <div class="stat-row four">
-        <div class="stat-card">
-          <div class="num small" id="mCommitted">–</div>
-          <div class="label">committed (quoted)</div>
-          <div class="sub" id="mCommittedEur">–</div>
-        </div>
-        <div class="stat-card">
-          <div class="num small" id="mForecast">–</div>
-          <div class="label">with inflation buffer</div>
-          <div class="sub" id="mForecastSub">–</div>
-        </div>
-        <div class="stat-card">
-          <div class="num small" id="mPaid">–</div>
-          <div class="label">paid so far</div>
-          <div class="sub" id="mPaidSub">–</div>
-        </div>
-        <div class="stat-card">
-          <div class="num small" id="mOutstanding">–</div>
-          <div class="label">still to pay</div>
-          <div class="sub" id="mOutstandingEur">–</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="block">
-      <h2>Progress</h2>
-      <div class="bar-block">
-        <div class="bar-top"><span>Tasks completed</span><span id="taskBarPct">0%</span></div>
-        <div class="bar-track"><div class="bar-fill" id="taskBarFill" style="width:0%"></div></div>
-      </div>
-      <div class="bar-block">
-        <div class="bar-top"><span>Committed vs ceiling</span><span id="budgetBarPct">–</span></div>
-        <div class="bar-track"><div class="bar-fill gold" id="budgetBarFill" style="width:0%"></div></div>
-      </div>
-      <div class="bar-block">
-        <div class="bar-top"><span>Settled vs committed</span><span id="paidBarPct">–</span></div>
-        <div class="bar-track"><div class="bar-fill" id="paidBarFill" style="width:0%"></div></div>
-      </div>
-    </section>
-
-    <section class="block">
-      <h2>Watch list<span class="h2-note">things to keep an eye on</span></h2>
-      <div id="watchList"></div>
-      <div class="empty-note" id="watchEmpty" style="display:none;">Nothing flagged yet.</div>
-      <button class="add-row-btn" id="addWatch">+ Add note</button>
-    </section>
-
-    <section class="block">
-      <h2>Up next</h2>
-      <ul class="upnext-list" id="upNextList"></ul>
-      <div class="empty-note" id="upNextEmpty" style="display:none;">No open tasks — add some in the Tasks tab.</div>
-    </section>
   </div>
 
   <!-- BUDGET -->
-  <div class="tab-panel" id="panel-budget">
+  <div class="tab-panel" id="panel-budget" role="tabpanel" aria-labelledby="tab-budget" tabindex="0">
     <div class="settings-row">
       <div class="field">
-        <label for="ceilingInput">Ceiling / mark-up (<span class="cur-code">–</span>)</label>
+        <label for="ceilingInput">Ceiling (<span class="cur-code">–</span>)</label>
         <input type="number" id="ceilingInput" min="0" step="1000" placeholder="0">
       </div>
       <div class="field">
@@ -132,7 +156,7 @@
     <section class="block">
       <h2>Sponsors<span class="h2-note">callsigns used in the “cost by” column</span></h2>
       <div class="sponsor-grid" id="sponsorGrid"></div>
-      <button class="add-row-btn" id="addSponsor">+ Add sponsor</button>
+      <button class="add-row-btn" type="button" id="addSponsor">Add sponsor</button>
     </section>
 
     <div class="table-wrap">
@@ -140,33 +164,62 @@
         <colgroup id="budgetCols"></colgroup>
         <thead>
           <tr>
-            <th style="width:22%">Item</th>
-            <th class="right">Unit (<span class="cur-code">–</span>)</th>
-            <th class="right">Qty</th>
-            <th class="right">Total</th>
-            <th class="right">Paid</th>
-            <th class="right">To pay</th>
-            <th>Cost by</th>
-            <th>Remarks</th>
-            <th></th>
+            <th scope="col">Item</th>
+            <th scope="col" class="right">Unit (<span class="cur-code">–</span>)</th>
+            <th scope="col" class="right">Qty</th>
+            <th scope="col" class="right">Committed</th>
+            <th scope="col" class="right">Paid</th>
+            <th scope="col" class="right">Outstanding</th>
+            <th scope="col">Cost by</th>
+            <th scope="col">Remarks</th>
+            <th scope="col"><span class="sr-only">Remove</span></th>
           </tr>
         </thead>
         <tbody id="budgetBody"></tbody>
+        <!-- Totals sit under the columns they total: the arithmetic is the
+             point, so it is worth the fixed table layout to line them up. -->
+        <tfoot>
+          <tr class="totals-row">
+            <th scope="row">Totals</th>
+            <td></td>
+            <td></td>
+            <td class="calc strong" id="sumTotal">–</td>
+            <td class="calc paid" id="sumPaid">–</td>
+            <td class="calc" id="sumOwing">–</td>
+            <td colspan="3"></td>
+          </tr>
+        </tfoot>
       </table>
-      <div class="totals-line">
-        <span>Committed: <strong id="sumTotal">–</strong></span>
-        <span>Paid: <strong id="sumPaid">–</strong></span>
-        <span>To pay: <strong id="sumOwing">–</strong></span>
-        <span>With buffer: <strong id="sumForecast">–</strong></span>
-        <span>Headroom: <strong id="sumHeadroom">–</strong></span>
-      </div>
-    </div>
-    <div class="size-tools">
-      <button class="add-row-btn" id="addBudgetRow">+ Add budget line</button>
-      <button class="ghost-btn" id="resetSizes">Reset column &amp; row sizes</button>
     </div>
 
-    <section class="block" style="margin-top:30px;">
+    <!-- Repeated outside the scroll container: on a phone the table scrolls
+         sideways and the tfoot goes with it, and the totals are the one thing
+         that must never be off-screen. -->
+    <section class="reckoning compact" aria-label="Budget totals">
+      <div class="fig">
+        <span class="fig-label">Committed</span>
+        <span class="fig-num" id="sumTotalAlt">–</span>
+      </div>
+      <div class="fig">
+        <span class="fig-label">Outstanding</span>
+        <span class="fig-num" id="sumOwingAlt">–</span>
+      </div>
+      <div class="fig">
+        <span class="fig-label">With buffer</span>
+        <span class="fig-num" id="sumForecast">–</span>
+      </div>
+      <div class="fig">
+        <span class="fig-label">Headroom</span>
+        <span class="fig-num" id="sumHeadroom">–</span>
+      </div>
+    </section>
+
+    <div class="size-tools">
+      <button class="add-row-btn" type="button" id="addBudgetRow">Add budget line</button>
+      <button class="ghost-btn" type="button" id="resetSizes">Reset column &amp; row sizes</button>
+    </div>
+
+    <section class="block spaced">
       <h2>Who's covering what</h2>
       <div class="toggle-line">
         <input type="checkbox" id="splitEvenly">
@@ -177,36 +230,36 @@
   </div>
 
   <!-- TASKS -->
-  <div class="tab-panel" id="panel-tasks">
-    <div class="filter-pills" id="taskFilters">
-      <button class="pill active" data-filter="all">All</button>
-      <button class="pill" data-filter="not-started">Not started</button>
-      <button class="pill" data-filter="in-progress">In progress</button>
-      <button class="pill" data-filter="done">Done</button>
+  <div class="tab-panel" id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks" tabindex="0">
+    <div class="filter-pills" id="taskFilters" role="group" aria-label="Filter tasks by status">
+      <button class="pill active" type="button" aria-pressed="true" data-filter="all">All</button>
+      <button class="pill" type="button" aria-pressed="false" data-filter="not-started">Not started</button>
+      <button class="pill" type="button" aria-pressed="false" data-filter="in-progress">In progress</button>
+      <button class="pill" type="button" aria-pressed="false" data-filter="done">Done</button>
     </div>
 
     <div class="table-wrap">
-      <table>
+      <table class="tasks">
         <thead>
           <tr>
-            <th style="width:34%">Task</th>
-            <th>Owner</th>
-            <th>Due date</th>
-            <th>Status</th>
-            <th></th>
+            <th scope="col">Task</th>
+            <th scope="col">Owner</th>
+            <th scope="col">Due date</th>
+            <th scope="col">Status</th>
+            <th scope="col"><span class="sr-only">Remove</span></th>
           </tr>
         </thead>
         <tbody id="tasksBody"></tbody>
       </table>
     </div>
-    <button class="add-row-btn" id="addTaskRow">+ Add task</button>
+    <button class="add-row-btn" type="button" id="addTaskRow">Add task</button>
   </div>
 
   <div class="data-tools">
-    <button class="ghost-btn" id="exportData">Export data (JSON)</button>
-    <button class="ghost-btn" id="importData">Import data…</button>
-    <input type="file" id="importFile" accept="application/json,.json" style="display:none">
-    <span class="data-msg" id="dataMsg"></span>
+    <button class="ghost-btn" type="button" id="exportData">Export data (JSON)</button>
+    <button class="ghost-btn" type="button" id="importData">Import data…</button>
+    <input type="file" id="importFile" accept="application/json,.json" class="hidden">
+    <span class="data-msg" id="dataMsg" role="status" aria-live="polite"></span>
   </div>
 
 </div>

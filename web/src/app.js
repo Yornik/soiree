@@ -52,6 +52,13 @@
     return prefix + Math.random().toString(36).slice(2, 9);
   }
 
+  // Every figure on the page is written through here, so a panel can drop an
+  // element without the render path having to know about it.
+  function setText(id, value) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = value;
+  }
+
   var DEFAULT_COL_WIDTHS = [230, 110, 70, 135, 110, 135, 135, 230, 40];
 
   function emptyState() {
@@ -205,8 +212,12 @@
 
   // Compact notation is locale-aware, so this works for any currency rather
   // than hardcoding magnitude suffixes.
+  // minimumFractionDigits has to be pinned to 0: for most currencies it
+  // defaults to 2, and a maximum of 1 then clamps the minimum up to 1 rather
+  // than down, which renders 960 as "960.0".
   var fmtShortImpl = makeFormat(LOC, {
-    style: 'currency', currency: CUR, notation: 'compact', maximumFractionDigits: 1
+    style: 'currency', currency: CUR, notation: 'compact',
+    minimumFractionDigits: 0, maximumFractionDigits: 1
   }, function (n) {
     var a = Math.abs(Number(n) || 0);
     var sign = (Number(n) || 0) < 0 ? '-' : '';
@@ -265,94 +276,124 @@
   })();
 
   // ---------- Tabs ----------
+  // Roving tabindex plus arrow keys: this is a tab widget, and a tab widget
+  // that only responds to Tab is one a keyboard user has to walk through
+  // linearly to reach the third panel.
   var tabBtns = document.querySelectorAll('.tab-btn');
-  Array.prototype.forEach.call(tabBtns, function (btn) {
-    btn.addEventListener('click', function () {
-      Array.prototype.forEach.call(tabBtns, function (b) { b.classList.remove('active'); });
-      Array.prototype.forEach.call(document.querySelectorAll('.tab-panel'), function (p) {
-        p.classList.remove('active');
-      });
-      btn.classList.add('active');
-      document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+
+  function selectTab(btn, focus) {
+    Array.prototype.forEach.call(tabBtns, function (b) {
+      var on = b === btn;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.tab-panel'), function (p) {
+      p.classList.remove('active');
+    });
+    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+    if (focus) btn.focus();
+  }
+
+  Array.prototype.forEach.call(tabBtns, function (btn, i) {
+    btn.addEventListener('click', function () { selectTab(btn, false); });
+    btn.addEventListener('keydown', function (e) {
+      var step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (step) {
+        e.preventDefault();
+        selectTab(tabBtns[(i + step + tabBtns.length) % tabBtns.length], true);
+      } else if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault();
+        selectTab(tabBtns[e.key === 'Home' ? 0 : tabBtns.length - 1], true);
+      }
     });
   });
 
-  // ---------- Hero countdown ----------
-  function renderCountdown() {
-    var numEl = document.getElementById('daysNum');
-    var labelEl = document.getElementById('daysLabel');
-    var statEl = document.getElementById('statDays');
-    var statLabelEl = document.getElementById('statDaysLabel');
+  function showTab(name) {
+    for (var i = 0; i < tabBtns.length; i++) {
+      if (tabBtns[i].dataset.tab === name) { selectTab(tabBtns[i], false); return; }
+    }
+  }
 
+  // ---------- Countdown ----------
+  function renderCountdown() {
     if (!EVENT_DATE) {
-      numEl.textContent = '–';
-      labelEl.textContent = 'no date set';
-      statEl.textContent = '–';
-      if (statLabelEl) statLabelEl.textContent = 'no date set';
+      setText('daysNum', '–');
+      setText('daysLabel', 'no date set');
+      setText('statDaysLabel', '');
       return;
     }
     var today = new Date();
     today.setHours(0, 0, 0, 0);
     var diffDays = Math.ceil((EVENT_DATE - today) / 86400000);
-    var display = diffDays >= 0 ? diffDays : 0;
-    numEl.textContent = display;
-    labelEl.textContent = diffDays >= 0 ? 'days to go' : 'the day has passed';
-    statEl.textContent = display;
-    if (statLabelEl) {
-      try {
-        statLabelEl.textContent = 'days until ' + new Intl.DateTimeFormat(LOC, {
-          day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC'
-        }).format(EVENT_DATE);
-      } catch (e) {
-        statLabelEl.textContent = 'days until the event';
-      }
-    }
+    setText('daysNum', diffDays >= 0 ? diffDays : 0);
+    setText('daysLabel', diffDays >= 0 ? 'days to go' : 'the day has passed');
+    var when = '';
+    try {
+      when = new Intl.DateTimeFormat(LOC, {
+        day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC'
+      }).format(EVENT_DATE);
+    } catch (e) { when = ''; }
+    setText('statDaysLabel', when);
+  }
+
+  /* ---------- Empty state ----------
+   * A fresh instance has nothing to reconcile, so the overview shows what to
+   * do first instead of a grid of dashes. Called from every path that can add
+   * or remove the first record, not just from renderOverview: adding a sponsor
+   * does not touch the overview but does end the empty state.
+   */
+  function syncEmptyState() {
+    var empty = !state.budgetItems.length && !state.tasks.length &&
+      !state.sponsors.length && !state.notes.length;
+    document.body.classList.toggle('is-empty', empty);
   }
 
   // ---------- Overview ----------
   function renderOverview() {
     var total = state.tasks.length;
     var done = state.tasks.filter(function (t) { return t.status === 'done'; }).length;
-    document.getElementById('statTasks').textContent = done + '/' + total;
-
     var taskPct = total ? Math.round((done / total) * 100) : 0;
-    document.getElementById('taskBarPct').textContent = taskPct + '%';
+    setText('taskBarPct', taskPct + '%');
+    setText('statTasks', done + ' of ' + total + ' done');
     document.getElementById('taskBarFill').style.width = taskPct + '%';
 
     var t = totals();
 
-    document.getElementById('mCommitted').textContent = fmtShort(t.total);
-    document.getElementById('mCommittedEur').textContent = fmtSecondary(t.total);
-    document.getElementById('mForecast').textContent = fmtShort(t.forecast);
-    document.getElementById('mForecastSub').textContent = '+' + (Number(state.inflationPct) || 0) + '% on quoted';
-    document.getElementById('mPaid').textContent = fmtShort(t.paid);
-    document.getElementById('mPaidSub').textContent = t.total ? Math.round((t.paid / t.total) * 100) + '% of committed' : '–';
-    document.getElementById('mOutstanding').textContent = fmtShort(t.owing);
-    document.getElementById('mOutstandingEur').textContent = fmtSecondary(t.owing);
+    // Exact figures, not compact ones. These four are the same numbers as the
+    // budget table's totals row, and a page that shows "€5.7K" in one place
+    // and "€5,660" in another is a page nobody trusts to reconcile against.
+    setText('mCommitted', fmtCur(t.total));
+    setText('mCommittedEur', fmtSecondary(t.total));
+    setText('mForecast', fmtCur(Math.round(t.forecast)));
+    setText('mForecastSub', '+' + (Number(state.inflationPct) || 0) + '% on quoted');
+    setText('mPaid', fmtCur(t.paid));
+    setText('mPaidSub', t.total ? Math.round((t.paid / t.total) * 100) + '% of committed' : '');
+    setText('mOutstanding', fmtCur(t.owing));
+    setText('mOutstandingEur', fmtSecondary(t.owing));
 
     var budgetStatEl = document.getElementById('statBudget');
-    var budgetSubEl = document.getElementById('statBudgetSub');
-    var budgetPctEl = document.getElementById('budgetBarPct');
     var budgetFillEl = document.getElementById('budgetBarFill');
 
     if (t.ceiling > 0) {
       var pct = Math.round((t.total / t.ceiling) * 100);
       budgetStatEl.textContent = pct + '%';
       budgetStatEl.classList.toggle('warn', pct > 100);
-      budgetSubEl.textContent = fmtShort(t.total) + ' of ' + fmtShort(t.ceiling) + ' · ' + fmtShort(t.ceiling - t.forecast) + ' headroom after buffer';
-      budgetPctEl.textContent = pct + '% (' + fmtShort(t.total) + ' of ' + fmtShort(t.ceiling) + ')';
+      setText('statBudgetSub', fmtShort(t.total) + ' of ' + fmtShort(t.ceiling) +
+        ', leaving ' + fmtShort(t.ceiling - t.forecast) + ' after the buffer');
       budgetFillEl.style.width = Math.min(pct, 100) + '%';
       budgetFillEl.classList.toggle('over', pct > 100);
     } else {
-      budgetStatEl.textContent = fmtShort(t.total);
-      budgetSubEl.textContent = 'no ceiling set';
-      budgetPctEl.textContent = 'no ceiling set';
+      budgetStatEl.textContent = fmtCur(t.total);
+      budgetStatEl.classList.remove('warn');
+      setText('statBudgetSub', 'No ceiling set — set one in the Budget tab.');
       budgetFillEl.style.width = '0%';
       budgetFillEl.classList.remove('over');
     }
 
     var paidPct = t.total ? Math.round((t.paid / t.total) * 100) : 0;
-    document.getElementById('paidBarPct').textContent = paidPct + '% (' + fmtShort(t.paid) + ' of ' + fmtShort(t.total) + ')';
+    setText('paidBarPct', paidPct + '%');
+    setText('paidBarSub', fmtShort(t.paid) + ' of ' + fmtShort(t.total));
     document.getElementById('paidBarFill').style.width = Math.min(paidPct, 100) + '%';
 
     var upcoming = state.tasks
@@ -369,22 +410,25 @@
     var list = document.getElementById('upNextList');
     var emptyNote = document.getElementById('upNextEmpty');
     list.innerHTML = '';
-    if (!upcoming.length) {
-      emptyNote.style.display = 'block';
-    } else {
-      emptyNote.style.display = 'none';
-      upcoming.forEach(function (t3) {
-        var li = document.createElement('li');
-        var left = document.createElement('span');
-        left.textContent = t3.name || '(untitled task)';
-        var right = document.createElement('span');
-        right.className = 'who';
-        right.textContent = [t3.owner, t3.due].filter(Boolean).join(' · ');
-        li.appendChild(left);
-        li.appendChild(right);
-        list.appendChild(li);
-      });
-    }
+    emptyNote.style.display = upcoming.length ? 'none' : 'block';
+    upcoming.forEach(function (t3) {
+      var li = document.createElement('li');
+      li.appendChild(cell('span', '', t3.name || '(untitled task)'));
+      li.appendChild(cell('span', 'who', t3.owner || ''));
+      li.appendChild(cell('span', 'due', t3.due || ''));
+      list.appendChild(li);
+    });
+    syncEmptyState();
+  }
+
+  // Small helper for the two-and-three column list rows, which exist so the
+  // owner and the date line up down the page instead of being run together
+  // into one string.
+  function cell(tag, cls, text) {
+    var el = document.createElement(tag);
+    if (cls) el.className = cls;
+    el.textContent = text;
+    return el;
   }
 
   // ---------- Watch list ----------
@@ -407,11 +451,7 @@
         save();
       });
 
-      var del = document.createElement('button');
-      del.className = 'del-btn';
-      del.textContent = '×';
-      del.title = 'Remove note';
-      del.addEventListener('click', function () {
+      var del = delButton('Remove note', function () {
         state.notes.splice(idx, 1);
         save();
         renderNotes();
@@ -421,6 +461,20 @@
       row.appendChild(del);
       host.appendChild(row);
     });
+    syncEmptyState();
+  }
+
+  // "×" is a fine mark to look at and a useless one to hear, so every delete
+  // carries a real accessible name.
+  function delButton(label, onClick) {
+    var b = document.createElement('button');
+    b.className = 'del-btn';
+    b.type = 'button';
+    b.textContent = '×';
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.addEventListener('click', onClick);
+    return b;
   }
 
   document.getElementById('addWatch').addEventListener('click', function () {
@@ -449,11 +503,19 @@
 
   function renderBudgetTotals() {
     var t = totals();
-    document.getElementById('sumTotal').textContent = fmtCur(t.total);
-    document.getElementById('sumPaid').textContent = fmtCur(t.paid);
-    document.getElementById('sumOwing').textContent = fmtCur(t.owing);
-    document.getElementById('sumForecast').textContent = fmtCur(Math.round(t.forecast));
-    document.getElementById('sumHeadroom').textContent = t.ceiling > 0 ? fmtCur(Math.round(t.ceiling - t.forecast)) : '–';
+    setText('sumTotal', fmtCur(t.total));
+    setText('sumPaid', fmtCur(t.paid));
+    setText('sumOwing', fmtCur(t.owing));
+    // Repeated below the table, which is the copy that survives on a phone
+    // once the grid has been scrolled sideways.
+    setText('sumTotalAlt', fmtCur(t.total));
+    setText('sumOwingAlt', fmtCur(t.owing));
+    setText('sumForecast', fmtCur(Math.round(t.forecast)));
+    setText('sumHeadroom', t.ceiling > 0 ? fmtCur(Math.round(t.ceiling - t.forecast)) : '–');
+
+    // Rust means outstanding, so it only appears while something is.
+    var owingEls = [document.getElementById('sumOwing'), document.getElementById('sumOwingAlt')];
+    owingEls.forEach(function (el) { if (el) el.classList.toggle('owing', t.owing > 0); });
     renderSplit();
   }
 
@@ -495,10 +557,6 @@
         renderSplit();
       });
 
-      var eq = document.createElement('span');
-      eq.className = 'eq';
-      eq.textContent = '=';
-
       var name = document.createElement('input');
       name.type = 'text';
       name.className = 'name-input';
@@ -514,11 +572,7 @@
       amt.className = 'sp-amt';
       amt.textContent = fmtCur(sponsorShare(sp.id));
 
-      var del = document.createElement('button');
-      del.className = 'del-btn';
-      del.textContent = '×';
-      del.title = 'Remove sponsor';
-      del.addEventListener('click', function () {
+      var del = delButton('Remove sponsor', function () {
         var id = state.sponsors[idx].id;
         state.sponsors.splice(idx, 1);
         state.budgetItems.forEach(function (i) {
@@ -531,12 +585,12 @@
       });
 
       row.appendChild(code);
-      row.appendChild(eq);
       row.appendChild(name);
       row.appendChild(amt);
       row.appendChild(del);
       grid.appendChild(row);
     });
+    syncEmptyState();
   }
 
   // Amount attributed to one sponsor, shared lines divided evenly.
@@ -593,14 +647,10 @@
     var grand = totals().total;
     order.sort(function (a, b) { return groups[b] - groups[a]; }).forEach(function (k) {
       var li = document.createElement('li');
-      var left = document.createElement('span');
-      left.textContent = k;
-      var right = document.createElement('span');
-      right.className = 'amt';
       var share = grand ? Math.round((groups[k] / grand) * 100) : 0;
-      right.textContent = fmtCur(Math.round(groups[k])) + '  ·  ' + share + '%';
-      li.appendChild(left);
-      li.appendChild(right);
+      li.appendChild(cell('span', '', k));
+      li.appendChild(cell('span', 'amt', fmtCur(Math.round(groups[k]))));
+      li.appendChild(cell('span', 'pct', share + '%'));
       list.appendChild(li);
     });
 
@@ -611,15 +661,31 @@
     });
   }
 
-  // ---------- Cost-by picker ----------
+  /* ---------- Cost-by picker ----------
+   * The popup is appended to the body, so without moving focus into it a
+   * keyboard user opening the picker would land on the next cell instead and
+   * have to tab the rest of the page to reach it. Assigning a cost to a
+   * sponsor is a data operation, not a display preference, so it gets the
+   * full treatment: focus in on open, Escape to close back onto the button,
+   * and tabbing out dismisses it.
+   */
   var openPop = null;
-  function closePop() {
-    if (openPop) { openPop.remove(); openPop = null; }
+  var openBtn = null;
+
+  function closePop(returnFocus) {
+    if (!openPop) return;
+    openPop.remove();
+    openPop = null;
+    if (openBtn) {
+      openBtn.setAttribute('aria-expanded', 'false');
+      if (returnFocus) openBtn.focus();
+    }
+    openBtn = null;
   }
   document.addEventListener('click', function (e) {
     if (openPop && !openPop.contains(e.target) && !e.target.classList.contains('by-btn')) closePop();
   });
-  window.addEventListener('resize', closePop);
+  window.addEventListener('resize', function () { closePop(); });
 
   function openPicker(btn, item) {
     closePop();
@@ -660,6 +726,16 @@
     note.textContent = 'Tick more than one for a shared cost.';
     pop.appendChild(note);
 
+    pop.tabIndex = -1;
+    pop.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.stopPropagation(); closePop(true); }
+    });
+    // Tabbing past the last checkbox dismisses rather than stranding the
+    // popup open behind the rest of the page.
+    pop.addEventListener('focusout', function (e) {
+      if (!pop.contains(e.relatedTarget)) closePop(false);
+    });
+
     document.body.appendChild(pop);
     var r = btn.getBoundingClientRect();
     var top = r.bottom + 4;
@@ -670,6 +746,10 @@
     pop.style.top = top + 'px';
     pop.style.left = Math.max(8, left) + 'px';
     openPop = pop;
+    openBtn = btn;
+    btn.setAttribute('aria-expanded', 'true');
+    var firstBox = pop.querySelector('input[type="checkbox"]');
+    (firstBox || pop).focus();
   }
 
   function setByLabel(btn, item) {
@@ -769,9 +849,24 @@
     renderBudgetTable();
   });
 
+  // A table header over nothing reads as broken, so an empty grid says so in
+  // the space the first row will occupy.
+  function emptyRow(body, span, text) {
+    var tr = document.createElement('tr');
+    var td = document.createElement('td');
+    td.className = 'empty-cell';
+    td.colSpan = span;
+    td.textContent = text;
+    tr.appendChild(td);
+    body.appendChild(tr);
+  }
+
   function renderBudgetTable() {
     var body = document.getElementById('budgetBody');
     body.innerHTML = '';
+    if (!state.budgetItems.length) {
+      emptyRow(body, 9, 'No budget lines yet. Add the first one below.');
+    }
     state.budgetItems.forEach(function (item, idx) {
       var tr = document.createElement('tr');
 
@@ -824,6 +919,8 @@
       var byBtn = document.createElement('button');
       byBtn.className = 'by-btn';
       byBtn.type = 'button';
+      byBtn.setAttribute('aria-haspopup', 'true');
+      byBtn.setAttribute('aria-expanded', 'false');
       setByLabel(byBtn, item);
       byBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
@@ -835,18 +932,13 @@
 
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
-      var delBtn = document.createElement('button');
-      delBtn.className = 'del-btn';
-      delBtn.textContent = '×';
-      delBtn.title = 'Remove line';
-      delBtn.addEventListener('click', function () {
+      tdDel.appendChild(delButton('Remove budget line', function () {
         state.budgetItems.splice(idx, 1);
         save();
         renderBudgetTable();
         renderBudgetTotals();
         renderOverview();
-      });
-      tdDel.appendChild(delBtn);
+      }));
 
       tr.appendChild(tdItem);
       tr.appendChild(tdUnit);
@@ -863,6 +955,7 @@
       attachRowGrip(tdItem, tr, item);
       refreshRow(tr, item);
     });
+    syncEmptyState();
   }
 
   function refreshRow(tr, item) {
@@ -885,22 +978,27 @@
   var currentFilter = 'all';
   var STATUS_LABELS = { 'not-started': 'Not started', 'in-progress': 'In progress', 'done': 'Done' };
 
-  Array.prototype.forEach.call(document.querySelectorAll('#taskFilters .pill'), function (btn) {
-    btn.addEventListener('click', function () {
-      Array.prototype.forEach.call(document.querySelectorAll('#taskFilters .pill'), function (b) {
-        b.classList.remove('active');
-      });
-      btn.classList.add('active');
-      currentFilter = btn.dataset.filter;
-      renderTasksTable();
+  function setFilter(name) {
+    currentFilter = name;
+    Array.prototype.forEach.call(document.querySelectorAll('#taskFilters .pill'), function (b) {
+      var on = b.dataset.filter === name;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    renderTasksTable();
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('#taskFilters .pill'), function (btn) {
+    btn.addEventListener('click', function () { setFilter(btn.dataset.filter); });
   });
 
   function renderTasksTable() {
     var body = document.getElementById('tasksBody');
     body.innerHTML = '';
+    var shown = 0;
     state.tasks.forEach(function (task, idx) {
       if (currentFilter !== 'all' && task.status !== currentFilter) return;
+      shown++;
       var tr = document.createElement('tr');
 
       var tdName = document.createElement('td');
@@ -955,17 +1053,12 @@
 
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
-      var delBtn = document.createElement('button');
-      delBtn.className = 'del-btn';
-      delBtn.textContent = '×';
-      delBtn.title = 'Remove task';
-      delBtn.addEventListener('click', function () {
+      tdDel.appendChild(delButton('Remove task', function () {
         state.tasks.splice(idx, 1);
         save();
         renderTasksTable();
         renderOverview();
-      });
-      tdDel.appendChild(delBtn);
+      }));
 
       tr.appendChild(tdName);
       tr.appendChild(tdOwner);
@@ -974,18 +1067,45 @@
       tr.appendChild(tdDel);
       body.appendChild(tr);
     });
+    if (!shown) {
+      emptyRow(body, 5, state.tasks.length
+        ? 'No tasks with that status.'
+        : 'No tasks yet. Add the first one below.');
+    }
+    syncEmptyState();
   }
 
   document.getElementById('addTaskRow').addEventListener('click', function () {
     state.tasks.push({ id: uid('t'), name: '', owner: '', due: '', status: 'not-started' });
     save();
-    currentFilter = 'all';
-    Array.prototype.forEach.call(document.querySelectorAll('#taskFilters .pill'), function (b) {
-      b.classList.remove('active');
-    });
-    document.querySelector('#taskFilters .pill[data-filter="all"]').classList.add('active');
-    renderTasksTable();
+    setFilter('all');
     renderOverview();
+  });
+
+  /* ---------- First run ----------
+   * Each step does the thing it names rather than explaining where to find
+   * it: the button moves to the Budget tab and starts the record.
+   */
+  function startStep(id, fn) {
+    var btn = document.getElementById(id);
+    if (btn) btn.addEventListener('click', fn);
+  }
+  startStep('startCeiling', function () {
+    showTab('budget');
+    ceilingInput.focus();
+    ceilingInput.select();
+  });
+  startStep('startSponsor', function () {
+    showTab('budget');
+    document.getElementById('addSponsor').click();
+    var first = document.querySelector('#sponsorGrid .code-input');
+    if (first) first.focus();
+  });
+  startStep('startLine', function () {
+    showTab('budget');
+    document.getElementById('addBudgetRow').click();
+    var first = document.querySelector('#budgetBody textarea');
+    if (first) first.focus();
   });
 
   // ---------- Data portability ----------
@@ -994,6 +1114,7 @@
     inflationInput.value = state.inflationPct;
     rateInput.value = state.fxRate || '';
     splitToggle.checked = !!state.splitEvenly;
+    syncEmptyState();
     renderSponsors();
     applyColWidths();
     renderBudgetTable();
