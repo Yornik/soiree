@@ -126,8 +126,24 @@ Measured, brotli: shell 1.7 kB, stylesheet 2.8 kB, application 8.4 kB, font
 
 ### Deliberately excluded
 
-- **HTTP/3.** Real benefit on lossy, high-RTT mobile links, but it needs QUIC
-  over UDP end to end — an infrastructure change, not an application one.
+- **HTTP/3.** Decided against, and worth recording why, because the naive
+  reading says it should help. QUIC completes a handshake in one round trip
+  where TCP + TLS 1.3 needs two, so on a 300 ms link it saves roughly 300 ms —
+  genuinely significant, not a rounding error.
+
+  It is still not worth it here, because the items above already removed the
+  cost it would address. The service worker means repeat visits make no network
+  request at all; reads are a single request; writes are deferred off the
+  interaction path; updates arrive over one long-lived SSE connection instead
+  of repeated handshakes. What is left for QUIC to improve is *connection
+  establishment*, which this design has deliberately made rare — a one-off on a
+  visitor's first load.
+
+  The price is not small: QUIC cannot be passed through at layer 4 the way TCP
+  is, so terminating it at the edge would put TLS private keys on the most
+  exposed hosts in the deployment. Paying that to speed up a once-per-device
+  event is the wrong trade. Browsers fall back via `Alt-Svc` with no
+  user-visible effect, so declining costs nothing.
 - **Edge PoPs.** Adding a server geographically closer does not help while the
   proxy in front is a layer-4 TCP passthrough: TLS still terminates at the
   origin, so the client's handshake round-trips the full distance anyway. It
@@ -485,7 +501,7 @@ cryptography.
 
 ### Build and supply chain (track 6)
 
-Partly in place; the rest is the work.
+Mostly in place.
 
 Done: reproducible static build with `-trimpath`, version and commit stamped at
 link time, `scratch` base with no shell or package manager, unprivileged UID,
@@ -493,18 +509,32 @@ link time, `scratch` base with no shell or package manager, unprivileged UID,
 images, Renovate on every dependency including a custom manager keeping the CI
 toolchain in step with the Dockerfile.
 
+Also done: **releases are signed** with cosign, keyless via the GitHub OIDC
+identity, so a signature proves which workflow in which repository built the
+image. **Every action is pinned to a commit digest** with the readable version
+kept in a trailing comment, since a moving tag is a supply-chain hole. **The
+SBOM is published as a release asset**, not only as an image attestation, so it
+can be read without pulling the image. A CI job builds the binary twice on
+independent builders with the cache off and fails if the bytes differ.
+
+Both release workflows then re-run the exact verification command
+[docs/verifying-releases.md](verifying-releases.md) gives third parties, against
+the image they just pushed. If the documented command stops working, the
+release fails rather than someone else's admission controller.
+
 Still to do:
 
-- **Sign releases** with cosign, keyless via the GitHub OIDC identity, so the
-  signature proves which workflow in which repository built the image.
 - **Verify in cluster.** A signature nothing checks is decoration; the point is
-  an admission policy that refuses unsigned images.
-- **Pin actions by digest** rather than tag. A moving tag is a supply-chain
-  hole, and Renovate can bump digests just as well as tags.
-- **Publish the SBOM** as a release asset, not only as an image attestation.
+  an admission policy that refuses unsigned images. That belongs in the
+  deployment repository, not here.
 - **Decide on multi-arch.** The cluster is amd64, so `linux/arm64` currently
   buys nothing and doubles release build time. Worth adding only if someone
   actually wants to run this on a Pi.
+
+Known limitation: the reproducibility check compares the **binary**, not the
+image digest — BuildKit stamps a build timestamp into the image config, so
+identical inputs still produce different image digests. The signature and
+provenance are what tie an image back to its source, not digest equality.
 
 ### Design pass (track 7)
 
