@@ -83,8 +83,16 @@ const (
 	loginIPWindow   = time.Minute
 	loginAcctBurst  = 10
 	loginAcctWindow = 15 * time.Minute
-	tokenIPBurst    = 10
-	tokenIPWindow   = time.Hour
+	// Separate buckets for asking for a link and for redeeming one. Sharing
+	// them means somebody who mistypes a short password three times has spent
+	// a third of their hour's allowance on the endpoint they still need.
+	resetIPBurst  = 10
+	resetIPWindow = time.Hour
+	redeemIPBurst = 20
+	// redeemIPWindow bounds guessing at a token. 20 an hour against 256 bits
+	// is not a race anybody wins; the limit is here so the attempt costs
+	// something rather than because it could ever succeed.
+	redeemIPWindow = time.Hour
 
 	// sweepInterval is how often expired sessions and spent links are cleared
 	// out. Nothing depends on it for correctness — both lookups already refuse
@@ -131,7 +139,8 @@ type Auth struct {
 
 	loginIP   *limiter
 	loginAcct *limiter
-	tokenIP   *limiter
+	resetIP   *limiter
+	redeemIP  *limiter
 
 	// params is the hashing policy. A field rather than a package constant so
 	// the HTTP tests can turn the cost down; production never sets it and gets
@@ -162,7 +171,8 @@ func NewAuth(o AuthOptions) *Auth {
 		trustProxy: o.TrustProxyHeaders,
 		loginIP:    newLimiter(loginIPBurst, loginIPWindow),
 		loginAcct:  newLimiter(loginAcctBurst, loginAcctWindow),
-		tokenIP:    newLimiter(tokenIPBurst, tokenIPWindow),
+		resetIP:    newLimiter(resetIPBurst, resetIPWindow),
+		redeemIP:   newLimiter(redeemIPBurst, redeemIPWindow),
 		params:     auth.DefaultParams,
 		now:        time.Now,
 		background: func(fn func(context.Context)) {
@@ -184,8 +194,11 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	// somebody who is not logged in can knock on.
 	mux.Handle("POST /api/v1/auth/login", a.limitIP(a.loginIP, http.HandlerFunc(a.handleLogin)))
 	mux.Handle("POST /api/v1/auth/logout", http.HandlerFunc(a.handleLogout))
-	mux.Handle("POST /api/v1/auth/password-reset", a.limitIP(a.tokenIP, http.HandlerFunc(a.handlePasswordReset)))
-	mux.Handle("POST /api/v1/auth/set-password", a.limitIP(a.tokenIP, http.HandlerFunc(a.handleSetPassword)))
+	mux.Handle("POST /api/v1/auth/password-reset", a.limitIP(a.resetIP, http.HandlerFunc(a.handlePasswordReset)))
+	// Not wrapped in the limiter: handleSetPassword charges for the request
+	// itself, after the checks that cost nothing, so a fumbled password does
+	// not spend the allowance the redemption still needs.
+	mux.Handle("POST /api/v1/auth/set-password", http.HandlerFunc(a.handleSetPassword))
 
 	// Who am I. Any live session; the browser uses it to decide what to draw.
 	mux.Handle("GET /api/v1/auth/session", a.RequireAuth(http.HandlerFunc(a.handleSession)))
@@ -333,11 +346,10 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	expires := a.now().Add(sessionIdleTimeout)
 	if _, err := a.store.CreateSession(r.Context(), store.Session{
 		UserID:    user.ID,
 		TokenHash: auth.HashToken(token),
-		ExpiresAt: expires,
+		ExpiresAt: a.now().Add(sessionIdleTimeout),
 	}); err != nil {
 		a.log.Error("could not create session", "user", user.ID, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal")
@@ -345,7 +357,7 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.log.Info("login", "user", user.ID, "role", user.Role)
-	setSessionCookie(w, token, expires)
+	setSessionCookie(w, token, a.now(), sessionIdleTimeout)
 	writeJSON(w, http.StatusOK, toDTO(user))
 }
 
@@ -447,6 +459,13 @@ func (a *Auth) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Token == "" {
 		writeError(w, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	// Charged here rather than in middleware: everything above this line is a
+	// free format check, and somebody choosing a password that turns out to be
+	// too short should not burn the budget for the attempt that follows.
+	if !a.redeemIP.allow(clientIP(r, a.trustProxy)) {
+		tooManyRequests(w)
 		return
 	}
 	tokenHash := auth.HashToken(req.Token)

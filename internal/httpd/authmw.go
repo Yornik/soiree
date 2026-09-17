@@ -61,22 +61,27 @@ func (a *Auth) Authenticate(next http.Handler) http.Handler {
 			return
 		}
 
-		a.touch(r, sess)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userCtxKey, user)))
-	})
-}
-
-// touch slides the idle expiry forward, at most once an hour per session.
-func (a *Auth) touch(r *http.Request, sess store.Session) {
-	if a.now().Sub(sess.LastSeenAt) < sessionTouchInterval {
-		return
-	}
-	// Detached from the request: the caller has their answer either way, and
-	// this failing is not a reason to fail their request.
-	a.background(func(ctx context.Context) {
-		if err := a.store.TouchSession(ctx, sess.ID, a.now().Add(sessionIdleTimeout)); err != nil {
-			a.log.Error("could not extend session", "err", err)
+		// Slide the idle window forward — in the database *and* in the browser.
+		// Doing only the first would leave the cookie expiring at the moment
+		// it was issued, so somebody using this every day would still be
+		// logged out on the seventh, and no session could ever reach the
+		// absolute cap. Both, or neither, or the two disagree.
+		//
+		// At most once an hour: the window is measured in days, and a write
+		// per request to record it would cost far more than it tells anybody.
+		if a.now().Sub(sess.LastSeenAt) >= sessionTouchInterval {
+			setSessionCookie(w, token, a.now(), sessionIdleTimeout)
+			expires := a.now().Add(sessionIdleTimeout)
+			// Detached from the request: the caller has their answer either
+			// way, and this failing is not a reason to fail their request.
+			a.background(func(ctx context.Context) {
+				if err := a.store.TouchSession(ctx, sess.ID, expires); err != nil {
+					a.log.Error("could not extend session", "err", err)
+				}
+			})
 		}
+
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userCtxKey, user)))
 	})
 }
 
@@ -195,13 +200,16 @@ func sessionToken(r *http.Request) (string, bool) {
 // cannot post to this one with the user's session attached, while an ordinary
 // link from a mail still arrives logged in. Path=/ because the API and the
 // page it serves share an origin.
-func setSessionCookie(w http.ResponseWriter, token string, expires time.Time) {
+// lifetime is passed rather than an absolute expiry so that MaxAge and Expires
+// cannot disagree: deriving one from the other through time.Now would reach
+// past the injected clock and drift the moment a test moves it.
+func setSessionCookie(w http.ResponseWriter, token string, now time.Time, lifetime time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     "/",
-		Expires:  expires,
-		MaxAge:   int(time.Until(expires).Seconds()),
+		Expires:  now.Add(lifetime),
+		MaxAge:   int(lifetime.Seconds()),
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,

@@ -689,3 +689,148 @@ func TestAccountsSurfaceIsWiredIntoTheServer(t *testing.T) {
 		t.Errorf("a server with no accounts surface does not serve the shell: %d", rec.Code)
 	}
 }
+
+func TestSessionSlidesForwardWithUse(t *testing.T) {
+	f := newFixture(t, false)
+	user := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	cookie := f.login(t, "ada@example.test", goodPassword)
+
+	// Inside the touch interval nothing is rewritten: sliding the expiry on
+	// every request would be a database write per request to record something
+	// measured in days.
+	rec := f.do(t, http.MethodGet, "/api/v1/auth/session", nil, cookie)
+	if len(rec.Result().Cookies()) != 0 {
+		t.Errorf("a request inside the touch interval re-issued the cookie: %v", rec.Result().Cookies())
+	}
+
+	before, err := f.store.Sessions(t.Context(), user.ID)
+	if err != nil || len(before) != 1 {
+		t.Fatalf("sessions = %v, %v; want exactly one", before, err)
+	}
+
+	// An hour later the window slides — in the browser as well as in the
+	// database. Moving only the row would leave the cookie expiring at the
+	// moment it was issued, so somebody using this daily would still be logged
+	// out on the seventh day and no session could reach the absolute cap.
+	base := time.Now()
+	f.a.now = func() time.Time { return base.Add(2 * sessionTouchInterval) }
+
+	rec = f.do(t, http.MethodGet, "/api/v1/auth/session", nil, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	var refreshed *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			refreshed = c
+		}
+	}
+	if refreshed == nil {
+		t.Fatal("the session cookie was not re-issued, so its expiry never slides")
+	}
+	if refreshed.Value != cookie.Value {
+		t.Error("sliding the window changed the session token; it should extend, not rotate")
+	}
+	if !refreshed.Expires.After(cookie.Expires) {
+		t.Errorf("refreshed Expires = %v, want later than the original %v", refreshed.Expires, cookie.Expires)
+	}
+	if refreshed.MaxAge != int(sessionIdleTimeout.Seconds()) {
+		t.Errorf("refreshed MaxAge = %d, want %d", refreshed.MaxAge, int(sessionIdleTimeout.Seconds()))
+	}
+
+	after, err := f.store.Sessions(t.Context(), user.ID)
+	if err != nil || len(after) != 1 {
+		t.Fatalf("sessions = %v, %v; want exactly one", after, err)
+	}
+	if !after[0].ExpiresAt.After(before[0].ExpiresAt) {
+		t.Errorf("stored expiry = %v, want later than %v", after[0].ExpiresAt, before[0].ExpiresAt)
+	}
+}
+
+func TestLoginRehashesAPasswordStoredAtWeakerParameters(t *testing.T) {
+	f := newFixture(t, false)
+
+	// An account whose password was hashed before the cost parameters were
+	// raised. The fixture's policy is cheapParams at m=1024; this is below it.
+	weak := auth.Params{Memory: 512, Time: 1, Threads: 1, KeyLen: 32, SaltLen: 16}
+	stale, err := weak.Hash(goodPassword)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	user, err := f.store.CreateUser(t.Context(), store.User{
+		Email: "grace@example.test", Role: store.RoleEditor,
+		Status: store.StatusActive, PasswordHash: &stale,
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Raising the floor must not lock anybody out: the old password still
+	// works, and logging in is the one moment the plaintext is in hand and the
+	// stored encoding can be brought up to policy without asking anybody to do
+	// anything.
+	f.login(t, "grace@example.test", goodPassword)
+
+	reread, err := f.store.User(t.Context(), user.ID)
+	if err != nil {
+		t.Fatalf("read user: %v", err)
+	}
+	if reread.PasswordHash == nil || *reread.PasswordHash == stale {
+		t.Fatal("the stored hash was not rewritten at the current parameters")
+	}
+	if !strings.Contains(*reread.PasswordHash, "m=1024,t=1,p=1") {
+		t.Errorf("stored hash = %q, want it re-encoded at the current parameters", *reread.PasswordHash)
+	}
+	if reread.Revision <= user.Revision {
+		t.Errorf("revision = %d, want it past %d", reread.Revision, user.Revision)
+	}
+
+	// The rewrite has to be of the same password, which is the assertion that
+	// catches a re-hash that stored something else.
+	f.login(t, "grace@example.test", goodPassword)
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/login",
+		map[string]string{"email": "grace@example.test", "password": otherPassword}, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("the wrong password works after a re-hash: %d", rec.Code)
+	}
+
+	// And a hash already at policy is left alone.
+	before := *reread.PasswordHash
+	f.login(t, "grace@example.test", goodPassword)
+	again, err := f.store.User(t.Context(), user.ID)
+	if err != nil {
+		t.Fatalf("read user: %v", err)
+	}
+	if *again.PasswordHash != before {
+		t.Error("a hash already at policy was re-hashed again on the next login")
+	}
+}
+
+func TestSetPasswordDoesNotChargeForAWeakPassword(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users",
+		map[string]string{"email": "linus@example.test", "role": "viewer"}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create user: status %d, body %s", rec.Code, rec.Body)
+	}
+	token := tokenFromLink(t, decodeBody[createUserResponse](t, rec).SetPasswordURL)
+
+	// Somebody choosing a password that turns out to be too short must not
+	// spend the allowance the redemption still needs.
+	for range redeemIPBurst + 5 {
+		rec := f.do(t, http.MethodPost, "/api/v1/auth/set-password",
+			map[string]string{"token": token, "password": "short"}, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a weak password", rec.Code)
+		}
+	}
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/set-password",
+		map[string]string{"token": token, "password": otherPassword}, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("after a run of weak passwords, setting a good one = %d, body %s", rec.Code, rec.Body)
+	}
+	f.login(t, "linus@example.test", otherPassword)
+}

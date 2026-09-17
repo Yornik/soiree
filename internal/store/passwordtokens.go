@@ -76,9 +76,16 @@ func (s *Store) IssuePasswordToken(ctx context.Context, in PasswordToken) (Passw
 func (s *Store) PasswordTokenLive(ctx context.Context, tokenHash []byte) (bool, error) {
 	var live bool
 	err := s.pool.QueryRow(ctx,
+		// The account's status is part of "could be redeemed": a disabled one
+		// refuses below, and without this check each attempt would still pay
+		// for a full password hash on the way to being told no.
 		`SELECT EXISTS (
-		   SELECT 1 FROM password_tokens
-		    WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now())`,
+		   SELECT 1 FROM password_tokens t
+		     JOIN users u ON u.id = t.user_id
+		    WHERE t.token_hash = $1
+		      AND t.consumed_at IS NULL
+		      AND t.expires_at > now()
+		      AND u.status <> 'disabled')`,
 		tokenHash).Scan(&live)
 	if err != nil {
 		return false, fmt.Errorf("password_tokens: %w", err)
