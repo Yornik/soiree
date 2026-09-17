@@ -201,6 +201,43 @@ Two tracks run alongside those and do not block them:
 6. **Build and supply chain.** See below.
 7. **Design pass.** See below.
 
+Then, to be a product people can actually rely on rather than a working demo:
+
+8. **Audit trail.** Money, several editors, real obligations between people.
+   Rows carry `updated_by`/`updated_at` but no history, so "who changed this
+   figure, and when?" cannot be answered — and that is the question that causes
+   arguments. Append-only history per budget row. Cheap to add now, impossible
+   to backfill once people have been editing for months.
+9. **Deadline reminders.** `lock_by` exists in the schema; a deadline nobody is
+   reminded of is just a date in a cell. A weekly digest of what is due, over
+   the same SMTP path as account mail. Without this the column is decoration —
+   which is exactly how the predecessor ended up hand-writing deadlines into
+   prose.
+10. **Data protection.** This holds names and financial obligations for people
+    who never signed up for anything. Needs: delete a person and their
+    attribution, export what is held about them, and an explicit retention
+    decision for after the event. Not paperwork — other people's data.
+11. **Vulnerability disclosure.** `SECURITY.md` with a reporting address and
+    expectations. Signed releases, SBOMs and pinned actions with no way to
+    report a flaw is a strange asymmetry.
+12. **Restore drill.** Backups that have never been restored are not backups.
+    Restore into a scratch namespace, confirm the data, write down the steps.
+13. **Mobile budget grid.** A wide, drag-resizable nine-column table is a
+    desktop interaction, and much of this audience will be on a phone. A layout
+    problem, not a styling one — the design pass will not fix it by restyling.
+14. **Interface language.** Currency and locale are already configurable but
+    the interface is English-only, while the people using it read Dutch and
+    Indonesian. Extract the strings; do not add a framework.
+15. **After the event.** This is a dated, one-shot thing. Decide what it
+    becomes on the day after: a read-only archive is the obvious answer, but
+    right now it simply sits there reporting zero days to go, forever.
+16. **A browser-level test.** Everything is tested at the Go layer. Nothing
+    checks that the page actually works in a browser, which for an app that is
+    mostly frontend leaves the larger half unverified.
+
+Explicitly out of scope: multi-event tenancy, a plugin system, analytics, and a
+marketing site. This is a tool a dozen people use for one evening.
+
 ### Data storage (steps 2 and 3)
 
 PostgreSQL via `pgx`, run as a CloudNativePG cluster. The data is small — a
