@@ -34,6 +34,21 @@
       "automerge": true
     }
   ],
+  "customManagers": [
+    {
+      "description": "Keep GO_VERSION in the workflows in step with the Dockerfile, so CI tests the same toolchain the image ships.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "GO_VERSION:\\s*'(?<currentValue>.*?)'"
+      ],
+      "depNameTemplate": "golang",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    }
+  ],
   "semanticCommits": "enabled",
   "semanticCommitType": "fix"
 }

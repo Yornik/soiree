@@ -10,8 +10,10 @@ on:
 permissions:
   contents: read
 
+# Keep in step with the Dockerfile, or the tested toolchain differs from the
+# shipped one. Renovate tracks both (see customManagers in renovate.json).
 env:
-  GO_VERSION: '1.26'
+  GO_VERSION: '1.27'
 
 jobs:
   lint:
