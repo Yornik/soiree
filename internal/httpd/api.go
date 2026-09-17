@@ -83,7 +83,21 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	register(api, phaseEntity(s.store))
 	register(api, programmeEntity(s.store))
 
-	mux.Handle(apiPrefix, http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), api))
+	mux.Handle(apiPrefix, noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), api)))
+}
+
+// noStore marks the whole API subtree uncacheable on the way in, rather than
+// leaving it to each handler on the way out.
+//
+// The handlers do set it themselves, but the responses the mux generates — the
+// 405 for a wrong verb, the 404 for a path nothing serves — never reach a
+// handler. Setting the header before anything writes covers those too, and a
+// later Set of the same value is a no-op rather than a duplicate.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // register mounts one entity's three verbs on the API mux, whose paths are

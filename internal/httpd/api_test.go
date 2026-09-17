@@ -485,8 +485,26 @@ func TestBadRequestsAreRefused(t *testing.T) {
 
 	// A method the collection does not serve is a 405, not a 404: the path is
 	// real, the verb is not.
-	if res := call(t, h, http.MethodPut, "/api/v1/notes", `{}`); res.status != http.StatusMethodNotAllowed {
-		t.Errorf("PUT /api/v1/notes -> %d, want 405", res.status)
+	res := call(t, h, http.MethodPut, "/api/v1/notes", `{}`)
+	if res.status != http.StatusMethodNotAllowed {
+		t.Fatalf("PUT /api/v1/notes -> %d, want 405", res.status)
+	}
+	if allow := res.header.Get("Allow"); !strings.Contains(allow, http.MethodPost) {
+		t.Errorf("405 Allow = %q, want it to name the verbs the collection serves", allow)
+	}
+	// The mux writes this one itself, so it never reaches a handler — the
+	// header has to be set on the way in for it to be here at all.
+	if cc := res.header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("405 Cache-Control = %q, want no-store", cc)
+	}
+
+	// Same for a path nothing serves.
+	unknown := call(t, h, http.MethodGet, "/api/v1/nonexistent", "")
+	if unknown.status != http.StatusNotFound {
+		t.Errorf("GET /api/v1/nonexistent -> %d, want 404", unknown.status)
+	}
+	if cc := unknown.header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("API 404 Cache-Control = %q, want no-store", cc)
 	}
 }
 
