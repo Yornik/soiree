@@ -7,6 +7,7 @@ package httpd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Yornik/soiree/internal/config"
+	"github.com/Yornik/soiree/internal/store"
 )
 
 // Build information, overridden at link time with -ldflags.
@@ -29,20 +31,37 @@ type Server struct {
 	assets  *Assets
 	metrics *Metrics
 
+	// store is nil when no DSN is configured. That is a supported deployment
+	// rather than a broken one — the binary then serves the frontend alone —
+	// so every use of it is guarded rather than assumed.
+	store *store.Store
+
 	// Served at fixed paths, so they carry an ETag and are revalidated
 	// rather than cached hard — but still pre-compressed.
 	index *Asset
 	sw    *Asset
 }
 
+// Option adjusts a Server as it is built.
+type Option func(*Server)
+
+// WithStore attaches the data layer, which is what turns the API on. Without
+// it there are no /api/v1 routes at all.
+func WithStore(st *store.Store) Option {
+	return func(s *Server) { s.store = st }
+}
+
 // New builds a Server from the embedded source tree and the configuration.
-func New(cfg config.Config, srcFS fs.FS) (*Server, error) {
+func New(cfg config.Config, srcFS fs.FS, opts ...Option) (*Server, error) {
 	assets, err := BuildAssets(srcFS)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &Server{cfg: cfg, assets: assets, metrics: NewMetrics(Version, Commit)}
+	for _, opt := range opts {
+		opt(s)
+	}
 
 	if err := s.renderManifest(srcFS); err != nil {
 		return nil, err
@@ -155,19 +174,44 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 
-	// Readiness: this instance can serve traffic. Identical to liveness while
-	// everything is in memory; once the database lands this is where the
-	// connection check belongs, so it is split now rather than later.
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready\n"))
-	})
+	// Readiness: this instance can serve traffic, which with a database
+	// configured means the database is reachable.
+	mux.HandleFunc("/readyz", s.serveReadyz)
 
 	mux.Handle("/metrics", s.metrics.Handler())
+
+	// The API exists only when there is something behind it. With no DSN these
+	// paths are never registered, so /api/v1/... falls through to the 404 below
+	// and the frontend is served exactly as it was before this milestone.
+	if s.store != nil {
+		s.routeAPI(mux)
+	}
+
 	mux.HandleFunc("/", s.serveIndex)
 
 	return securityHeaders(s.metrics.instrument(mux))
+}
+
+// serveReadyz reports whether this instance can serve traffic.
+//
+// Unlike /healthz it does check the database, because an instance that cannot
+// reach it cannot answer an API request — and the point of readiness is to take
+// such an instance out of rotation without restarting it.
+func (s *Server) serveReadyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if s.store != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), readyzTimeout)
+		defer cancel()
+		if err := s.store.Ping(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("database unreachable\n"))
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ready\n"))
 }
 
 // securityHeaders sets the headers that do not depend on the reverse proxy.
