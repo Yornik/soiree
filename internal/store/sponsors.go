@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Sponsor is somebody contributing to the cost. Code is the short label the
@@ -25,11 +26,14 @@ const sponsorColumns = `id, code, name, position, revision, updated_at, updated_
 // nil where there is no session yet — which is every caller until the accounts
 // milestone lands.
 func (s *Store) CreateSponsor(ctx context.Context, in Sponsor, actor *uuid.UUID) (Sponsor, error) {
-	return queryOne[Sponsor](ctx, s.pool, "sponsors",
-		`INSERT INTO sponsors (id, code, name, position, updated_by)
-		 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5)
-		 RETURNING `+sponsorColumns,
-		newID(in.ID), in.Code, in.Name, in.Position, actor)
+	who := resolveActor(ctx, actor)
+	return createAudited(ctx, s, EntitySponsors, who, func(tx pgx.Tx) (Sponsor, error) {
+		return queryOne[Sponsor](ctx, tx, "sponsors",
+			`INSERT INTO sponsors (id, code, name, position, updated_by)
+			 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5)
+			 RETURNING `+sponsorColumns,
+			newID(in.ID), in.Code, in.Name, in.Position, actor)
+	})
 }
 
 // Sponsor reads one sponsor.
@@ -47,13 +51,17 @@ func (s *Store) Sponsors(ctx context.Context) ([]Sponsor, error) {
 // UpdateSponsor writes every mutable field, refusing the write if in.Revision
 // is no longer current.
 func (s *Store) UpdateSponsor(ctx context.Context, in Sponsor, actor *uuid.UUID) (Sponsor, error) {
-	out, err := queryOne[Sponsor](ctx, s.pool, "sponsors",
-		`UPDATE sponsors
-		    SET code = $1, name = $2, position = $3,
-		        revision = revision + 1, updated_at = now(), updated_by = $4
-		  WHERE id = $5 AND revision = $6
-		RETURNING `+sponsorColumns,
-		in.Code, in.Name, in.Position, actor, in.ID, in.Revision)
+	who := resolveActor(ctx, actor)
+	out, err := updateAudited(ctx, s, EntitySponsors, sponsorColumns, in.ID, who,
+		func(tx pgx.Tx, _ Sponsor) (Sponsor, error) {
+			return queryOne[Sponsor](ctx, tx, "sponsors",
+				`UPDATE sponsors
+				    SET code = $1, name = $2, position = $3,
+				        revision = revision + 1, updated_at = now(), updated_by = $4
+				  WHERE id = $5 AND revision = $6
+				RETURNING `+sponsorColumns,
+				in.Code, in.Name, in.Position, actor, in.ID, in.Revision)
+		})
 	if err == nil {
 		return out, nil
 	}
@@ -68,14 +76,20 @@ func (s *Store) UpdateSponsor(ctx context.Context, in Sponsor, actor *uuid.UUID)
 // DeleteSponsor removes a sponsor and, by cascade, every attribution naming
 // them. That cascade is the reason this is a table rather than an array of
 // ids in a JSON blob: a reference that cannot dangle cannot be wrong.
+//
+// The sponsor's own history survives them. The attributions the cascade
+// removes do not appear in any budget item's history, because the database
+// removes them without this layer issuing a statement — see the note on what
+// the change log does not see, in audit.go.
 func (s *Store) DeleteSponsor(ctx context.Context, id uuid.UUID, revision int64) error {
-	n, err := s.exec(ctx, "sponsors", `DELETE FROM sponsors WHERE id = $1 AND revision = $2`, id, revision)
-	if err != nil {
+	err := deleteAudited[Sponsor](ctx, s, EntitySponsors, sponsorColumns, id, revision)
+	if err == nil {
+		return nil
+	}
+	if !isNotFound(err) {
 		return err
 	}
-	if n == 0 {
-		current, err := s.Sponsor(ctx, id)
-		return conflict("sponsors", id, revision, current, err)
-	}
-	return nil
+
+	current, err := s.Sponsor(ctx, id)
+	return conflict("sponsors", id, revision, current, err)
 }
