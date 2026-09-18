@@ -158,7 +158,7 @@ func TestDeletingPhaseKeepsItsItems(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
 
-	phase, err := s.CreatePhase(ctx, store.Phase{Name: "Dinner"})
+	phase, err := s.CreatePhase(ctx, store.Phase{Name: "Dinner"}, nil)
 	if err != nil {
 		t.Fatalf("create phase: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestDeletingPhaseKeepsItsItems(t *testing.T) {
 		t.Fatalf("create budget item: %v", err)
 	}
 
-	if err := s.DeletePhase(ctx, phase.ID); err != nil {
+	if err := s.DeletePhase(ctx, phase.ID, phase.Revision); err != nil {
 		t.Fatalf("delete phase: %v", err)
 	}
 

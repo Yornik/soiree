@@ -45,9 +45,9 @@ func newAPIServerWithMetrics(t *testing.T) (public, metrics http.Handler, pool *
 func TestAPIMetricsRouteLabelIsBounded(t *testing.T) {
 	h, mh, _ := newAPIServerWithMetrics(t)
 
-	item := created(t, h, "budget-items", `{"item":"Venue deposit","unit":25000}`)
+	item := created(t, h, "budget-items", `{"item":"Venue deposit","unit":"250.00"}`)
 	id := str(t, item, "id")
-	call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"unit":26000}`)
+	call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"unit":"260.00"}`)
 	call(t, h, http.MethodDelete, "/api/v1/budget-items/"+id+"?revision=2", "")
 	call(t, h, http.MethodGet, "/api/v1/plan", "")
 	// An unrecognised collection is caller-controlled, so it must not become a

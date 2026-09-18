@@ -39,11 +39,11 @@ func TestLoadPlan(t *testing.T) {
 		t.Fatalf("update settings: %v", err)
 	}
 
-	arrival, err := s.CreatePhase(ctx, store.Phase{Name: "Arrival", Position: 0})
+	arrival, err := s.CreatePhase(ctx, store.Phase{Name: "Arrival", Position: 0}, nil)
 	if err != nil {
 		t.Fatalf("create phase: %v", err)
 	}
-	if _, err := s.CreatePhase(ctx, store.Phase{Name: "Dinner", Position: 1}); err != nil {
+	if _, err := s.CreatePhase(ctx, store.Phase{Name: "Dinner", Position: 1}, nil); err != nil {
 		t.Fatalf("create phase: %v", err)
 	}
 

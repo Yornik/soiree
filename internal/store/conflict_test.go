@@ -48,6 +48,24 @@ func TestStaleRevisionIsRefused(t *testing.T) {
 			}(),
 		},
 		{
+			// Phases were the exception until migration 0009: no revision
+			// column, so two people renaming the same stage of the evening
+			// could not be told apart. They are in this table for the same
+			// reason everything else is.
+			entity: "phases",
+			write: func() func(int64) error {
+				phase, err := s.CreatePhase(ctx, store.Phase{Name: "Arrival"}, nil)
+				if err != nil {
+					t.Fatalf("create phase: %v", err)
+				}
+				return func(revision int64) error {
+					phase.Revision = revision
+					_, err := s.UpdatePhase(ctx, phase, nil)
+					return err
+				}
+			}(),
+		},
+		{
 			entity: "budget_items",
 			write: func() func(int64) error {
 				item, err := s.CreateBudgetItem(ctx, store.BudgetItem{Item: "Venue deposit", Qty: 1}, nil)

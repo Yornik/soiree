@@ -141,11 +141,11 @@ func TestPhaseRoundTrip(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
 
-	arrival, err := s.CreatePhase(ctx, store.Phase{Name: "Arrival", Position: 0})
+	arrival, err := s.CreatePhase(ctx, store.Phase{Name: "Arrival", Position: 0}, nil)
 	if err != nil {
 		t.Fatalf("create phase: %v", err)
 	}
-	if _, err := s.CreatePhase(ctx, store.Phase{Name: "Dinner", Position: 1}); err != nil {
+	if _, err := s.CreatePhase(ctx, store.Phase{Name: "Dinner", Position: 1}, nil); err != nil {
 		t.Fatalf("create phase: %v", err)
 	}
 
@@ -157,9 +157,20 @@ func TestPhaseRoundTrip(t *testing.T) {
 		t.Fatalf("phases = %+v, want Arrival then Dinner", phases)
 	}
 
+	if arrival.Revision != 1 {
+		t.Errorf("revision = %d, want 1 on a fresh phase", arrival.Revision)
+	}
+	if arrival.UpdatedAt.IsZero() {
+		t.Error("updatedAt is zero on a fresh phase")
+	}
+
 	arrival.Name = "Guests arrive"
-	if _, err := s.UpdatePhase(ctx, arrival); err != nil {
+	renamed, err := s.UpdatePhase(ctx, arrival, nil)
+	if err != nil {
 		t.Fatalf("update phase: %v", err)
+	}
+	if renamed.Revision != 2 {
+		t.Errorf("revision = %d, want 2 after a write", renamed.Revision)
 	}
 	got, err := s.Phase(ctx, arrival.ID)
 	if err != nil {
@@ -169,10 +180,15 @@ func TestPhaseRoundTrip(t *testing.T) {
 		t.Errorf("name = %q, want %q", got.Name, "Guests arrive")
 	}
 
-	if err := s.DeletePhase(ctx, arrival.ID); err != nil {
+	// A delete at the revision this caller last saw — which the rename has since
+	// moved on — is refused exactly as a write at it would be.
+	if err := s.DeletePhase(ctx, arrival.ID, arrival.Revision); !errors.Is(err, store.ErrStaleRevision) {
+		t.Errorf("delete at a stale revision: %v, want ErrStaleRevision", err)
+	}
+	if err := s.DeletePhase(ctx, arrival.ID, renamed.Revision); err != nil {
 		t.Fatalf("delete phase: %v", err)
 	}
-	if err := s.DeletePhase(ctx, arrival.ID); !errors.Is(err, store.ErrNotFound) {
+	if err := s.DeletePhase(ctx, arrival.ID, renamed.Revision); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("second delete: %v, want ErrNotFound", err)
 	}
 }
@@ -222,7 +238,7 @@ func TestBudgetItemRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	phase, err := s.CreatePhase(ctx, store.Phase{Name: "Arrival", Position: 0})
+	phase, err := s.CreatePhase(ctx, store.Phase{Name: "Arrival", Position: 0}, nil)
 	if err != nil {
 		t.Fatalf("create phase: %v", err)
 	}
