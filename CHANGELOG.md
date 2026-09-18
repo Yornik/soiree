@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.2](https://github.com/Yornik/soiree/compare/v1.0.1...v1.0.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **web:** an import made after signing out and back in is actually saved ([3444fea](https://github.com/Yornik/soiree/commit/3444fea6c900aeb70e677a4fe0d53e6421f3284a))
+* **web:** an import made after signing out and back in is actually saved ([b935772](https://github.com/Yornik/soiree/commit/b9357727096e4c4453fe2e2d77469b21d3968c99))
+
 ## [1.0.1](https://github.com/Yornik/soiree/compare/v1.0.0...v1.0.1) (2026-09-18)
 
 
