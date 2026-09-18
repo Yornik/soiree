@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Yornik/soiree/compare/v0.3.0...v0.4.0) (2026-09-18)
+
+
+### Features
+
+* **reminders:** send the digest to every active admin ([b354b01](https://github.com/Yornik/soiree/commit/b354b0137b3cf7efdc781b46fe4aa2f6b37e7071))
+
 ## [0.3.0](https://github.com/Yornik/soiree/compare/v0.2.1...v0.3.0) (2026-09-18)
 
 
