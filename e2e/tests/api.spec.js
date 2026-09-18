@@ -885,6 +885,28 @@ test('an import made after signing out and back in reaches the server', async ({
   expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toContain('Imported venue');
 });
 
+// Small, at the foot of the screens somebody signed in can open: what to quote
+// when reporting a problem. The server tells it to a session and to nobody
+// else, so the public page never names its build.
+test('the release is shown to somebody signed in, and to nobody else', async ({ page, request }) => {
+  const anonymous = await request.get(`${API_URL}/api/v1/version`, { headers: { Cookie: '' } });
+  expect(anonymous.status(), 'asked with no session').toBe(401);
+
+  await openWithOwnSession(page, request, 'linus');
+  await page.goto('/#/account');
+  const line = page.locator('#appVersion');
+  await expect(line).toBeVisible();
+  // The test binary is built without a release stamped into it.
+  await expect(line).toHaveText('soiree dev');
+  const size = await line.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+  expect(size, 'very small').toBeLessThanOrEqual(11.5);
+
+  await page.click('#signOutBtn');
+  await expect(page.locator('#authScreen')).toBeVisible();
+  await expect(line).toBeHidden();
+  await expect(line).toHaveText('');
+});
+
 test('signing out with changes that never reached the server asks first', async ({ page, request }) => {
   await openWithOwnSession(page, request, 'linus');
   await gotoTab(page, 'budget');

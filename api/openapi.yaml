@@ -804,6 +804,33 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /version:
+    get:
+      tags: [plan]
+      operationId: getVersion
+      summary: Read which release is running.
+      description: |
+        The answer is the release, for example `1.1.0`. It is not the commit.
+        A build with no release set answers `dev`.
+
+        Every role reads it. A request with no session gets `401`: the public
+        page does not name its build.
+      responses:
+        '200':
+          description: The release.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [version]
+                properties:
+                  version:
+                    type: string
+                    example: 1.1.0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /events:
     get:
       tags: [plan]

@@ -955,6 +955,8 @@ body.showing-auth #plannerWrap { display: none; }
    from your device" does not arrive looking like a failure. */
 .auth-msg.is-refusal { color: var(--rust); }
 .auth-note-body { margin: 0 0 14px; color: var(--ink-2); max-width: 58ch; }
+/* Small enough to ignore, present enough to read out over the phone. */
+.app-version { margin: 18px 0 0; font-size: 0.6875rem; letter-spacing: 0.02em; color: var(--ink-2); opacity: 0.7; text-align: center; }
 .auth-aside { margin: 22px 0 0; }
 .auth-foot { margin: 34px 0 0; padding-top: 16px; border-top: 1px solid var(--rule); }
 
