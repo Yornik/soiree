@@ -599,6 +599,22 @@ test('every accounts string exists in all three languages, with the same blanks 
   expect(problems).toEqual([]);
 });
 
+test('every sentence the reminders switch can choose is one that was written, and the other way round', () => {
+  // The switch picks its sentence by state and situation from a table of keys.
+  // A key nobody wrote is drawn as the key; a sentence nothing picks is three
+  // translations of something nobody will read.
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'src', 'auth.js'), 'utf8');
+  const start = src.indexOf('var REMINDER_LINES = {');
+  const end = src.indexOf('\n  };', start);
+  expect(start, 'auth.js should hold a REMINDER_LINES table').toBeGreaterThan(-1);
+  const chosen = Object.values(new Function(`return ${src.slice(start + 'var REMINDER_LINES = '.length, end + '\n  }'.length)};`)());
+
+  const written = Object.keys(authStrings().en);
+  expect(chosen.filter((key) => !written.includes(key))).toEqual([]);
+  const sentences = written.filter((key) => /^rem\./.test(key) && !/^rem\.(title|body|turnon|turnoff|failed)$/.test(key));
+  expect(sentences.filter((key) => !chosen.includes(key))).toEqual([]);
+});
+
 test('the sign-in screen is in Dutch when the page is', async ({ page }) => {
   await mountAccounts(page, { users: [ADA] });
   await open(page, '/?lang=nl#/login');

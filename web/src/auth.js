@@ -253,8 +253,19 @@
       'rem.body': 'One notification on this device when a deadline is near, listing what is coming up. Reminders go to admins, and each device is turned on by itself.',
       'rem.on': 'Reminders are on for this device.',
       'rem.off': 'Reminders are off on this device.',
-      'rem.blocked': 'Notifications are blocked for this site. Your browser\'s site settings can undo that.',
-      'rem.unsupported': 'This browser cannot receive notifications from a web page. On an iPhone, add this page to the Home Screen first, and open it from there.',
+      'rem.starting': 'Reminders are still being set up on this device. The first time takes a moment; this line changes by itself when they are ready.',
+      'rem.noworker.failed': 'Reminders could not start on this device. Reload the page. If this message stays, the fault is with this site and not with your browser: please tell whoever runs the site.',
+      'rem.noworker.storage': 'This browser did not let the page set up reminders. That happens when cookies and site data are blocked for this site, and in some private windows. Allow them for this site, then reload the page.',
+      'rem.blocked': 'Notifications are blocked for this site. Click or tap the icon at the start of the address bar, find Notifications, and choose Allow. Then reload this page. A private or incognito window always blocks them, so use an ordinary window.',
+      'rem.blocked.ios': 'Notifications are turned off for this app. Open the Settings app, tap Notifications, find this app in the list, and turn on Allow Notifications. Then come back here.',
+      'rem.blocked.safari': 'Notifications are blocked for this site. In Safari, open Settings, choose Websites, then Notifications, and set this site to Allow. Then reload this page.',
+      'rem.refused': 'You said yes, but this browser could not turn reminders on. Either it cannot reach its notification service right now, or notifications from web pages are switched off in its settings. Try again in a moment. If this stays, look in the browser\'s settings.',
+      'rem.refused.brave': 'Brave keeps reminders off until you allow them. Open Brave\'s Settings, choose Privacy and security, and turn on “Use Google services for push messaging”. Then reload this page and try again.',
+      'rem.unsupported': 'This browser cannot receive reminders from a web page. If this is a private window, try an ordinary one. Otherwise a current Chrome, Edge, Firefox or Safari can.',
+      'rem.insecure': 'Reminders only work over a secure connection, where the address starts with https.',
+      'rem.ios.safari': 'An iPhone or iPad only delivers reminders to a page that is on the Home Screen. Tap the Share button (the square with an arrow), choose “Add to Home Screen”, then open the planner from its new icon. Sign in there once more and turn reminders on. If you do not see “Add to Home Screen”, open this page in Safari first.',
+      'rem.ios.other': 'On an iPhone or iPad, reminders start in Safari. Open this page in Safari, tap the Share button (the square with an arrow), choose “Add to Home Screen”, then open the planner from its new icon. Sign in there once more and turn reminders on.',
+      'rem.ios.old': 'This iPhone or iPad needs iOS 16.4 or newer for reminders. Update it in the Settings app under General, Software Update, then look here again.',
       'rem.turnon': 'Turn on',
       'rem.turnoff': 'Turn off',
       'rem.failed': 'That did not work. Try again.',
@@ -437,8 +448,19 @@
       'rem.body': 'Eén melding op dit apparaat als een deadline nadert, met wat eraan komt. Herinneringen gaan naar beheerders, en elk apparaat zet je apart aan.',
       'rem.on': 'Herinneringen staan aan op dit apparaat.',
       'rem.off': 'Herinneringen staan uit op dit apparaat.',
-      'rem.blocked': 'Meldingen zijn geblokkeerd voor deze site. Dat kun je terugdraaien bij de site-instellingen van je browser.',
-      'rem.unsupported': 'Deze browser kan geen meldingen van een webpagina ontvangen. Zet deze pagina op een iPhone eerst op het beginscherm, en open haar van daaruit.',
+      'rem.starting': 'Herinneringen worden op dit apparaat nog klaargezet. De eerste keer duurt dat even; deze regel verandert vanzelf als ze klaar zijn.',
+      'rem.noworker.failed': 'Herinneringen konden op dit apparaat niet starten. Laad de pagina opnieuw. Blijft deze melding staan, dan ligt het aan deze site en niet aan je browser: geef het door aan wie de site beheert.',
+      'rem.noworker.storage': 'Deze browser liet de pagina geen herinneringen klaarzetten. Dat gebeurt als cookies en sitegegevens voor deze site geblokkeerd zijn, en in sommige privévensters. Sta ze toe voor deze site en laad de pagina opnieuw.',
+      'rem.blocked': 'Meldingen zijn geblokkeerd voor deze site. Klik of tik op het icoon aan het begin van de adresbalk, zoek Meldingen en kies Toestaan. Laad daarna deze pagina opnieuw. Een privé- of incognitovenster blokkeert ze altijd; gebruik dus een gewoon venster.',
+      'rem.blocked.ios': 'Meldingen staan uit voor deze app. Open de app Instellingen, tik op Meldingen, zoek deze app in de lijst en zet Sta meldingen toe aan. Kom daarna hier terug.',
+      'rem.blocked.safari': 'Meldingen zijn geblokkeerd voor deze site. Open in Safari de Instellingen, kies Websites en dan Meldingen, en zet deze site op Sta toe. Laad daarna deze pagina opnieuw.',
+      'rem.refused': 'Je zei ja, maar deze browser kon de herinneringen niet aanzetten. Of hij kan zijn meldingendienst nu niet bereiken, of meldingen van webpagina\'s staan uit in zijn instellingen. Probeer het zo nog eens. Blijft dit staan, kijk dan in de instellingen van de browser.',
+      'rem.refused.brave': 'Brave houdt herinneringen uit tot je ze toestaat. Open de instellingen van Brave, kies Privacy en beveiliging en zet “Google-services gebruiken voor pushberichten” aan (in het Engels: “Use Google services for push messaging”). Laad daarna deze pagina opnieuw en probeer het nog eens.',
+      'rem.unsupported': 'Deze browser kan geen herinneringen van een webpagina ontvangen. Is dit een privévenster, probeer dan een gewoon venster. Anders lukt het met een recente Chrome, Edge, Firefox of Safari.',
+      'rem.insecure': 'Herinneringen werken alleen over een beveiligde verbinding, waarbij het adres met https begint.',
+      'rem.ios.safari': 'Een iPhone of iPad bezorgt herinneringen alleen aan een pagina die op het beginscherm staat. Tik op de deelknop (het vierkant met de pijl), kies “Zet op beginscherm” en open de planner daarna via het nieuwe icoon. Meld je daar nog één keer aan en zet de herinneringen aan. Zie je “Zet op beginscherm” niet, open deze pagina dan eerst in Safari.',
+      'rem.ios.other': 'Op een iPhone of iPad beginnen herinneringen in Safari. Open deze pagina in Safari, tik op de deelknop (het vierkant met de pijl), kies “Zet op beginscherm” en open de planner daarna via het nieuwe icoon. Meld je daar nog één keer aan en zet de herinneringen aan.',
+      'rem.ios.old': 'Deze iPhone of iPad heeft iOS 16.4 of nieuwer nodig voor herinneringen. Werk hem bij in de app Instellingen, onder Algemeen, Software-update, en kijk daarna hier opnieuw.',
       'rem.turnon': 'Aanzetten',
       'rem.turnoff': 'Uitzetten',
       'rem.failed': 'Dat is niet gelukt. Probeer het opnieuw.',
@@ -621,8 +643,19 @@
       'rem.body': 'Satu notifikasi di perangkat ini kalau tenggat sudah dekat, berisi apa yang akan datang. Pengingat dikirim ke admin, dan setiap perangkat dinyalakan sendiri-sendiri.',
       'rem.on': 'Pengingat aktif di perangkat ini.',
       'rem.off': 'Pengingat tidak aktif di perangkat ini.',
-      'rem.blocked': 'Notifikasi diblokir untuk situs ini. Kamu bisa membatalkannya di pengaturan situs browser.',
-      'rem.unsupported': 'Browser ini tidak bisa menerima notifikasi dari halaman web. Di iPhone, tambahkan dulu halaman ini ke Layar Utama, lalu buka dari sana.',
+      'rem.starting': 'Pengingat masih disiapkan di perangkat ini. Pertama kali memang butuh waktu sebentar; baris ini berubah sendiri kalau sudah siap.',
+      'rem.noworker.failed': 'Pengingat tidak bisa dimulai di perangkat ini. Muat ulang halaman. Kalau pesan ini tetap muncul, masalahnya ada di situs ini, bukan di browser kamu: tolong beri tahu pengelola situs.',
+      'rem.noworker.storage': 'Browser ini tidak mengizinkan halaman menyiapkan pengingat. Itu terjadi kalau cookie dan data situs diblokir untuk situs ini, dan di sebagian jendela pribadi. Izinkan untuk situs ini, lalu muat ulang halaman.',
+      'rem.blocked': 'Notifikasi diblokir untuk situs ini. Klik atau ketuk ikon di awal bilah alamat, cari Notifikasi, lalu pilih Izinkan. Setelah itu muat ulang halaman ini. Jendela pribadi atau penyamaran selalu memblokirnya, jadi pakai jendela biasa.',
+      'rem.blocked.ios': 'Notifikasi dimatikan untuk aplikasi ini. Buka app Pengaturan, ketuk Pemberitahuan, cari aplikasi ini di daftar, lalu nyalakan Izinkan Pemberitahuan. Setelah itu kembali ke sini.',
+      'rem.blocked.safari': 'Notifikasi diblokir untuk situs ini. Di Safari, buka Pengaturan, pilih Situs Web, lalu Pemberitahuan, dan setel situs ini ke Izinkan. Setelah itu muat ulang halaman ini.',
+      'rem.refused': 'Kamu sudah bilang ya, tapi browser ini tidak bisa menyalakan pengingat. Mungkin layanan notifikasinya sedang tidak terjangkau, atau notifikasi dari halaman web dimatikan di pengaturannya. Coba lagi sebentar lagi. Kalau tetap begini, periksa pengaturan browser.',
+      'rem.refused.brave': 'Brave mematikan pengingat sampai kamu mengizinkannya. Buka pengaturan Brave, pilih Privasi dan keamanan, lalu nyalakan “Use Google services for push messaging” (layanan Google untuk pesan push). Setelah itu muat ulang halaman ini dan coba lagi.',
+      'rem.unsupported': 'Browser ini tidak bisa menerima pengingat dari halaman web. Kalau ini jendela pribadi, coba jendela biasa. Kalau bukan, Chrome, Edge, Firefox, atau Safari versi terbaru bisa.',
+      'rem.insecure': 'Pengingat hanya berfungsi lewat koneksi aman, yaitu kalau alamatnya diawali https.',
+      'rem.ios.safari': 'iPhone atau iPad hanya mengirim pengingat ke halaman yang ada di Layar Utama. Ketuk tombol Bagikan (kotak dengan panah), pilih “Tambah ke Layar Utama”, lalu buka planner dari ikon barunya. Masuk sekali lagi di sana dan nyalakan pengingat. Kalau “Tambah ke Layar Utama” tidak terlihat, buka dulu halaman ini di Safari.',
+      'rem.ios.other': 'Di iPhone atau iPad, pengingat dimulai dari Safari. Buka halaman ini di Safari, ketuk tombol Bagikan (kotak dengan panah), pilih “Tambah ke Layar Utama”, lalu buka planner dari ikon barunya. Masuk sekali lagi di sana dan nyalakan pengingat.',
+      'rem.ios.old': 'iPhone atau iPad ini butuh iOS 16.4 atau yang lebih baru untuk pengingat. Perbarui lewat app Pengaturan, di Umum, Pembaruan Perangkat Lunak, lalu lihat lagi di sini.',
       'rem.turnon': 'Nyalakan',
       'rem.turnoff': 'Matikan',
       'rem.failed': 'Itu tidak berhasil. Coba lagi.',
@@ -989,6 +1022,13 @@
   // straight at the account screen — is drawn again.
   document.addEventListener('soiree:api', function (ev) {
     if (!ev || !ev.detail || ev.detail.available !== true) return;
+    if (state === 'in' && readRoute().path === 'account') renderReminders();
+  });
+
+  // And the service worker, which on a first visit is still installing when
+  // the account screen asks. "Still being set up" is drawn in the meantime and
+  // this is what replaces it, with the switch or with the reason there is none.
+  document.addEventListener('soiree:push', function () {
     if (state === 'in' && readRoute().path === 'account') renderReminders();
   });
 
@@ -1982,6 +2022,39 @@
     push.state().then(drawReminders);
   }
 
+  /* One sentence per situation, not one for all of them.
+   *
+   * There was one — "this browser cannot receive notifications… on an iPhone,
+   * add this page to the Home Screen" — and it was shown for everything that
+   * was not on, off or blocked. So a Windows PC whose service worker had failed
+   * to start was sent to look for a Home Screen. The state says what is wrong,
+   * `why` says where (app.js knows the browser; this file knows the words), and
+   * a pair nobody wrote a sentence for falls back to the state's own.
+   */
+  var REMINDER_LINES = {
+    'on': 'rem.on',
+    'off': 'rem.off',
+    'starting': 'rem.starting',
+    'noworker': 'rem.noworker.failed',
+    'noworker/storage': 'rem.noworker.storage',
+    'blocked': 'rem.blocked',
+    'blocked/ios-app': 'rem.blocked.ios',
+    'blocked/safari': 'rem.blocked.safari',
+    'refused': 'rem.refused',
+    'refused/brave': 'rem.refused.brave',
+    'unsupported': 'rem.unsupported',
+    'unsupported/insecure': 'rem.insecure',
+    'unsupported/ios-safari': 'rem.ios.safari',
+    'unsupported/ios-other': 'rem.ios.other',
+    'unsupported/ios-app': 'rem.ios.old'
+  };
+
+  function reminderLine(now) {
+    var push = window.soiree && window.soiree.push;
+    var why = push && typeof push.why === 'function' ? push.why(now) : '';
+    return REMINDER_LINES[now + '/' + why] || REMINDER_LINES[now] || 'rem.off';
+  }
+
   function drawReminders(now) {
     var section = byId('remindersSection');
     var toggle = byId('remindersToggle');
@@ -1990,10 +2063,11 @@
     if (now === 'unavailable') { show(section, false); return; }
     show(section, true);
 
-    var line = { on: 'rem.on', off: 'rem.off', blocked: 'rem.blocked', unsupported: 'rem.unsupported' }[now] || 'rem.off';
-    say(byId('remindersState'), t(line), now === 'blocked' || now === 'unsupported');
-    // Neither of those two is something a button here can change.
-    show(toggle, now === 'on' || now === 'off');
+    say(byId('remindersState'), t(reminderLine(now)), now !== 'on' && now !== 'off' && now !== 'starting');
+    // Only those two are something a button here can change. "refused" keeps
+    // it as well: the setting it names is fixed elsewhere, and this is the
+    // button to come back to.
+    show(toggle, now === 'on' || now === 'off' || now === 'refused');
     setText(toggle, t(now === 'on' ? 'rem.turnoff' : 'rem.turnon'));
     toggle.setAttribute('data-now', now);
     toggle.disabled = false;
@@ -2011,7 +2085,9 @@
       // shows its permission prompt for a gesture.
       (was === 'on' ? push.disable() : push.enable()).then(function (now) {
         drawReminders(now);
-        if (now === was) say(byId('remindersState'), t('rem.failed'), true);
+        // "refused" twice running is still its own sentence, which says what
+        // to change; "try again" is for the failures nothing else explains.
+        if (now === was && now !== 'refused') say(byId('remindersState'), t('rem.failed'), true);
       });
     });
   }

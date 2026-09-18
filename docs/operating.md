@@ -474,7 +474,18 @@ support conversation, because it is deliberately quiet:
   browser's prompt was refused it says so and offers no button, because only
   the browser's site settings can undo that.
 - **On Android, Chrome is enough.** On an iPhone the site has to be added to
-  the Home Screen first; Safari does not offer web push to a tab.
+  the Home Screen first; Safari does not offer web push to a tab. The switch
+  says so, with the steps, and says it only to an iPhone or iPad.
+- **When there is no button, the line above where it would be says why**, and
+  two of its sentences are about the site rather than the browser. *Still being
+  set up* is a service worker that has not finished installing; it replaces
+  itself. *Could not start on this device … the fault is with this site* means
+  `navigator.serviceWorker.register('/sw.js')` was rejected for a reason other
+  than the browser's own settings: open `/sw.js` and the browser's console,
+  because that is a broken worker and nobody on that release has reminders or
+  the offline copy. A top-level domain has nothing to do with any of it — Web
+  Push needs https, a service worker and the browser's push service, and none
+  of those looks at the name.
 
 To check that it is working:
 
