@@ -344,7 +344,14 @@ test('a write that cannot get out is retried and said out loud, not dropped', as
   // The origin goes away mid-session. Nothing about the interaction changes:
   // edits apply locally and paint immediately, which is the whole reason the
   // write is deferred in the first place.
-  await page.route('**/api/v1/**', (route) => route.abort('internetdisconnected'));
+  // A switch rather than route-then-unroute. Taking a route down while the
+  // page has a request in flight can leave that request paused inside
+  // Playwright's interception for good — never sent, never failed — and this
+  // page is retrying on a timer, so one is in flight more often than not. A
+  // wedged request here keeps the write loop "running" for ever and the spec
+  // times out twenty seconds later, a long way from the cause.
+  let offline = true;
+  await page.route('**/api/v1/**', (route) => (offline ? route.abort('internetdisconnected') : route.continue()));
   await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
   await expect(budgetRow(page, 0).committed).toHaveText('€2,500');
 
@@ -357,7 +364,7 @@ test('a write that cannot get out is retried and said out loud, not dropped', as
   // Back in touch. Nothing was queued and nothing was lost: the write is the
   // difference between the page and the last version the server confirmed, and
   // that difference is still there to be sent.
-  await page.unroute('**/api/v1/**');
+  offline = false;
   await expect
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item), { timeout: 20_000 })
     .toEqual(['Venue deposit']);
@@ -583,7 +590,13 @@ async function editAsTheSessionEnds(page, request, cookie, paid) {
   await endSession(request, cookie);
   release();
   await refused;
-  await page.unroute(held);
+  // The route is left in place, deliberately. The gate is open, so anything it
+  // matches from here on passes straight through — and taking it down at this
+  // exact moment is what broke this spec in CI: the page answers the 401 by
+  // asking GET /auth/session at once, that request was paused in Playwright's
+  // interception as the route was being removed, and it was never sent
+  // (`send: -1` in the trace, no failure, no response). The sign-in screen
+  // waits on that answer, so it never opened. Nothing was wrong with the page.
 }
 
 async function signInThroughTheForm(page, request, name = 'grace') {
@@ -627,6 +640,31 @@ test('a session that ends mid-edit asks for a sign-in, and the edit goes up afte
     })
     .toEqual(['750.00']);
   await expect(budgetRow(page, 0).paid).toHaveValue('750');
+});
+
+test('a refused write opens the sign-in screen by itself, without asking the server a second time', async ({ page, request }) => {
+  // This failed once in CI, and the trace said exactly how: the write came
+  // back 401, the status line said "your session has ended", the page then
+  // asked GET /auth/session to confirm what it had just been told — and that
+  // request was never sent, for reasons two hundred attempts could not
+  // reproduce. The sign-in screen waited on its answer and never opened.
+  //
+  // Whatever held that request, a bad connection will do the same to a real
+  // person. The 401 was already the answer, so nothing should wait on a second
+  // one. Here the second one is made to hang on purpose.
+  const cookie = await openWithOwnSession(page, request, 'linus');
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  let asked = 0;
+  await page.route('**/api/v1/auth/session', () => { asked += 1; /* and never answered */ });
+
+  await editAsTheSessionEnds(page, request, cookie, 750);
+
+  await expect(page.locator('#authScreen')).toBeVisible();
+  await expect(page.locator('#authLede')).toContainText('Your session has ended');
+  expect(asked, 'the 401 was the answer; asking again is a round trip and a second thing to lose').toBe(0);
 });
 
 test('signing back in merges, and does not write a stale copy over everyone else', async ({ page, request }) => {

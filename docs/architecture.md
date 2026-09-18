@@ -200,11 +200,18 @@ ask again on a timer — the write loop, the resync and the event stream.
 - **All three loops stand down.** Asking into a `401` every thirty seconds for
   as long as a tab stays open is what a proxy's ban rule reads as an attack,
   and one forgotten tab is most of a household's allowance.
-- **`auth.js` owns the question.** The planner raises `soiree:session-check`;
-  `auth.js` re-probes once, and only a `401` signs the person out — an outage
-  is not a sign-out. A refused `EventSource` reports no status at all, so it
-  raises the same doubt and keeps its reopen booked, in case the cause was the
-  subscriber cap rather than the session.
+- **A `401` is the answer; nothing asks twice.** The planner tells `auth.js` on
+  `soiree:session-check`, marked *definitive*, and `auth.js` signs the person
+  out and opens the sign-in screen at once. It used to re-probe
+  `GET /auth/session` first, which was a round trip spent hearing the same
+  answer again — 300 ms from the far side of the world — and a second request
+  that could be lost: when it was, the status line said "sign in again" and no
+  sign-in screen ever opened. Only a real doubt is asked about. A refused
+  `EventSource` reports no status at all, so it raises the event unmarked,
+  `auth.js` probes, and only a `401` signs anybody out — an outage is not a
+  sign-out — while the stream keeps its reopen booked in case the cause was the
+  subscriber cap. A doubt raised while one is already being asked about is
+  asked again afterwards rather than dropped.
 - **Signing back in is a merge, never `adopt()`.** `dirty` is set by the first
   keystroke of a page's life and never cleared, so `adopt()` would let this
   browser's copy win: diff a state that may be a week stale against a fresh

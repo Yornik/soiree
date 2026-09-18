@@ -874,42 +874,63 @@
     render();
   });
 
-  /* The planner doubts the session.
+  /* The planner doubts the session, or knows it is gone.
    *
-   * app.js raises this when a request of its own comes back 401, or when its
-   * event stream is refused and it cannot tell why. The answer goes back the
-   * way every other change does, through setSession — so the planner learns
-   * about an ended session from the same event it learns about a sign-out.
+   * app.js raises this in two situations, and says which.
    *
-   * Three answers, and only one of them changes anything:
+   * Definitive: a request of its own came back 401. The server has already
+   * answered the question, for this browser's own cookie, so there is nothing
+   * to ask: the person is signed out here and now, and shown the sign-in
+   * screen with a line saying why — somebody mid-edit who is shown a login
+   * form with no explanation assumes they did something wrong. This used to
+   * re-probe first, which was a round trip spent on hearing the same answer
+   * twice, and one more request that could be lost. When it was, the planner
+   * said "sign in again" and the door never opened.
+   *
+   * A doubt: its event stream was refused, and an EventSource does not say
+   * why. That one is asked about, and three answers are possible:
    *
    *   200 — still signed in. The stream was refused for some other reason and
    *         app.js is already waiting that out. Saying "in" again would make
    *         it refetch the plan for nothing, so nothing is said.
-   *   401 — the session is gone. Sign-out, and straight to the sign-in screen
-   *         with a line saying why: somebody mid-edit who is shown a login
-   *         form with no explanation assumes they did something wrong.
+   *   401 — the session is gone. The same ending as above.
    *   anything else — an outage is not a sign-out. probeSession() reads a 500
    *         as "out" because at load there is nothing to lose by offering the
    *         door; here there is a signed-in person to wrongly throw out.
+   *
+   * A doubt that arrives while one is already being asked about is not
+   * dropped: it is asked again afterwards, because the answer in flight may
+   * predate whatever prompted the second one.
    */
   var checking = false;
+  var checkAgain = false;
   var endedNotice = false;
 
-  document.addEventListener('soiree:session-check', function () {
-    if (checking || state === 'unknown' || state === 'none') return;
+  function sessionEnded() {
+    if (state !== 'in') return;
+    endedNotice = true;
+    setSession('out');
+    goto('login');
+  }
+
+  function askAboutSession() {
+    if (checking) { checkAgain = true; return; }
     checking = true;
     request('GET', '/auth/session').then(function (res) {
       checking = false;
       if (res.status === 200 && res.body) {
         if (state !== 'in') setSession('in', res.body);
-        return;
+      } else if (res.status === 401) {
+        sessionEnded();
       }
-      if (res.status !== 401 || state !== 'in') return;
-      endedNotice = true;
-      setSession('out');
-      goto('login');
-    }, function () { checking = false; });
+      if (checkAgain) { checkAgain = false; askAboutSession(); }
+    });
+  }
+
+  document.addEventListener('soiree:session-check', function (ev) {
+    if (state === 'unknown' || state === 'none') return;
+    if (ev && ev.detail && ev.detail.definitive) { sessionEnded(); return; }
+    askAboutSession();
   });
 
   /* ------------------------------------------------------------------
