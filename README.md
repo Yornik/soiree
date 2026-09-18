@@ -196,15 +196,16 @@ both gzip and brotli, and held in memory. No request compresses anything or
 touches a disk. Hashed URLs are served `immutable` with a one-year lifetime;
 only the HTML shell is revalidated, which is what makes a deploy land.
 
-Measured transfer at this commit, brotli:
+Measured transfer at 1.0.0, brotli:
 
 | | |
 |---|---|
-| HTML shell | 2.6 kB |
-| Stylesheet | 6.1 kB |
-| Application | 26 kB |
+| HTML shell | 3.6 kB |
+| Stylesheet | 8.4 kB |
+| Planner script | 35 kB (`defer`, does not block paint) |
+| Accounts script | 13 kB (`defer`, does not block paint) |
 | Display font | 33 kB (`font-display: swap`, does not block paint) |
-| **First paint** | **~8.7 kB** |
+| **First paint** | **~12 kB** |
 
 **Writes are debounced.** Edits apply to local state instantly and persist
 500 ms later, flushed on page hide. That keeps typing smooth, and it is what
@@ -221,10 +222,10 @@ again. Nothing is silently overwritten in either direction.
 
 ## Status
 
-Version 1.0.0 is a shared planner with a shared database behind it, and the
-honest summary is that the server is ahead of the browser.
+Version 1.0.0 is a shared planner with a shared database behind it, accounts in
+front of it, and a page that uses all of it.
 
-What works end to end today:
+What works end to end:
 
 - **The planner, shared.** The browser reads `GET /api/v1/plan` on load and
   writes every subsequent edit through `/api/v1`. `localStorage` is still
@@ -232,37 +233,42 @@ What works end to end today:
   cache that paints before the plan arrives, not the plan itself. Without a
   database it *is* the planner, and that deployment still works exactly as it
   did.
-- **The API**, including the 409-on-stale-revision path, `PATCH /api/v1/settings`
-  for the plan-wide knobs, and an append-only change history behind every write.
-- **Accounts with roles** (admin / editor / viewer), sessions, single-use
-  set-password links, Argon2id hashing, and **passkeys** alongside the password.
-- **Deadline reminders** by mail and by web push, and a **live-sync stream** at
-  `GET /api/v1/events`.
+- **Signing in.** A sign-in screen, the set-password screen an invitation link
+  lands on, an account screen for your own passkeys, and an accounts screen
+  where an admin creates people and chooses their role. There is no
+  self-service sign-up. **Passkeys** work alongside the password wherever
+  `SOIREE_BASE_URL` gives them a domain to belong to.
+- **Roles, enforced by the server.** Nobody reads the plan without a session; a
+  viewer reads and writes nothing; an editor or an admin writes; only an admin
+  reaches `/api/v1/users`. The guard wraps the whole `/api/v1` subtree rather
+  than each route, so a route added later is guarded by being there. Every
+  write records who made it, in `updatedBy` and in the append-only change
+  history.
+- **Live sync.** The page holds one `EventSource` on `GET /api/v1/events`. A
+  second person's edit arrives on its own, and is merged three ways against the
+  copy both sides started from, so nothing anybody is typing is overwritten.
+- **A session that ends while the page is open** — a week idle, a disabled
+  account — stops the page asking, keeps every edit in the browser, opens the
+  sign-in screen with a line saying why, and sends those edits once the person
+  is back. Signing back in is a merge, never this browser's copy winning.
+- **Deadline reminders** by mail and by web push, with a control on the page
+  that asks for permission and subscribes the device.
+- **The API is described** in [`api/openapi.yaml`](api/openapi.yaml), and the
+  description is tested against the running server.
 
-Subject export, erasure and the retention purge are implemented and tested in
-`internal/store/privacy.go`, but nothing calls them: there is no route and no
-subcommand, so honouring a request today means writing Go or SQL.
+What is not there, stated rather than left to be discovered:
 
-Two things are built on the server and not yet reachable from the page, which
-is worth stating rather than leaving to be discovered:
-
-- **Login and user management have no interface.** Every endpoint exists and is
-  tested; the browser does not call any of them. In practice that means the
-  first admin logs in with `curl`. It also means web push is configurable but
-  not usable end to end: the subscription endpoints require a session, and the
-  service worker has no `push` handler yet either.
-- **Live sync is announced but not consumed.** The server opens one
-  `LISTEN` connection per process and fans changes out over SSE; the page holds
-  no `EventSource`. A second person's edit still needs a refresh.
-
-And one gap that is not a missing feature but a missing guard: **the plan API
-is not access-controlled**. `RequireWrite` and `RequireRole` exist in
-`internal/httpd/authmw.go` and are wired to `/api/v1/users`, `/api/v1/auth/*`
-and the push routes — but not to the plan, the collections or the event stream.
-Anything that can reach the port can read and write the budget. A consequence
-worth naming: writes pass a nil actor, so `updated_by` is always null and the
-change history records every edit as `unknown`. Put this behind whatever
-authenticates your other internal services until it is closed.
+- **The accounts screens are in English only.** The planner is translated into
+  English, Dutch and Indonesian; the sign-in, set-password, account and admin
+  screens are not yet, whatever `SOIREE_LOCALE` says.
+- **Phases and the programme have an API and no interface.** Both are in the
+  plan and in `/api/v1`; the page draws neither. For the same reason a budget
+  row with a `parentId`, which only a client writing to the API directly can
+  create, is drawn as an ordinary line and counted alongside its parent.
+- **Subject export, erasure and the retention purge** are implemented and
+  tested in `internal/store/privacy.go`, but nothing calls them: there is no
+  route and no subcommand, so honouring a request today means writing Go or
+  SQL.
 
 Most of the rest of the original roadmap has landed, including the parts listed
 as coming after a working demo: the audit trail, vulnerability disclosure, the

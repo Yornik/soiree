@@ -136,6 +136,13 @@ registered, so asking again would only be a second `404` — and anything else
 that is not an answer gets a few retries, because it might be a browser offline
 on a first visit.
 
+A `401` is a third answer and must not be read as either of the others: it is a
+deployment that *has* an API, which wants a session. Falling back to
+`localStorage` on it would be the worst of both — edits would look saved, live
+in one browser, and never reach the plan everybody else is reading. The page
+holds, and connects properly when `auth.js` announces a sign-in on
+`soiree:session`.
+
 - **No API.** `localStorage` is the planner. One browser, one copy, no network
   after the probe. A self-hoster without Postgres, and `docker run` with no
   arguments, both land here and both work.
@@ -146,6 +153,34 @@ on a first visit.
 `localStorage` is written synchronously and *first* in both modes. `pagehide`
 has no time to wait on a promise, and the whole point of a deferred write is
 that the round trip is not on the interaction path.
+
+### A session that ends while the page is open
+
+The first request is not the only one that can be refused. A session lasts
+seven idle days; an admin can disable an account; somebody signs out in another
+tab. The page is mid-use when that happens, with three things running that each
+ask again on a timer — the write loop, the resync and the event stream.
+
+- **A `401` on a write is not a refusal of the row.** It is not parked the way
+  other `4xx` answers are: nothing about the edit needs to change for it to be
+  accepted, only who is asking, and a parked row stays parked until it is
+  edited again. The pass stops, the shadow does not advance, and the same
+  difference is still there to send.
+- **All three loops stand down.** Asking into a `401` every thirty seconds for
+  as long as a tab stays open is what a proxy's ban rule reads as an attack,
+  and one forgotten tab is most of a household's allowance.
+- **`auth.js` owns the question.** The planner raises `soiree:session-check`;
+  `auth.js` re-probes once, and only a `401` signs the person out — an outage
+  is not a sign-out. A refused `EventSource` reports no status at all, so it
+  raises the same doubt and keeps its reopen booked, in case the cause was the
+  subscriber cap rather than the session.
+- **Signing back in is a merge, never `adopt()`.** `dirty` is set by the first
+  keystroke of a page's life and never cleared, so `adopt()` would let this
+  browser's copy win: diff a state that may be a week stale against a fresh
+  shadow, `PATCH` it over everybody at the current revision — so without a
+  `409` — and `POST` back every row somebody deleted in the meantime. The
+  shadow the page still holds is the version both sides started from, which is
+  what `applyPlan()`'s three-way merge is for.
 
 ### The shadow
 
@@ -250,9 +285,9 @@ constraint drives the design:
 4. **Compression and cache headers in the binary.** No proxy configuration is
    required for either.
 
-Measured at this commit, brotli: shell 2.6 kB, stylesheet 6.1 kB, application
-26 kB, font 33 kB. First paint needs the shell and stylesheet only — about
-8.7 kB.
+Measured at 1.0.0, brotli: shell 3.6 kB, stylesheet 8.4 kB, planner script
+35 kB, accounts script 13 kB, font 33 kB. Both scripts are `defer`, so first
+paint needs the shell and stylesheet only — about 12 kB.
 
 ### Deliberately excluded
 
@@ -322,8 +357,8 @@ pipeline expects.
 
 ## Roadmap
 
-State is shared. What is left is mostly the browser catching up with the server,
-and one guard that is missing rather than deferred.
+State is shared, the API is guarded, and the browser uses all of it. What is
+left is listed under *Open*.
 
 Done:
 
@@ -335,8 +370,9 @@ Done:
 4. ~~Accounts and roles.~~ Session cookie, Argon2id hashes, admin-created
    accounts, single-use set-password links, and passkeys alongside the password.
    See *Accounts*.
-5. ~~Live sync~~, server side: one `LISTEN` connection per process fanning out
-   over SSE at `GET /api/v1/events`. See *Live sync*.
+5. ~~Live sync.~~ One `LISTEN` connection per process fanning out over SSE at
+   `GET /api/v1/events`, and a page that holds the stream and merges what it
+   announces. See *Live sync*.
 6. ~~Build and supply chain.~~ See below; two items there belong elsewhere.
 7. ~~Design pass.~~ See below.
 8. ~~Audit trail.~~ Append-only `change_log`, written in the same transaction as
@@ -356,31 +392,26 @@ Done:
     reopened deliberately.
 16. ~~A browser-level test.~~ Playwright specs in `e2e/`, driving the real
     binary, including one instance with a database behind it.
+17. ~~Authorise the plan API.~~ The whole `/api/v1` subtree is behind
+    `RequireWrite`, and writes carry their actor. See *API shape*.
+18. ~~A login and account interface.~~ `web/src/auth.js`. See *Accounts*.
+19. ~~An API description.~~ `api/openapi.yaml`, checked against the running
+    server by `internal/httpd/openapi_test.go`.
 
 Number 12, the restore drill, is the one missing from that list; number 10 is
-struck only halfway. Those, and three things the browser has not caught up on,
-are what is left.
+struck only halfway.
 
 Open, in the order they matter:
 
-- **Authorise the plan API.** This is the gap, and it is a gap rather than a
-  decision. `RequireWrite` and `RequireRole` exist in `internal/httpd/authmw.go`
-  and are applied to `/api/v1/users`, `/api/v1/auth/*` and the push routes.
-  They are applied to nothing else, so `GET /api/v1/plan`, `GET /api/v1/events`
-  and every write on every collection are open to whatever can reach the port.
-  Two consequences: a viewer's read-only role is not enforced anywhere it would
-  matter, and every write passes a nil actor, so `updated_by` is null and the
-  change history attributes everything to `unknown`. The middleware was written
-  for exactly this and is unused; wiring it is most of the work.
-- **A login and account interface.** Every endpoint is built and tested and the
-  browser calls none of them. Until it does, the first admin logs in by hand,
-  and the push-subscription endpoints — which require a session — cannot be
-  reached from the page at all, so a deployment with VAPID keys has push
-  configured and nobody able to subscribe.
-- **Consume the change stream.** The server announces; the page holds no
-  `EventSource`, so a second person's edit still needs a refresh. The rule the
-  client has to implement is in *Live sync*, and the delete case is the part
-  that is easy to get wrong.
+- **Translate the accounts screens.** The planner speaks English, Dutch and
+  Indonesian; `auth.js` speaks English, whatever `SOIREE_LOCALE` says. The
+  first screen an invited person sees is the one that is not in their language.
+- **A standing control for reminders.** See *Web push*: the offer is the only
+  way in and there is no way out.
+- **What a signed-out browser shows.** The page draws its cached copy of the
+  plan for whoever opens it, and signing out does not clear that copy. That is
+  what working offline means, and it is also a ledger of names against money
+  left on a shared computer. It wants a decision rather than a default.
 - **A way to invoke the data-protection functions.** Export, erasure and purge
   exist and nothing calls them. An admin-only route or a subcommand, either
   would do; what there must not be is a documented obligation that can only be
@@ -780,7 +811,11 @@ Four details a client has to get right:
 Every non-2xx response has one shape — `{error, message?, current?}` — so a
 client never has to guess. The codes are stable strings, because clients branch
 on them: `bad_request`, `not_found`, `stale_revision`, `payload_too_large`,
-`conflict`, `internal`. `current` appears only on a `409`. The database's own
+`conflict`, `internal` from the plan itself, and `unauthenticated` (`401`),
+`read_only` and `forbidden` (`403`) from the guard in front of it. The accounts
+surface names its own refusals — `invalid_email`, `revision_required`,
+`self_change`, `rate_limited` and the rest; the full list is in
+`api/openapi.yaml`. `current` appears only on a `409`. The database's own
 rejections are translated rather than surfaced as a `500`: a foreign key
 violation is a `400` saying the request referred to something that is not there,
 and a unique violation is a `409`. A `500` never carries the error — that goes
@@ -791,8 +826,16 @@ Nothing under `/api/v1` is cached. Every response carries `no-store`: a budget
 two people are editing is the last thing that should come from a proxy, a
 back/forward cache, or the service worker.
 
-**None of the plan routes check who is calling.** See the roadmap; this is the
-one open gap that is a missing guard rather than a missing feature.
+**Every route under `/api/v1` checks who is calling.** `routeAPI` wraps the
+whole subtree in `RequireWrite` rather than guarding each route: anybody signed
+in may read, only an editor or an admin may write, and that rule is a property
+of the method, not of the route. Attaching it per route is how one route added
+later ends up unguarded — which is how this subtree spent its first several
+releases, with the middleware, the roles and the sessions all built and nothing
+calling any of them. `withActor` then hands the store the caller's id, and only
+the id: the change log outlives the account, and an address written into it
+could never be erased. Push is a subtree of its own behind `RequireAuth`,
+because a viewer may subscribe a device; `/api/v1/users` is admin-only.
 
 ### Accounts
 
@@ -849,11 +892,14 @@ The routes are `POST /api/v1/auth/login`, `logout`, `password-reset` and
 administration routes is checked per request against the role as it stands in
 the database, not as it stood when the session was created.
 
-**The browser calls none of this yet.** The endpoints are built and tested; the
-page has no login form and no account screen, so at this commit signing in means
-posting to `/api/v1/auth/login` by hand. That is the largest remaining piece of
-the frontend, and the reason web push — whose subscription endpoints require a
-session — cannot currently be turned on from the page.
+The browser's half is `web/src/auth.js`, a second script beside the planner
+rather than part of it: a deployment with no database has no accounts at all,
+and `auth.js` is then a script that finds nothing and draws nothing. It draws
+four screens, routed in the URL fragment so they can be linked to — sign in,
+set a password (where an invitation link lands, with the token taken out of the
+address bar before anything else happens), your own account and its passkeys,
+and the accounts screen for an admin. It enforces nothing; the server does. It
+is in English only, where the planner is translated, and that is a gap.
 
 #### Sessions
 
@@ -1048,8 +1094,14 @@ whole tree in Go before issuing the statement, precisely because the cascade
 would otherwise take a caterer's entire breakdown with no trace of what it said.
 That is deliberate and worth not "simplifying" later.
 
-The page at this commit does not hold an `EventSource` at all, so none of the
-above is exercised from the browser yet.
+The page takes the conservative reading of all of the above: it never updates a
+row in place. Every `change` it does not already hold, and every `resync`,
+ends in one coalesced `GET /api/v1/plan` merged three ways against the shadow —
+which is always correct, costs one request however many events arrived in the
+burst, and leaves the in-place optimisation to a client that needs it. It
+ignores a `create` or `update` whose revision it already holds, which is what
+suppresses the echo of its own writes, and never applies that test to a
+`delete`, which announces the revision already held.
 
 ### Web push
 
@@ -1109,13 +1161,20 @@ Apple platform decision, no amount of correctness here changes it, and some
 recipients will therefore never receive a notification however well this works.
 It is the reason mail remains the primary channel.
 
-**The browser half is not built yet.** Two pieces are missing at this commit and
-both are in the frontend: the page never asks for notification permission or
-posts a subscription — it could not, since the endpoints need a session and
-there is no login — and `web/src/sw.js` registers `install`, `activate` and
-`fetch` but no `push` handler, so a notification arriving would not be
-displayed. The payload's four fields (`title`, `body`, `url`, `tag`) are a
-contract with that future handler: adding a field is safe, renaming one is not.
+The browser half is two pieces. The page makes the offer — never on load,
+because a denied permission is sticky, but the first time a signed-in editor
+gives a task a due date — and posts the subscription, re-posting whatever the
+device already holds on every load so that a restored database gets its devices
+back. `web/src/sw.js` handles `push` and `notificationclick`: it always shows a
+notification, because the subscription is `userVisibleOnly`, replaces the
+previous digest rather than stacking on it by reusing the `tag`, and brings an
+open planner to the front rather than opening a second one. The payload's four
+fields (`title`, `body`, `url`, `tag`) are a contract between the server and
+that handler: adding a field is safe, renaming one is not.
+
+What is missing is a standing control. The offer is the only way in, so
+somebody who never sets a due date is never asked, and there is nowhere to turn
+reminders off again short of the browser's own site settings.
 
 #### The reminder digest
 

@@ -307,7 +307,7 @@
    * mounted together or not at all. Two scripts asking it separately is one
    * request more than a deployment with no database should ever pay.
    *
-   * THE CONTRACT WE WOULD LIKE FROM app.js, which owns that request:
+   * The contract with app.js, which owns that request (announceAPI there):
    *
    *     window.soiree = window.soiree || {};
    *     window.soiree.apiAvailable = <true | false>;   // latched in connect()
@@ -318,10 +318,10 @@
    * that arrives late, the event for one that arrives early; either alone
    * leaves a race.
    *
-   * Until that lands this reads as "unknown" and the probe goes out anyway, so
-   * nothing here depends on a hook that may never fire. The day it lands, a
-   * deployment with no database stops being asked a second question it has
-   * already answered.
+   * While it reads as "not answered yet" the probe goes out anyway, so nothing
+   * here depends on which script the browser happened to finish first. When
+   * the answer is already in, a deployment with no database is not asked a
+   * second question it has already answered.
    */
   function apiKnownAbsent() {
     return !!(window.soiree && window.soiree.apiAvailable === false);

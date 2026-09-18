@@ -96,58 +96,86 @@ set-password link is admin-only, and `password-reset` gives its link to the
 mailer and discards it. That is the whole reason `SOIREE_BOOTSTRAP_PASSWORD`
 exists.
 
-**There is no login form yet.** The accounts endpoints are built and tested, and
-the browser does not call any of them, so at this commit the first session is
-made by hand:
+Then sign in on the page: *Sign in* in the bar at the top, or `/#/login`
+directly, with the bootstrap address and password. The screens live in the URL
+fragment, so they can be linked to — `/#/login`, `/#/account` for your own
+passkeys, and `/#/admin` for everybody's accounts.
+
+Be clear about what the page shows before anybody signs in, because it is not
+a locked door. The server refuses the plan without a session, so a browser that
+has never signed in has nothing to show and draws an empty planner. A browser
+that *has* signed in before keeps a copy of the plan in `localStorage` — that
+copy is what lets the page paint at once and work offline — and **signing out
+does not remove it**. The page draws that copy for whoever opens it next. On a
+computer other people use, clear the site's data after signing out, the same as
+for any application that works offline.
+
+**Replace the bootstrap password once you are in.** It has been sitting in an
+environment variable. On the accounts screen, *Send a password link* on your
+own row issues a fresh single-use link: mailed to you when SMTP is configured,
+shown once on the screen when it is not. Follow it and choose a new password.
+The variable can stay set afterwards — it is consumed only while no admin
+exists, so it cannot put the old password back.
+
+Creating everybody else is the same screen: an address and a role (`admin`,
+`editor` or `viewer`). There is no self-service sign-up and no open invitation
+link; an admin creates each account.
+
+With SMTP configured the link goes to the person it belongs to and nowhere else
+— an admin who never sees it cannot use it. Without SMTP the screen shows the
+link once, for the admin to pass on by another route. *Send the link again*
+issues a fresh one when the first expires or goes to a mailbox nobody reads;
+issuing supersedes whatever was outstanding, so it is also how a leaked link is
+revoked.
+
+The link points at `/#/set-password?token=…`. The page takes the token out of
+the address bar before it does anything else, asks for a password of at least
+twelve characters, and signs the person in. It works once and expires in 24
+hours.
+
+All of it is also plain HTTP, described in
+[`api/openapi.yaml`](../api/openapi.yaml), for the day the page is not an
+option:
 
 ```bash
 curl -c cookies.txt -X POST https://soiree.example.test/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"ada@example.test","password":"…"}'
 
-curl -b cookies.txt https://soiree.example.test/api/v1/auth/session
-```
-
-From there, creating the rest of the accounts is `POST /api/v1/users` with an
-address and a role (`admin`, `editor` or `viewer`):
-
-```bash
 curl -b cookies.txt -X POST https://soiree.example.test/api/v1/users \
   -H 'Content-Type: application/json' \
   -d '{"email":"grace@example.test","role":"editor"}'
 ```
 
-With SMTP configured the response says `"mailSent": true` and the link goes to
-the person it belongs to and nowhere else — an admin who never sees it cannot
-use it. Without SMTP the response carries `setPasswordUrl` for the admin to pass
-on by hand. `POST /api/v1/users/{id}/invite` issues a fresh link when the first
-one expires or goes to a mailbox nobody reads; issuing supersedes whatever was
-outstanding, so it is also how a leaked link is revoked.
+`"mailSent": true` in that response means the link was handed to the mailer;
+`false` means there is no mailer and the response carries `setPasswordUrl`.
 
-One caveat to pass on with the link: it points at `/#/set-password?token=…`, and
-the page does not implement that route yet. Until it does, the recipient's
-password is set by posting the token:
+### Who may do what
 
-```bash
-curl -X POST https://soiree.example.test/api/v1/auth/set-password \
-  -H 'Content-Type: application/json' \
-  -d '{"token":"<the token from the link>","password":"…"}'
-```
+The server decides, and the page only reflects it.
 
-The link works once and expires in 24 hours either way.
+| | reads the plan | writes the plan | manages accounts |
+|---|---|---|---|
+| no session | no — `401` | no | no |
+| `viewer` | yes | no — `403 read_only` | no |
+| `editor` | yes | yes | no — `403 forbidden` |
+| `admin` | yes | yes | yes |
 
-### One thing to do before anyone real uses it
+The guard wraps the whole `/api/v1` subtree rather than each route, so the
+event stream and any route added later are covered by being there. A role is
+read from the database on every request, not from the session, so demoting or
+disabling somebody takes effect on their next click rather than at their next
+sign-in.
 
-The plan API is not access-controlled at this commit. `GET /api/v1/plan`,
-`GET /api/v1/events` and every write on every collection are open to anything
-that can reach the port — the role middleware exists and is applied only to
-`/api/v1/users`, `/api/v1/auth/*` and the push routes. Put the deployment behind
-whatever authenticates your other internal services until that is closed, and do
-not treat the roles above as if they were enforced on the budget.
+Every write records who made it: `updatedBy` on the row, and the actor in the
+append-only change history. Deleting an account blanks that id everywhere it
+appears — the history keeps *what* changed and loses *who* — so prefer the
+status `disabled`, which keeps both.
 
-A visible consequence: writes reach the store with no actor attached, so
-`updated_by` is null and the change history records every edit as `unknown`. The
-history is complete in *what* changed and empty in *who*.
+A session lasts seven days idle and thirty days at most. When one ends under an
+open page, the page stops asking, keeps the person's edits in the browser, shows
+the sign-in screen with a line saying why, and sends those edits once they are
+back.
 
 ## Generating a VAPID key pair
 
@@ -307,9 +335,12 @@ the request does not close, something between the client and the server is
 buffering the response; the application sets `X-Accel-Buffering: no` for exactly
 that, but not every proxy honours it.
 
-Note that at this commit the page itself holds no `EventSource`, so
-`soiree_sse_subscribers` will sit at zero however many browsers are open. It
-being non-zero means somebody is testing, or a future frontend has landed.
+`soiree_sse_subscribers` is the number of open, signed-in tabs: every page
+holds one `EventSource` for as long as it has a session. It drops when a tab
+closes and when a session ends, because the page closes its stream rather than
+retrying into a refusal. A number that only ever climbs means disconnects are
+not being noticed, which is the proxy's idle timeout more often than it is this
+application.
 
 ### Mail
 
@@ -324,14 +355,30 @@ is in the relay's logs, not this application's.
 
 ### Push
 
-Push cannot currently be exercised from the browser at all. The subscription
-endpoints require a session and the page has no login, and `web/src/sw.js` has
-no `push` handler yet, so a notification that did arrive would not be displayed.
-Configure the keys if you want them in place for when that lands; do not expect
-anybody's phone to buzz today. What can be confirmed now:
+Push works end to end from the page. Knowing how the offer is made saves a
+support conversation, because it is deliberately quiet:
+
+- **It is never made on load.** A denied notification permission is sticky in
+  Chrome — undoing it means a trip into the site settings — so the page spends
+  its one prompt at the moment the value is obvious: the first time a signed-in
+  editor or admin gives a task a due date, a line appears under the task list
+  with *Turn on* and *Not now*.
+- **It is offered once per page load and only while the browser has not been
+  asked.** Somebody who said *Not now* is offered it again the next time they
+  set a due date on a fresh load; somebody who said no to the browser's own
+  prompt is not, and has to allow notifications for the site themselves.
+- **A viewer is never offered it**, and an admin who never sets a due date is
+  not either. The digest goes to every active admin by mail regardless; push is
+  per device and opt-in.
+- **On Android, Chrome is enough.** On an iPhone the site has to be added to
+  the Home Screen first; Safari does not offer web push to a tab.
+
+To check that it is working:
 
 - The page's config block contains `vapidPublicKey`. If it does not, the
   server does not consider push configured — check all three variables.
+- After *Turn on* the page says reminders are on for this device, and
+  `push_subscriptions` has a row for that account.
 - With a session, `POST /api/v1/push/subscriptions` accepts a `PushSubscription`
   object in the exact shape `JSON.stringify()` produces it (`endpoint`, and
   `keys.p256dh` plus `keys.auth`), and answers `204`. It is idempotent on the

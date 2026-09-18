@@ -964,15 +964,19 @@
 
   /* Every row in the plan becomes a row on the page, including the child rows
    * of a broken-down quote. This page has no notion of a parent and a
-   * breakdown, so a plan loaded by cmd/soiree-import — where a caterer's
-   * per-dish sheet is child rows under one line — reads its headline figures
-   * high, because the parent and its children are both counted.
+   * breakdown, so a plan that holds rows with a parentId — which only a
+   * client writing to the API directly can create — reads its headline
+   * figures high, because the parent and its children are both counted.
    *
-   * Do not fix that by filtering parentId out here. The shadow would still
-   * hold those rows, so the very next difference would be a DELETE for every
-   * child in the breakdown, and the import would be destroyed by the act of
-   * looking at it. Teaching the page about parents is the fix, and it is a
-   * change to the page rather than to this function. */
+   * cmd/soiree-import does not produce that. It folds a breakdown's amounts
+   * into the parent, summarises the rows in the parent's note, and nests them
+   * under a `children` key that the import below never reads.
+   *
+   * Do not fix the first case by filtering parentId out here. The shadow
+   * would still hold those rows, so the very next difference would be a DELETE
+   * for every child in the breakdown, and they would be destroyed by the act
+   * of looking at them. Teaching the page about parents is the fix, and it is
+   * a change to the page rather than to this function. */
   function stateFromPlan(plan) {
     var s = emptyState();
     var wire = plan.settings || {};
