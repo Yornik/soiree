@@ -93,13 +93,13 @@ func equal(got, want []string) bool {
 // appears in the one sent after it has passed.
 func TestWindowBoundariesAreInclusive(t *testing.T) {
 	cfg := testConfig(t, "UTC", 14)
-	now := at(t, "2027-02-25T09:00:00Z")
+	now := at(t, "2030-01-17T09:00:00Z")
 
 	items := []store.BudgetItem{
-		item(t, "day before the window opens", "Vendor", "2027-02-24", 100, 0),
-		item(t, "the day itself", "Vendor", "2027-02-25", 100, 0),
-		item(t, "last day inside the window", "Vendor", "2027-03-11", 100, 0),
-		item(t, "one day past the window", "Vendor", "2027-03-12", 100, 0),
+		item(t, "day before the window opens", "Vendor", "2030-01-16", 100, 0),
+		item(t, "the day itself", "Vendor", "2030-01-17", 100, 0),
+		item(t, "last day inside the window", "Vendor", "2030-01-31", 100, 0),
+		item(t, "one day past the window", "Vendor", "2030-02-01", 100, 0),
 	}
 
 	got := names(Compose(cfg, now, items, nil))
@@ -113,13 +113,13 @@ func TestWindowBoundariesAreInclusive(t *testing.T) {
 // so it is never dropped for being old.
 func TestOverdueItemsAreIncludedAndCounted(t *testing.T) {
 	cfg := testConfig(t, "UTC", 14)
-	now := at(t, "2027-02-25T09:00:00Z")
+	now := at(t, "2030-01-17T09:00:00Z")
 
 	d := Compose(cfg, now, []store.BudgetItem{
-		item(t, "Venue deposit", "Grand Hall", "2027-01-05", 250000, 0),
-		item(t, "Florist", "Linus Flowers", "2027-03-01", 40000, 0),
+		item(t, "Venue deposit", "Grand Hall", "2029-11-27", 250000, 0),
+		item(t, "Florist", "Linus Flowers", "2030-01-21", 40000, 0),
 	}, []store.Task{
-		task(t, "Send invitations", "Grace", "2027-02-20", store.TaskNotStarted),
+		task(t, "Send invitations", "Grace", "2030-01-12", store.TaskNotStarted),
 	})
 
 	if d.Count() != 3 {
@@ -144,11 +144,11 @@ func TestOverdueItemsAreIncludedAndCounted(t *testing.T) {
 // about it is how a digest becomes noise.
 func TestDepositPaidIsNotReminded(t *testing.T) {
 	cfg := testConfig(t, "UTC", 14)
-	now := at(t, "2027-02-25T09:00:00Z")
+	now := at(t, "2030-01-17T09:00:00Z")
 
 	d := Compose(cfg, now, []store.BudgetItem{
-		item(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 50000),
-		item(t, "Florist", "Linus Flowers", "2027-02-27", 40000, 0),
+		item(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 50000),
+		item(t, "Florist", "Linus Flowers", "2030-01-19", 40000, 0),
 	}, nil)
 
 	if got := names(d); !equal(got, []string{"Florist"}) {
@@ -158,15 +158,15 @@ func TestDepositPaidIsNotReminded(t *testing.T) {
 
 func TestResolvedAndUndatedRowsAreSkipped(t *testing.T) {
 	cfg := testConfig(t, "UTC", 14)
-	now := at(t, "2027-02-25T09:00:00Z")
+	now := at(t, "2030-01-17T09:00:00Z")
 
 	d := Compose(cfg, now,
 		[]store.BudgetItem{
 			item(t, "no deadline recorded", "Vendor", "", 100, 0),
 		},
 		[]store.Task{
-			task(t, "Book the band", "Ada", "2027-02-26", store.TaskDone),
-			task(t, "Confirm the cake", "Linus", "2027-02-26", store.TaskInProgress),
+			task(t, "Book the band", "Ada", "2030-01-18", store.TaskDone),
+			task(t, "Confirm the cake", "Linus", "2030-01-18", store.TaskInProgress),
 			task(t, "no due date", "Grace", "", store.TaskNotStarted),
 		})
 
@@ -179,12 +179,12 @@ func TestResolvedAndUndatedRowsAreSkipped(t *testing.T) {
 // nothing is a weekly mail nobody opens.
 func TestNothingDueMakesAnEmptyDigest(t *testing.T) {
 	cfg := testConfig(t, "UTC", 14)
-	now := at(t, "2027-02-25T09:00:00Z")
+	now := at(t, "2030-01-17T09:00:00Z")
 
 	d := Compose(cfg, now, []store.BudgetItem{
-		item(t, "Venue deposit", "Grand Hall", "2027-06-01", 250000, 0),
+		item(t, "Venue deposit", "Grand Hall", "2030-04-23", 250000, 0),
 	}, []store.Task{
-		task(t, "Send invitations", "Grace", "2027-06-01", store.TaskNotStarted),
+		task(t, "Send invitations", "Grace", "2030-04-23", store.TaskNotStarted),
 	})
 
 	if !d.Empty() {
@@ -196,13 +196,13 @@ func TestNothingDueMakesAnEmptyDigest(t *testing.T) {
 // night in Amsterdam it is already tomorrow; in New York it is still
 // yesterday afternoon.
 func TestTodayIsTheDayInTheConfiguredZone(t *testing.T) {
-	now := at(t, "2027-02-25T23:30:00Z")
+	now := at(t, "2030-01-17T23:30:00Z")
 
 	for zone, want := range map[string]string{
-		"UTC":              "2027-02-25",
-		"Europe/Amsterdam": "2027-02-26",
-		"America/New_York": "2027-02-25",
-		"Asia/Bangkok":     "2027-02-26",
+		"UTC":              "2030-01-17",
+		"Europe/Amsterdam": "2030-01-18",
+		"America/New_York": "2030-01-17",
+		"Asia/Bangkok":     "2030-01-18",
 	} {
 		d := Compose(testConfig(t, zone, 14), now, nil, nil)
 		if got := d.Today.Format(time.DateOnly); got != want {
@@ -218,12 +218,12 @@ func TestTodayIsTheDayInTheConfiguredZone(t *testing.T) {
 // name so the same data always produces the same mail.
 func TestOrderingIsStable(t *testing.T) {
 	cfg := testConfig(t, "UTC", 30)
-	now := at(t, "2027-02-25T09:00:00Z")
+	now := at(t, "2030-01-17T09:00:00Z")
 
 	d := Compose(cfg, now, []store.BudgetItem{
-		item(t, "Photographer", "Grace Optics", "2027-03-05", 100, 0),
-		item(t, "Venue deposit", "Grand Hall", "2027-02-20", 100, 0),
-		item(t, "Awning", "Linus Tents", "2027-03-05", 100, 0),
+		item(t, "Photographer", "Grace Optics", "2030-01-25", 100, 0),
+		item(t, "Venue deposit", "Grand Hall", "2030-01-12", 100, 0),
+		item(t, "Awning", "Linus Tents", "2030-01-25", 100, 0),
 	}, nil)
 
 	want := []string{"Venue deposit", "Awning", "Photographer"}
@@ -236,12 +236,12 @@ func TestOrderingIsStable(t *testing.T) {
 // today and what is already late, and nothing else.
 func TestZeroWindowKeepsTodayAndOverdue(t *testing.T) {
 	cfg := testConfig(t, "UTC", 0)
-	now := at(t, "2027-02-25T09:00:00Z")
+	now := at(t, "2030-01-17T09:00:00Z")
 
 	d := Compose(cfg, now, []store.BudgetItem{
-		item(t, "yesterday", "Vendor", "2027-02-24", 100, 0),
-		item(t, "today", "Vendor", "2027-02-25", 100, 0),
-		item(t, "tomorrow", "Vendor", "2027-02-26", 100, 0),
+		item(t, "yesterday", "Vendor", "2030-01-16", 100, 0),
+		item(t, "today", "Vendor", "2030-01-17", 100, 0),
+		item(t, "tomorrow", "Vendor", "2030-01-18", 100, 0),
 	}, nil)
 
 	if got := names(d); !equal(got, []string{"yesterday", "today"}) {

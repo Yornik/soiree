@@ -12,11 +12,11 @@ func renderFixture(t *testing.T, zone string) (Digest, string, string) {
 	t.Helper()
 
 	cfg := testConfig(t, zone, 14)
-	d := Compose(cfg, at(t, "2027-02-25T09:00:00Z"), []store.BudgetItem{
-		item(t, "Venue deposit", "Grand Hall", "2027-02-20", 250000, 0),
-		item(t, "Florist", "Linus Flowers", "2027-03-02", 42050, 0),
+	d := Compose(cfg, at(t, "2030-01-17T09:00:00Z"), []store.BudgetItem{
+		item(t, "Venue deposit", "Grand Hall", "2030-01-12", 250000, 0),
+		item(t, "Florist", "Linus Flowers", "2030-01-22", 42050, 0),
 	}, []store.Task{
-		task(t, "Send invitations", "Grace", "2027-02-26", store.TaskInProgress),
+		task(t, "Send invitations", "Grace", "2030-01-18", store.TaskInProgress),
 	})
 
 	msg, err := Render(d)
@@ -82,7 +82,7 @@ func TestDeadlineDayDoesNotShiftWithTheZone(t *testing.T) {
 	var rendered []string
 	for _, zone := range []string{"UTC", "America/New_York", "Asia/Bangkok", "Pacific/Kiritimati"} {
 		_, text, html := renderFixture(t, zone)
-		for _, want := range []string{"Sat 20 Feb 2027", "Tue 2 Mar 2027"} {
+		for _, want := range []string{"Sat 12 Jan 2030", "Tue 22 Jan 2030"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s: text body does not show the deadline as %q:\n%s", zone, want, text)
 			}
@@ -101,8 +101,8 @@ func TestDeadlineDayDoesNotShiftWithTheZone(t *testing.T) {
 // deadline reads as being — that part is supposed to move.
 func TestRelativeWordingFollowsTheZone(t *testing.T) {
 	cfg := testConfig(t, "Pacific/Kiritimati", 14) // UTC+14
-	d := Compose(cfg, at(t, "2027-02-25T23:30:00Z"), []store.BudgetItem{
-		item(t, "Venue deposit", "Grand Hall", "2027-02-26", 250000, 0),
+	d := Compose(cfg, at(t, "2030-01-17T23:30:00Z"), []store.BudgetItem{
+		item(t, "Venue deposit", "Grand Hall", "2030-01-18", 250000, 0),
 	}, nil)
 
 	msg, err := Render(d)
@@ -111,7 +111,7 @@ func TestRelativeWordingFollowsTheZone(t *testing.T) {
 	}
 	// 13:30 on the 26th in Kiritimati, so the 26th is today — and the date
 	// itself still reads as the 26th.
-	if !strings.Contains(msg.Text, "Fri 26 Feb 2027") {
+	if !strings.Contains(msg.Text, "Fri 18 Jan 2030") {
 		t.Errorf("date moved:\n%s", msg.Text)
 	}
 	if !strings.Contains(msg.Text, "today") {
@@ -137,8 +137,8 @@ func TestHTMLFetchesNothing(t *testing.T) {
 
 func TestRenderEscapesContent(t *testing.T) {
 	cfg := testConfig(t, "UTC", 14)
-	d := Compose(cfg, at(t, "2027-02-25T09:00:00Z"), []store.BudgetItem{
-		item(t, `<script>alert("x")</script>`, "Vendor", "2027-02-26", 100, 0),
+	d := Compose(cfg, at(t, "2030-01-17T09:00:00Z"), []store.BudgetItem{
+		item(t, `<script>alert("x")</script>`, "Vendor", "2030-01-18", 100, 0),
 	}, nil)
 
 	msg, err := Render(d)
@@ -155,10 +155,10 @@ func TestRenderEscapesContent(t *testing.T) {
 
 func TestRenderHandlesBlankFields(t *testing.T) {
 	cfg := testConfig(t, "UTC", 14)
-	d := Compose(cfg, at(t, "2027-02-25T09:00:00Z"), []store.BudgetItem{
-		{LockBy: day(t, "2027-02-26")},
+	d := Compose(cfg, at(t, "2030-01-17T09:00:00Z"), []store.BudgetItem{
+		{LockBy: day(t, "2030-01-18")},
 	}, []store.Task{
-		{Due: day(t, "2027-02-26"), Status: store.TaskNotStarted},
+		{Due: day(t, "2030-01-18"), Status: store.TaskNotStarted},
 	})
 
 	msg, err := Render(d)

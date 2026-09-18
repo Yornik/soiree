@@ -311,7 +311,7 @@ func Load() (Config, error) {
 	if c.EventDate != "" {
 		t, err := time.Parse(time.RFC3339, c.EventDate)
 		if err != nil {
-			return Config{}, fmt.Errorf("SOIREE_EVENT_DATE must be RFC3339 with a timezone (e.g. 2027-02-21T00:00:00Z), got %q", c.EventDate)
+			return Config{}, fmt.Errorf("SOIREE_EVENT_DATE must be RFC3339 with a timezone (e.g. 2027-06-12T00:00:00Z), got %q", c.EventDate)
 		}
 		c.EventDate = t.UTC().Format(time.RFC3339)
 	}

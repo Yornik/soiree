@@ -17,21 +17,21 @@ func TestPeriodKeyIsStableWithinAPeriod(t *testing.T) {
 		return periodKey(week, dayIn(at(t, s), cfg.location()))
 	}
 
-	// Monday 22 February 2027 through the Sunday after it.
-	start := key("2027-02-21T23:30:00Z") // 00:30 Monday in Amsterdam
+	// Monday 14 January 2030 through the Sunday after it.
+	start := key("2030-01-13T23:30:00Z") // 00:30 Monday in Amsterdam
 	for _, instant := range []string{
-		"2027-02-22T09:00:00Z",
-		"2027-02-25T09:00:00Z",
-		"2027-02-28T22:59:00Z", // 23:59 Sunday in Amsterdam, still inside
+		"2030-01-14T09:00:00Z",
+		"2030-01-17T09:00:00Z",
+		"2030-01-20T22:59:00Z", // 23:59 Sunday in Amsterdam, still inside
 	} {
 		if got := key(instant); got != start {
 			t.Errorf("%s keyed as %q, want %q", instant, got, start)
 		}
 	}
-	if next := key("2027-02-28T23:30:00Z"); next == start {
+	if next := key("2030-01-20T23:30:00Z"); next == start {
 		t.Errorf("the following week keyed as %q, the same as the previous one", next)
 	}
-	if want := "digest/7d/2027-02-22"; start != want {
+	if want := "digest/7d/2030-01-14"; start != want {
 		t.Errorf("key = %q, want %q — a week that starts on a Monday", start, want)
 	}
 	if !strings.Contains(start, "7d") {
@@ -61,7 +61,7 @@ func TestWeeklyPeriodsStartOnMonday(t *testing.T) {
 // Changing the schedule changes what a period means, so it changes the key
 // space. One extra digest is the honest outcome of that edit.
 func TestPeriodKeyDependsOnTheSchedule(t *testing.T) {
-	today := dayIn(at(t, "2027-02-25T09:00:00Z"), time.UTC)
+	today := dayIn(at(t, "2030-01-17T09:00:00Z"), time.UTC)
 	weekly := periodKey(7*24*time.Hour, today)
 	daily := periodKey(24*time.Hour, today)
 	if weekly == daily {
@@ -77,12 +77,12 @@ func TestPeriodBoundariesAreCalendarDays(t *testing.T) {
 	daily := 24 * time.Hour
 
 	// 23:30 UTC is already the next day in Amsterdam, and the key follows.
-	before := periodKey(daily, dayIn(at(t, "2027-02-25T22:30:00Z"), amsterdam))
-	after := periodKey(daily, dayIn(at(t, "2027-02-25T23:30:00Z"), amsterdam))
+	before := periodKey(daily, dayIn(at(t, "2030-01-17T22:30:00Z"), amsterdam))
+	after := periodKey(daily, dayIn(at(t, "2030-01-17T23:30:00Z"), amsterdam))
 	if before == after {
 		t.Error("local midnight did not start a new daily period")
 	}
-	if !strings.Contains(after, "2027-02-26") {
+	if !strings.Contains(after, "2030-01-18") {
 		t.Errorf("key %q does not name the day it covers", after)
 	}
 }

@@ -88,19 +88,19 @@ func TestLoadReadsEnv(t *testing.T) {
 // A date without a timezone is the bug that makes the countdown differ by a
 // day between viewers in different places, so it must be rejected outright.
 func TestEventDateRequiresTimezone(t *testing.T) {
-	t.Setenv("SOIREE_EVENT_DATE", "2027-02-21T00:00:00")
+	t.Setenv("SOIREE_EVENT_DATE", "2030-01-13T00:00:00")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected an error for a date with no timezone offset")
 	}
 }
 
 func TestEventDateNormalisedToUTC(t *testing.T) {
-	t.Setenv("SOIREE_EVENT_DATE", "2027-02-21T07:00:00+07:00")
+	t.Setenv("SOIREE_EVENT_DATE", "2030-01-13T05:30:00+05:30")
 	c, err := Load()
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
-	if c.EventDate != "2027-02-21T00:00:00Z" {
+	if c.EventDate != "2030-01-13T00:00:00Z" {
 		t.Errorf("EventDate = %q, want the UTC equivalent", c.EventDate)
 	}
 }

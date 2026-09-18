@@ -77,7 +77,7 @@ func newFixture(t *testing.T) *fixture {
 		pool:  pool,
 		store: store.New(pool),
 		cfg:   cfg,
-		now:   at(t, "2027-02-25T09:00:00Z"),
+		now:   at(t, "2030-01-17T09:00:00Z"),
 	}
 }
 
@@ -154,10 +154,10 @@ func (f *fixture) ledger(t *testing.T) []struct {
 
 func TestRunOnceSendsTheDigest(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-20", 250000, 0, 1)
-	f.seedDeadline(t, "Florist", "Linus Flowers", "2027-03-02", 42050, 0, 2)
-	f.seedDeadline(t, "Photographer", "Grace Optics", "2027-08-01", 90000, 0, 3) // outside the window
-	f.seedTask(t, "Send invitations", "Grace", "2027-02-26", store.TaskNotStarted, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-12", 250000, 0, 1)
+	f.seedDeadline(t, "Florist", "Linus Flowers", "2030-01-22", 42050, 0, 2)
+	f.seedDeadline(t, "Photographer", "Grace Optics", "2030-06-23", 90000, 0, 3) // outside the window
+	f.seedTask(t, "Send invitations", "Grace", "2030-01-18", store.TaskNotStarted, 1)
 
 	sender := &fakeSender{}
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
@@ -197,7 +197,7 @@ func TestRunOnceSendsTheDigest(t *testing.T) {
 // replica must not say it again.
 func TestDigestIsNotResentAcrossARestart(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 
 	first := &fakeSender{}
 	if err := f.service(t, first).RunOnce(t.Context()); err != nil {
@@ -236,7 +236,7 @@ func TestDigestIsNotResentAcrossARestart(t *testing.T) {
 func TestTheNextPeriodSendsAgain(t *testing.T) {
 	f := newFixture(t)
 	// Inside the window on both sides of the period boundary.
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-03-08", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-28", 250000, 0, 1)
 
 	sender := &fakeSender{}
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
@@ -260,11 +260,11 @@ func TestTheNextPeriodSendsAgain(t *testing.T) {
 // see by itself — the same digest, twice, at midnight on a Sunday.
 func TestABoundaryStraddleDoesNotSendTwice(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-03-08", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-28", 250000, 0, 1)
 
 	// 00:58 Monday in Amsterdam is 23:58 Sunday UTC: two minutes before the
 	// week rolls over in the configured zone.
-	f.now = at(t, "2027-02-28T22:58:00Z")
+	f.now = at(t, "2030-01-20T22:58:00Z")
 	sender := &fakeSender{}
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
 		t.Fatalf("first run: %v", err)
@@ -296,10 +296,10 @@ func TestABoundaryStraddleDoesNotSendTwice(t *testing.T) {
 // either — something added on Tuesday should still be able to go out.
 func TestNothingDueSendsNothingAtAll(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 5000, 1) // deposit paid
-	f.seedDeadline(t, "Photographer", "Grace Optics", "2027-08-01", 90000, 0, 2)    // far off
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 5000, 1) // deposit paid
+	f.seedDeadline(t, "Photographer", "Grace Optics", "2030-06-23", 90000, 0, 2)    // far off
 	f.seedDeadline(t, "Cake", "Linus Bakes", "", 12000, 0, 3)                       // no deadline
-	f.seedTask(t, "Book the band", "Ada", "2027-02-26", store.TaskDone, 1)
+	f.seedTask(t, "Book the band", "Ada", "2030-01-18", store.TaskDone, 1)
 
 	sender := &fakeSender{}
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
@@ -314,7 +314,7 @@ func TestNothingDueSendsNothingAtAll(t *testing.T) {
 	}
 
 	// The week is not used up: a deadline entered later still goes out.
-	f.seedDeadline(t, "Florist", "Linus Flowers", "2027-02-28", 42050, 0, 4)
+	f.seedDeadline(t, "Florist", "Linus Flowers", "2030-01-20", 42050, 0, 4)
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestNothingDueSendsNothingAtAll(t *testing.T) {
 // Two replicas start at the same instant. Only one sends.
 func TestLeaderGuardStopsASecondReplica(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 
 	// Stand in for the replica that got there first: hold the advisory lock on
 	// a session of its own, exactly as RunOnce does.
@@ -368,7 +368,7 @@ func TestLeaderGuardStopsASecondReplica(t *testing.T) {
 // process.
 func TestTheLockIsReleasedAfterEveryRun(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 
 	sender := &fakeSender{}
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
@@ -391,7 +391,7 @@ func TestTheLockIsReleasedAfterEveryRun(t *testing.T) {
 // so the claim comes back off.
 func TestARefusedSendReleasesThePeriod(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 
 	broken := &fakeSender{err: &mailer.SendError{Err: errors.New("connection refused")}}
 	if err := f.service(t, broken).RunOnce(t.Context()); err == nil {
@@ -415,7 +415,7 @@ func TestARefusedSendReleasesThePeriod(t *testing.T) {
 // without a sent_at for somebody to find.
 func TestAnUncertainSendIsNeverRetried(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 
 	uncertain := &fakeSender{err: &mailer.SendError{Err: errors.New("connection reset"), Ambiguous: true}}
 	if err := f.service(t, uncertain).RunOnce(t.Context()); err == nil {
@@ -443,7 +443,7 @@ func TestAnUncertainSendIsNeverRetried(t *testing.T) {
 // because a weekly ticker in a pod that restarts daily never fires.
 func TestStartRunsImmediatelyAndStops(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 
 	sender := &fakeSender{}
 	stop := f.service(t, sender).Start(t.Context())
