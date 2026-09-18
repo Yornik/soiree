@@ -285,6 +285,15 @@
     lockPlanner(next === 'in' && !!user && user.role === 'viewer');
     renderAccountBar();
     render();
+
+    // Tell the planner. Its own probe is refused with a 401 until somebody is
+    // signed in, and it deliberately does not fall back to localStorage on
+    // that answer — edits that looked saved but reached nobody would be worse
+    // than none. Announced from here because this is the one place the session
+    // changes, so a sign-out reaches it too.
+    document.dispatchEvent(new CustomEvent('soiree:session', {
+      detail: { signedIn: next === 'in', role: user && user.role }
+    }));
   }
 
   /* Is there an API behind this page at all?

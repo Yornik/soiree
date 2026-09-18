@@ -26,7 +26,15 @@ const API_METRICS_PORT = API_PORT + 1000;
 // The throwaway PostgreSQL the API instance talks to, published on loopback.
 const PG_PORT = Number(process.env.SOIREE_E2E_PG_PORT || PORT + 2000);
 
+// The first admin, seeded into the API instance by SOIREE_BOOTSTRAP_*. The
+// plan API is behind a session, so anything reaching it directly — a raw
+// request context rather than a page — has to sign in like a browser would.
+const ADMIN_EMAIL = 'ada@example.test';
+const ADMIN_PASSWORD = 'rehearsal-dinner-e2e';
+
 module.exports = {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
   PORT,
   ALT_PORT,
   API_PORT,

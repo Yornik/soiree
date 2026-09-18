@@ -1389,14 +1389,43 @@
   function connect(attempt) {
     if (typeof fetch !== 'function' || typeof Promise !== 'function') return;
     api('GET', '/plan').then(function (res) {
-      if (res.status === 200 && res.body) { adopt(res.body); return; }
-      if (res.status === 404) return;
+      if (res.status === 200 && res.body) { announceAPI(true); adopt(res.body); return; }
+      // 404 is final: with no database those paths are never registered.
+      if (res.status === 404) { announceAPI(false); return; }
+      // 401 is not "no API" — it is an API that wants a session. Falling back
+      // to localStorage here would be the worst of both: edits would look
+      // saved, live in this browser only, and never reach the plan everybody
+      // else is reading. So hold, and connect for real once auth.js reports a
+      // sign-in.
+      if (res.status === 401) { announceAPI(true); return; }
       if (attempt < 4) {
         setTimeout(function () { connect(attempt + 1); },
           Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, attempt)));
       }
     });
   }
+
+  /* Tell auth.js whether this deployment has an API at all.
+   *
+   * It has its own question to ask — whether anybody is signed in — and with
+   * no database there is nobody to sign in as, so a second probe would be a
+   * request whose answer is already known. Latched on window and announced as
+   * an event, because auth.js may have finished loading either before or after
+   * this resolves. */
+  function announceAPI(available) {
+    window.soiree = window.soiree || {};
+    if (window.soiree.apiAvailable === available) return;
+    window.soiree.apiAvailable = available;
+    document.dispatchEvent(new CustomEvent('soiree:api', { detail: { available: available } }));
+  }
+
+  /* A session arrived after we were refused. Connect properly now.
+   *
+   * Signing in is the one thing that changes the answer to a 401, so this is
+   * the only place a refused probe is retried. */
+  document.addEventListener('soiree:session', function (e) {
+    if (e && e.detail && e.detail.signedIn) connect(0);
+  });
 
   /* Take the plan the origin sent.
    *

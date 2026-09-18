@@ -48,6 +48,7 @@ const {
   reloadSharedPlanner,
   resetPlan,
   tagLine,
+  apiAuth,
 } = require('./helpers');
 
 test.use({ baseURL: API_URL });
@@ -57,6 +58,8 @@ test.use({ baseURL: API_URL });
 test.describe.configure({ mode: 'serial' });
 
 test.beforeEach(async ({ request }) => {
+  // 404 is the no-database answer and the reason to skip. A 401 is the
+  // opposite: the API is there and wants a session, which resetPlan gets.
   const res = await request.get(`${API_URL}/api/v1/plan`);
   test.skip(res.status() === 404, 'this instance has no database — Docker was not available');
   await resetPlan(request);
@@ -261,6 +264,7 @@ test("someone else's edit to the same line is merged, not overwritten", async ({
   // Somebody else, editing a different column of the same line. This browser's
   // revision is now one behind, which is what the next write will discover.
   const theirs = await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
     data: { revision: stored.revision, note: 'Deposit already wired' },
   });
   expect(theirs.status()).toBe(200);

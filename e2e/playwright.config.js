@@ -53,8 +53,9 @@ const {
 // the same shape as the fixture passwords in the Go tests. Long enough to
 // clear the server's twelve-character minimum, which refuses anything shorter
 // at startup rather than creating an account nobody can use.
-const E2E_ADMIN = 'ada@example.test';
-const E2E_ADMIN_PASSWORD = 'rehearsal-dinner-e2e';
+// Defined in servers.js so the specs that have to sign in read the same pair
+// rather than a second copy that drifts.
+const { ADMIN_EMAIL: E2E_ADMIN, ADMIN_PASSWORD: E2E_ADMIN_PASSWORD } = require('./servers');
 
 const repoRoot = path.resolve(__dirname, '..');
 const binary = path.join(__dirname, '.tmp', 'soiree');
