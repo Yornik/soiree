@@ -1262,7 +1262,10 @@ device already holds on every load so that a restored database gets its devices
 back. `web/src/sw.js` handles `push` and `notificationclick`: it always shows a
 notification, because the subscription is `userVisibleOnly`, replaces the
 previous digest rather than stacking on it by reusing the `tag`, and brings an
-open planner to the front rather than opening a second one. The payload's four
+open planner to the front rather than opening a second one — without navigating
+it, when it is already the planner: every screen is a fragment of one page, the
+digest opens `/`, and navigating from a fragment to `/` is a reload that takes
+somebody's half-typed form with it. The payload's four
 fields (`title`, `body`, `url`, `tag`) are a contract between the server and
 that handler: adding a field is safe, renaming one is not.
 

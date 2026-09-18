@@ -81,7 +81,15 @@ self.addEventListener('notificationclick', function (event) {
         // reaches waitUntil and the tap does nothing at all: no focus, no new
         // window, no error anybody sees. Bringing the tab forward at the wrong
         // page is a far better answer than a notification that ignores you.
-        if (w.url !== url && 'navigate' in w) {
+        //
+        // Compared without the fragment when the notification names none. The
+        // planner is one page and its screens are fragments (/#/account,
+        // /#/admin), while the digest opens "/": to a plain comparison every
+        // planner not sitting exactly at "/" is somewhere else, and navigating
+        // it there is a full reload — the screen somebody was on gone, and
+        // whatever they were half way through typing with it.
+        var here = url.indexOf('#') === -1 ? w.url.split('#')[0] : w.url;
+        if (here !== url && 'navigate' in w) {
           return w.navigate(url).then(
             function (moved) { return (moved || w).focus(); },
             function () { return w.focus(); }
