@@ -19,6 +19,20 @@ import (
 type Config struct {
 	ListenAddr string
 
+	// MetricsAddr is a listener of its own, carrying /metrics and nothing else.
+	//
+	// A separate port rather than a path on the public listener because the
+	// ingress route has no path constraint: anything the main listener serves
+	// is world-readable. The exposition carries no personal data, but
+	// soiree_build_info hands out the exact version and commit, which is free
+	// reconnaissance. A second port is the shape a ServiceMonitor expects
+	// anyway, and it is the only version of "private" that does not depend on
+	// somebody remembering to write a path exclusion.
+	//
+	// The probes deliberately stay on the main listener: kubelet reaches the
+	// container's main port, and the deployment manifests already point there.
+	MetricsAddr string
+
 	// DatabaseURL is the PostgreSQL DSN. Empty is a supported configuration
 	// rather than a missing one: with no DSN the binary serves the frontend
 	// alone and the API is not mounted at all, which is exactly what a bare
@@ -118,6 +132,7 @@ func (c Config) ClientJSON() (string, error) {
 func Load() (Config, error) {
 	c := Config{
 		ListenAddr:        env("SOIREE_LISTEN_ADDR", ":8080"),
+		MetricsAddr:       env("SOIREE_METRICS_ADDR", ":9090"),
 		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		EventName:         env("SOIREE_EVENT_NAME", "A Celebration"),
 		Tagline:           env("SOIREE_EVENT_TAGLINE", ""),
@@ -160,6 +175,15 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("SOIREE_EVENT_DATE must be RFC3339 with a timezone (e.g. 2027-02-21T00:00:00Z), got %q", c.EventDate)
 		}
 		c.EventDate = t.UTC().Format(time.RFC3339)
+	}
+
+	// The whole point of the second listener is that the public one cannot
+	// reach it. Exact string equality only: :8080 and 0.0.0.0:8080 are the same
+	// socket and this will not catch that, but the case worth catching is the
+	// operator who set one variable and forgot the other, and the alternative
+	// is a bind failure at startup that names a port without saying why.
+	if c.MetricsAddr == c.ListenAddr {
+		return Config{}, fmt.Errorf("SOIREE_METRICS_ADDR must differ from SOIREE_LISTEN_ADDR, or /metrics is served on the public port after all; both are %q", c.ListenAddr)
 	}
 
 	if len(c.Currency) != 3 {

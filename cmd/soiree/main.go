@@ -127,6 +127,20 @@ func main() {
 		IdleTimeout:       httpd.IdleTimeout,
 	}
 
+	// The metrics exposition, on a port of its own. The public ingress route
+	// carries no path constraint, so /metrics on the main listener would be
+	// world-readable and soiree_build_info would name the running commit to
+	// anyone who asked. The probes stay on the main listener, because that is
+	// the port kubelet reaches.
+	ms := &http.Server{
+		Addr:              cfg.MetricsAddr,
+		Handler:           srv.MetricsHandler(),
+		ReadHeaderTimeout: httpd.ReadHeaderTimeout,
+		ReadTimeout:       httpd.ReadTimeout,
+		WriteTimeout:      httpd.WriteTimeout,
+		IdleTimeout:       httpd.IdleTimeout,
+	}
+
 	// Housekeeping: expired sessions and spent links. Tied to the signal
 	// context, so it stops when the process is asked to.
 	if accounts != nil {
@@ -136,6 +150,7 @@ func main() {
 	go func() {
 		log.Info("soiree listening",
 			"addr", cfg.ListenAddr,
+			"metricsAddr", cfg.MetricsAddr,
 			"version", version,
 			"commit", commit,
 			"event", cfg.EventName,
@@ -149,12 +164,26 @@ func main() {
 		}
 	}()
 
+	// A metrics port that cannot bind takes the process down with it, exactly
+	// as the main one does. The alternative is a pod that looks healthy while
+	// every scrape fails, which is the failure nobody notices until they need
+	// the graph.
+	go func() {
+		if err := ms.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("metrics server stopped", "err", err)
+			stop()
+		}
+	}()
+
 	<-ctx.Done()
 	log.Info("shutting down")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := hs.Shutdown(shutdownCtx); err != nil {
+	// Both, then decide. Letting the first failure skip the second would leave
+	// the metrics listener holding its connections open for the whole of the
+	// termination grace period.
+	if err := errors.Join(hs.Shutdown(shutdownCtx), ms.Shutdown(shutdownCtx)); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)
 	}

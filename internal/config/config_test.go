@@ -23,6 +23,34 @@ func TestLoadDefaults(t *testing.T) {
 	if c.DemoData {
 		t.Error("DemoData should be off unless explicitly enabled")
 	}
+	if c.ListenAddr != ":8080" {
+		t.Errorf("ListenAddr = %q, want :8080", c.ListenAddr)
+	}
+	// The exposition has to land somewhere other than the public port without
+	// anyone configuring it, or the default deployment is the leaky one.
+	if c.MetricsAddr != ":9090" {
+		t.Errorf("MetricsAddr = %q, want :9090", c.MetricsAddr)
+	}
+}
+
+func TestMetricsAddrIsSeparateFromTheListenAddr(t *testing.T) {
+	t.Setenv("SOIREE_METRICS_ADDR", "127.0.0.1:9999")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.MetricsAddr != "127.0.0.1:9999" {
+		t.Errorf("MetricsAddr = %q", c.MetricsAddr)
+	}
+
+	// Serving both on one socket puts /metrics back on the public route, which
+	// is the thing the second listener exists to prevent. It would also simply
+	// fail to bind, naming a port without saying why.
+	t.Setenv("SOIREE_LISTEN_ADDR", ":9999")
+	t.Setenv("SOIREE_METRICS_ADDR", ":9999")
+	if _, err := Load(); err == nil {
+		t.Error("Load() accepted the metrics listener on the public port")
+	}
 }
 
 func TestLoadReadsEnv(t *testing.T) {
