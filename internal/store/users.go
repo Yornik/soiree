@@ -140,3 +140,30 @@ func nullString(s string) *string {
 	}
 	return &s
 }
+
+// NotifiableAdmins returns the email addresses of every admin who can actually
+// receive mail, ordered for a stable recipient list.
+//
+// Only `active` accounts: an `invited` admin has never set a password and may
+// not be a real address yet, and a `disabled` one has had their access removed
+// on purpose — mailing either would be sending the event's finances to someone
+// who is not currently trusted with them.
+//
+// Resolved at send time rather than configured, so an admin added next month
+// is on the next digest without anybody editing a deployment.
+func (s *Store) NotifiableAdmins(ctx context.Context) ([]string, error) {
+	rows, err := queryAll[struct {
+		Email string `db:"email"`
+	}](ctx, s.pool, "users",
+		`SELECT email FROM users
+		  WHERE role = 'admin' AND status = 'active'
+		  ORDER BY lower(email)`)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Email)
+	}
+	return out, nil
+}

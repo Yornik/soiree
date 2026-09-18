@@ -63,6 +63,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Yornik/soiree/internal/mailer"
@@ -228,13 +229,24 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
+	to, err := s.recipients(ctx)
+	if err != nil {
+		return err
+	}
+	if len(to) == 0 {
+		// Every admin could have been disabled since startup. Nothing to do,
+		// and no claim, so the digest resumes when somebody can receive it.
+		s.log.Warn("deadline digest has nothing due to nobody: no active admin and no configured recipient")
+		return nil
+	}
+
 	msg, err := Render(digest)
 	if err != nil {
 		return err
 	}
-	msg.To = s.cfg.To
+	msg.To = to
 
-	claimed, err := claimPeriod(ctx, conn, key, now, len(s.cfg.To), digest.Count())
+	claimed, err := claimPeriod(ctx, conn, key, now, len(to), digest.Count())
 	if err != nil {
 		return err
 	}
@@ -267,7 +279,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 	}
 
 	s.log.Info("reminder digest sent",
-		"period", key, "recipients", len(s.cfg.To), "items", digest.Count(), "overdue", digest.Overdue())
+		"period", key, "recipients", len(to), "items", digest.Count(), "overdue", digest.Overdue())
 	return nil
 }
 
@@ -310,10 +322,6 @@ func Start(ctx context.Context, st *store.Store, log *slog.Logger) (func(), erro
 		log.Warn("deadline reminders are on but SMTP is not configured; no digest will be sent",
 			"missing", "SOIREE_SMTP_HOST and SOIREE_SMTP_FROM")
 		return noop, nil
-	case len(cfg.To) == 0:
-		log.Warn("deadline reminders are on but there are no recipients; no digest will be sent",
-			"missing", "SOIREE_REMINDER_TO")
-		return noop, nil
 	}
 
 	log.Info("deadline reminders on",
@@ -321,4 +329,35 @@ func Start(ctx context.Context, st *store.Store, log *slog.Logger) (func(), erro
 		"recipients", len(cfg.To), "timezone", cfg.Zone)
 
 	return New(st, mailer.New(smtp), cfg, log).Start(ctx), nil
+}
+
+// recipients is every active admin, plus anything SOIREE_REMINDER_TO names.
+//
+// Resolved per send rather than at startup, so an admin added or disabled
+// between digests is respected without restarting anything. The static list
+// stays supported for two cases the database cannot answer: a deployment with
+// no accounts at all, and somebody who should read the digest without being
+// given a login to the event's finances.
+//
+// One message to everyone rather than one each. The ledger then still records
+// a single claim per period, which is what makes a restart mid-send unable to
+// mail anybody twice; sending individually would need the claim keyed per
+// recipient to keep that property.
+func (s *Service) recipients(ctx context.Context) ([]string, error) {
+	admins, err := s.store.NotifiableAdmins(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve admin recipients: %w", err)
+	}
+
+	seen := make(map[string]bool, len(admins)+len(s.cfg.To))
+	out := make([]string, 0, len(admins)+len(s.cfg.To))
+	for _, addr := range append(admins, s.cfg.To...) {
+		key := strings.ToLower(strings.TrimSpace(addr))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, addr)
+	}
+	return out, nil
 }

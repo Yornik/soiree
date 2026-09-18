@@ -493,3 +493,63 @@ func TestBootstrapAdminWithoutAPasswordStaysInvited(t *testing.T) {
 		t.Error("a password was set when none was supplied")
 	}
 }
+
+// The digest goes to whoever is an admin at send time, so this query is the
+// recipient list. Who it leaves out matters as much as who it includes: the
+// mail carries the event's finances.
+func TestNotifiableAdmins(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	mk := func(email string, role store.Role, status store.UserStatus) {
+		t.Helper()
+		u, err := s.CreateUser(ctx, store.User{Email: email, Role: role, Status: status})
+		if err != nil {
+			t.Fatalf("CreateUser(%s): %v", email, err)
+		}
+		if u.Status != status {
+			t.Fatalf("CreateUser(%s) status = %q, want %q", email, u.Status, status)
+		}
+	}
+
+	mk("grace@example.test", store.RoleAdmin, store.StatusActive)
+	mk("ada@example.test", store.RoleAdmin, store.StatusActive)
+	mk("linus@example.test", store.RoleAdmin, store.StatusInvited)  // never set a password
+	mk("mary@example.test", store.RoleAdmin, store.StatusDisabled)  // access removed on purpose
+	mk("editor@example.test", store.RoleEditor, store.StatusActive) // not an admin
+	mk("viewer@example.test", store.RoleViewer, store.StatusActive)
+
+	got, err := s.NotifiableAdmins(ctx)
+	if err != nil {
+		t.Fatalf("NotifiableAdmins(): %v", err)
+	}
+
+	want := []string{"ada@example.test", "grace@example.test"} // ordered by lower(email)
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v (order matters for a stable recipient list)", got, want)
+		}
+	}
+}
+
+func TestNotifiableAdminsIsEmptyWithoutOne(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	if _, err := s.CreateUser(ctx, store.User{
+		Email: "editor@example.test", Role: store.RoleEditor, Status: store.StatusActive,
+	}); err != nil {
+		t.Fatalf("CreateUser(): %v", err)
+	}
+
+	got, err := s.NotifiableAdmins(ctx)
+	if err != nil {
+		t.Fatalf("NotifiableAdmins(): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v, want none", got)
+	}
+}
