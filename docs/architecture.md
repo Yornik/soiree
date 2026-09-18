@@ -154,6 +154,28 @@ holds, and connects properly when `auth.js` announces a sign-in on
 has no time to wait on a promise, and the whole point of a deferred write is
 that the round trip is not on the interaction path.
 
+### Signing out forgets the plan
+
+The copy in `localStorage` is a ledger of people's names against money, on
+whatever computer somebody used. A sign-out somebody asked for removes it —
+`forgetPlan()` clears the key, empties `state`, and puts the page back to one
+that has never met the server, so the next sign-in takes `adopt()` and the
+server's plan rather than a merge against a shadow of something it no longer
+holds. Other tabs of the same browser hear about it through the `storage` event
+and let go as well; otherwise the first one to save would write it straight
+back.
+
+It is the one action in the page that can destroy an edit, so it goes in a fixed
+order. `auth.js` asks `window.soiree.beforeSignOut()`, which flushes the
+debounce, gives the write loop a few seconds, and answers with the number of
+changes that still exist nowhere else — waiting to be sent, or refused and
+parked. Above zero, the person is asked. Then the server is told, and only a
+`204` counts: wiping the page while saying "signed out" over a cookie that still
+works would be a lie on exactly the computer where it matters.
+
+A session that merely *ends* is the opposite case and leaves everything alone —
+see below. The two are told apart by the `reason` on `soiree:session`.
+
 ### A session that ends while the page is open
 
 The first request is not the only one that can be refused. A session lasts
@@ -409,10 +431,11 @@ Open, in the order they matter:
   English; per-recipient bodies would mean one send per language.
 - **A standing control for reminders.** See *Web push*: the offer is the only
   way in and there is no way out.
-- **What a signed-out browser shows.** The page draws its cached copy of the
-  plan for whoever opens it, and signing out does not clear that copy. That is
-  what working offline means, and it is also a ledger of names against money
-  left on a shared computer. It wants a decision rather than a default.
+- **What an expired session leaves behind.** Signing out removes this browser's
+  copy of the plan. A session that ends by itself does not, because the unsent
+  edits are in that copy — so a tab abandoned on a shared computer still shows
+  the ledger a week later. Clearing it after the absolute session lifetime,
+  when there is provably nobody coming back to it, would close that.
 - **A way to invoke the data-protection functions.** Export, erasure and purge
   exist and nothing calls them. An admin-only route or a subcommand, either
   would do; what there must not be is a documented obligation that can only be

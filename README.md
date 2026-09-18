@@ -250,6 +250,9 @@ What works end to end:
 - **Live sync.** The page holds one `EventSource` on `GET /api/v1/events`. A
   second person's edit arrives on its own, and is merged three ways against the
   copy both sides started from, so nothing anybody is typing is overwritten.
+- **Signing out takes the plan off that browser.** The offline copy is a ledger
+  of names against money; a sign-out removes it from every tab, after trying to
+  send anything unsent and asking before discarding what it could not.
 - **A session that ends while the page is open** — a week idle, a disabled
   account — stops the page asking, keeps every edit in the browser, opens the
   sign-in screen with a line saying why, and sends those edits once the person

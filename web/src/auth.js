@@ -96,6 +96,8 @@
       'role.editor': 'editor',
       'role.viewer': 'viewer, read-only',
       'back': 'Back to the planner',
+      'signout.unsent': 'Some of your changes have not reached the server. Signing out removes this browser\'s copy of the planner, and those changes with it. Sign out anyway?',
+      'signout.failed': 'Signing out did not reach the server, so you are still signed in. Check your connection and try again.',
       'f.email': 'Email',
       'f.password': 'Password',
       'login.passkey': 'Use a passkey',
@@ -218,6 +220,8 @@
       'role.editor': 'bewerker',
       'role.viewer': 'lezer, alleen lezen',
       'back': 'Terug naar de planner',
+      'signout.unsent': 'Een deel van je wijzigingen heeft de server niet bereikt. Afmelden verwijdert de kopie van de planner in deze browser, en die wijzigingen ook. Toch afmelden?',
+      'signout.failed': 'Het afmelden heeft de server niet bereikt, dus je bent nog aangemeld. Controleer je verbinding en probeer het opnieuw.',
       'f.email': 'E-mailadres',
       'f.password': 'Wachtwoord',
       'login.passkey': 'Een passkey gebruiken',
@@ -340,6 +344,8 @@
       'role.editor': 'penyunting',
       'role.viewer': 'pembaca, hanya baca',
       'back': 'Kembali ke perencana',
+      'signout.unsent': 'Sebagian perubahanmu belum sampai ke server. Keluar akan menghapus salinan perencana di browser ini, termasuk perubahan itu. Tetap keluar?',
+      'signout.failed': 'Permintaan keluar tidak sampai ke server, jadi kamu masih masuk. Periksa koneksimu lalu coba lagi.',
       'f.email': 'Email',
       'f.password': 'Kata sandi',
       'login.passkey': 'Pakai kunci sandi',
@@ -736,7 +742,7 @@
 
   function isAdmin() { return state === 'in' && user && user.role === 'admin'; }
 
-  function setSession(next, who) {
+  function setSession(next, who, reason) {
     state = next;
     user = who || null;
 
@@ -760,7 +766,7 @@
     // than none. Announced from here because this is the one place the session
     // changes, so a sign-out reaches it too.
     document.dispatchEvent(new CustomEvent('soiree:session', {
-      detail: { signedIn: next === 'in', role: user && user.role }
+      detail: { signedIn: next === 'in', role: user && user.role, reason: reason || '' }
     }));
   }
 
@@ -1012,12 +1018,45 @@
     return '';
   }
 
+  /* Signing out takes this browser's copy of the plan with it (forgetPlan in
+   * app.js), because that copy is a ledger of names against money and this may
+   * not be the reader's own computer. So it is the one action here that can
+   * destroy something, and it goes in a fixed order:
+   *
+   *   1. The planner is asked what has not reached the server yet. It flushes
+   *      and waits a few seconds first, so the usual answer is nothing.
+   *   2. Anything still unsent is put to the person as a question.
+   *   3. The server is told, and only a 204 counts. An unreachable server
+   *      leaves the cookie valid, and wiping the page while saying "signed
+   *      out" over a session that still works would be a lie on exactly the
+   *      computer where it matters.
+   *   4. Then the session is announced as ended *by request*, which is what
+   *      tells the planner to forget rather than to hold on.
+   */
+  var signingOut = false;
+
   function signOut() {
-    request('POST', '/auth/logout').then(function () {
-      // 204 either way, and a cookie the server has already cleared. Ask again
-      // rather than assuming: the answer decides what the bar draws next.
-      setSession('out');
-      goto('');
+    if (signingOut) return;
+    signingOut = true;
+    var asked = (window.soiree && typeof window.soiree.beforeSignOut === 'function')
+      ? window.soiree.beforeSignOut() : Promise.resolve(0);
+    asked.then(function (unsent) {
+      if (unsent > 0 && !window.confirm(t('signout.unsent'))) {
+        signingOut = false;
+        return;
+      }
+      request('POST', '/auth/logout').then(function (res) {
+        signingOut = false;
+        if (res.status !== 204) {
+          window.alert(t('signout.failed'));
+          return;
+        }
+        setSession('out', null, 'signout');
+        // The sign-in screen, not the planner: what is behind it now is an
+        // empty ledger, and "nothing in the ledger yet" is not true of this
+        // event — it is only true of this browser.
+        goto('login');
+      });
     });
   }
 

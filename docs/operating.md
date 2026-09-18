@@ -101,14 +101,21 @@ directly, with the bootstrap address and password. The screens live in the URL
 fragment, so they can be linked to — `/#/login`, `/#/account` for your own
 passkeys, and `/#/admin` for everybody's accounts.
 
-Be clear about what the page shows before anybody signs in, because it is not
-a locked door. The server refuses the plan without a session, so a browser that
-has never signed in has nothing to show and draws an empty planner. A browser
-that *has* signed in before keeps a copy of the plan in `localStorage` — that
-copy is what lets the page paint at once and work offline — and **signing out
-does not remove it**. The page draws that copy for whoever opens it next. On a
-computer other people use, clear the site's data after signing out, the same as
-for any application that works offline.
+Be clear about what the page keeps, because this is a ledger of names against
+money. While somebody is signed in, the browser holds a copy of the plan in
+`localStorage`; that copy is what lets the page paint at once and work offline.
+
+- **Signing out removes it**, in every tab of that browser, and leaves the
+  sign-in screen. If something had not reached the server yet the page tries to
+  send it first, and asks before discarding what it could not. Signing out
+  needs the server: offline, it says so and leaves the person signed in, rather
+  than claiming a sign-out over a session that still works.
+- **A session that merely ends does not.** Seven idle days, or an admin
+  disabling the account: the copy stays, because that person's unsent edits are
+  in it and they are coming back. Whoever opens that browser next sees it. On a
+  computer other people use, sign out rather than closing the tab.
+- A browser that has never signed in has nothing to show: the server refuses
+  the plan without a session, and the page draws an empty planner.
 
 **Replace the bootstrap password once you are in.** It has been sitting in an
 environment variable. On the accounts screen, *Send a password link* on your

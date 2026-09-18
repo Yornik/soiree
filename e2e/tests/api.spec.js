@@ -754,3 +754,72 @@ test('a reopened tab that was edited while signed out does not overwrite a week 
     .toEqual([['Venue deposit', '750.00', 'The Orangery', '2600.00']]);
   await expect(budgetRow(page, 0).unit).toHaveValue('2600');
 });
+
+/*
+ * Signing out takes this browser's copy of the plan with it.
+ *
+ * That copy is what lets the page paint at once and work offline, and it is
+ * also a ledger of names against money in localStorage on whatever computer
+ * somebody used. An ended session leaves it alone — the specs above depend on
+ * that, because the unsent edit is in it. A sign-out somebody asked for does
+ * not.
+ */
+const signOutButton = (page) => page.locator('#accountActs button', { hasText: 'Sign out' });
+
+test('signing out removes this browser\'s copy of the plan, and signing in brings it back from the server', async ({ page, request }) => {
+  await openWithOwnSession(page, request);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+  expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toContain('Venue deposit');
+
+  await signOutButton(page).click();
+  await expect(page.locator('#authScreen')).toBeVisible();
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+
+  // Gone from storage, and gone from the page behind the sign-in screen.
+  expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toBeNull();
+  // Closing the tab must not put it back: pagehide is when the planner saves.
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toBeNull();
+
+  await page.goto('/');
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+  await expect(page.locator('body')).toHaveClass(/is-empty/);
+  expect(await page.content()).not.toContain('Venue deposit');
+
+  // Nothing was lost: it was only ever a copy.
+  await page.goto('/#/login');
+  await signInThroughTheForm(page, request);
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).item).toHaveValue('Venue deposit');
+  await expect(budgetRow(page, 0).paid).toHaveValue('500');
+});
+
+test('signing out with changes that never reached the server asks first', async ({ page, request }) => {
+  await openWithOwnSession(page, request);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  // The origin stops answering writes, as it does on a train.
+  await page.route('**/api/v1/budget-items/**', (route) => route.abort());
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+
+  // Declined: still signed in, and the edit is still here.
+  let asked = '';
+  page.once('dialog', (d) => { asked = d.message(); d.dismiss(); });
+  await signOutButton(page).click();
+  await expect.poll(() => asked).toContain('have not reached the server');
+  await expect(page.locator('body')).toHaveClass(/signed-in/);
+  await expect(budgetRow(page, 0).paid).toHaveValue('750');
+  expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toContain('750');
+
+  // Accepted: it is their planner and their decision.
+  page.once('dialog', (d) => d.accept());
+  await signOutButton(page).click();
+  await expect(page.locator('#authScreen')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toBeNull();
+  expect((await apiPlan(request)).budgetItems.map((i) => i.paid)).toEqual(['500.00']);
+});

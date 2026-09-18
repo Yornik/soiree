@@ -761,6 +761,9 @@
       // A no-op until the probe has found an API, so the local-only
       // deployment never touches the network again after it.
       Sync.push();
+    },
+    clear: function () {
+      try { localStorage.removeItem(this.key); } catch (e) { /* storage unavailable */ }
     }
   };
 
@@ -1563,6 +1566,92 @@
     document.dispatchEvent(new CustomEvent('soiree:session-check'));
   }
 
+  /* ---------- Signing out ----------
+   * The copy of the plan this browser keeps is what lets the page paint at
+   * once and work offline. It is also a ledger of people's names against
+   * money, in localStorage, on whatever computer somebody happened to use — so
+   * signing out takes it away again.
+   *
+   * Only a sign-out somebody asked for. A session that merely ENDED leaves
+   * everything where it is: that person is coming back, their unsent edits are
+   * in that copy, and "what you changed is safe in this browser" is a promise
+   * the sign-in screen has just made them.
+   *
+   * Which is also the hazard here, from the other side: signing out discards
+   * whatever has not reached the server. So auth.js asks first, through
+   * beforeSignOut() — the debounce is flushed, the write loop gets a few
+   * seconds to finish, and what comes back is the number of changes that still
+   * exist nowhere else. Anything above zero is put to the person as a
+   * question rather than decided for them.
+   */
+  var forgotten = false;
+
+  function unsentCount() {
+    if (!apiMode || !shadow) return 0;
+    // Waiting to be sent, plus refused by the server and parked: both are
+    // edits that exist in this browser and nowhere else.
+    return planOps().length + Object.keys(blocked).length;
+  }
+
+  function beforeSignOut() {
+    flushSave();
+    if (!apiMode || sessionGone) return Promise.resolve(unsentCount());
+    return new Promise(function (resolve) {
+      var deadline = Date.now() + 4000;
+      (function wait() {
+        // Settled is either "nothing left to send" or "gave up for now": a
+        // retry timer means the origin is not answering, and waiting out its
+        // backoff would hold somebody at the door of a shared computer.
+        var settled = !Sync.running && !saveTimer && (!Sync.queued || Sync.timer);
+        if (settled || Date.now() > deadline) { resolve(unsentCount()); return; }
+        setTimeout(wait, 100);
+      })();
+    });
+  }
+
+  function forgetPlan() {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    Store.clear();
+
+    // Column widths are how this person likes their table and say nothing
+    // about anybody. Row heights are keyed by the ids of budget lines, so they
+    // go with the lines.
+    var widths = state.colWidths;
+    state = emptyState();
+    state.colWidths = widths;
+
+    // Back to a page that has never met the server. The next sign-in then
+    // takes connect() and adopt() — the plan as the server has it — rather
+    // than a merge against a shadow of something this browser no longer holds.
+    shadow = null;
+    apiMode = false;
+    dirty = false;
+    hadSavedCopy = false;
+    blocked = {};
+    idMap = {};
+    pendingRefresh = {};
+    loaded = JSON.parse(JSON.stringify(state));
+    Sync.queued = false;
+    Sync.failures = 0;
+    forgotten = true;
+
+    setSticky('');
+    renderAll();
+  }
+
+  window.soiree = window.soiree || {};
+  window.soiree.beforeSignOut = beforeSignOut;
+
+  // Another tab signed out. This one still holds the plan in memory and would
+  // write it straight back the next time it saved or was closed, so it lets go
+  // of it too, and asks auth.js to look at the session — which is gone.
+  window.addEventListener('storage', function (e) {
+    if (!e || e.key !== STORAGE_KEY || e.newValue !== null || forgotten) return;
+    if (apiMode) haltSync();
+    forgetPlan();
+    doubtSession();
+  });
+
   document.addEventListener('soiree:session', function (e) {
     var signedIn = !!(e && e.detail && e.detail.signedIn);
     if (!signedIn) {
@@ -1570,6 +1659,7 @@
       // this is the ordinary "nobody is signed in yet" and connect() is
       // already holding.
       if (apiMode) haltSync();
+      if (e && e.detail && e.detail.reason === 'signout') forgetPlan();
       return;
     }
 
@@ -1958,9 +2048,13 @@
 
   function flushSave() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    // Signed out and nothing typed since: there is nothing to keep, and
+    // writing the empty planner back would only put the key there again.
+    if (forgotten) return;
     Store.write(state);
   }
   function save() {
+    forgotten = false;
     // Noted before the write, not after: connect() needs to know whether this
     // browser has edits of its own before it decides whether the plan it just
     // fetched can simply replace what is on screen.
