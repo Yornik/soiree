@@ -154,8 +154,8 @@ func send(t *testing.T, up uploadJSON, body []byte) int {
 	if err != nil {
 		t.Fatalf("PUT: %v", err)
 	}
-	defer res.Body.Close()
-	io.Copy(io.Discard, res.Body)
+	defer func() { _ = res.Body.Close() }()
+	_, _ = io.Copy(io.Discard, res.Body)
 	return res.StatusCode
 }
 
@@ -186,7 +186,7 @@ func (f *filesFixture) fetch(t *testing.T, id uuid.UUID, query string, cookie *h
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	body, _ := io.ReadAll(res.Body)
 	return res, body
 }

@@ -71,8 +71,8 @@ func put(t *testing.T, up objstore.Upload, headers map[string]string, body []byt
 	if err != nil {
 		t.Fatalf("PUT: %v", err)
 	}
-	defer res.Body.Close()
-	io.Copy(io.Discard, res.Body)
+	defer func() { _ = res.Body.Close() }()
+	_, _ = io.Copy(io.Discard, res.Body)
 	return res.StatusCode
 }
 
@@ -103,7 +103,7 @@ func TestBucketRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	got, _ := io.ReadAll(res.Body)
 	if res.StatusCode != http.StatusOK || !bytes.Equal(got, body) {
 		t.Fatalf("GET = %d, %q", res.StatusCode, got)

@@ -166,7 +166,7 @@ func (s *Store) Head(ctx context.Context, key string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	switch {
 	case res.StatusCode == http.StatusNotFound:
 		return 0, ErrNotFound
@@ -187,7 +187,7 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode/100 != 2 && res.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("objstore: DELETE %s: %s", key, res.Status)
 	}
