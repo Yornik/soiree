@@ -19,6 +19,7 @@ import (
 	"github.com/Yornik/soiree/internal/httpd"
 	"github.com/Yornik/soiree/internal/mailer"
 	"github.com/Yornik/soiree/internal/migrate"
+	"github.com/Yornik/soiree/internal/objstore"
 	"github.com/Yornik/soiree/internal/reminders"
 	"github.com/Yornik/soiree/internal/store"
 	"github.com/Yornik/soiree/web"
@@ -136,6 +137,34 @@ func main() {
 		srv = srv.WithAuth(accounts)
 	}
 
+	// Attachments need both halves: the bucket for the bytes, the database for
+	// everything else about a file. With either missing the routes are simply
+	// not mounted, and config has already kept the control out of the page.
+	var files *httpd.Attachments
+	if cfg.Attachments.Enabled() && st != nil {
+		bucket, err := objstore.New(objstore.Config{
+			Endpoint:        cfg.Attachments.Endpoint,
+			Region:          cfg.Attachments.Region,
+			Bucket:          cfg.Attachments.Bucket,
+			AccessKeyID:     cfg.Attachments.AccessKeyID,
+			SecretAccessKey: cfg.Attachments.SecretAccessKey,
+		})
+		if err != nil {
+			log.Error("attachments are misconfigured", "err", err)
+			os.Exit(1)
+		}
+		files = httpd.NewAttachments(st, bucket, cfg.Attachments.MaxBytes, cfg.Attachments.TotalBytes, log)
+		srv = srv.WithAttachments(files)
+		// Browsers talk to the bucket directly. The origin is logged because a
+		// deployment behind a Content-Security-Policy has to allow it in
+		// connect-src, and an upload blocked by CSP fails in the browser with
+		// nothing in this log to explain it.
+		log.Info("attachments enabled",
+			"browsers_connect_to", bucket.Origin(),
+			"max_file_mb", cfg.Attachments.MaxBytes>>20,
+			"total_mb", cfg.Attachments.TotalBytes>>20)
+	}
+
 	hs := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           srv.Handler(),
@@ -168,6 +197,10 @@ func main() {
 	// context, so it stops when the process is asked to.
 	if accounts != nil {
 		go accounts.Sweep(ctx)
+	}
+	// And abandoned uploads, and objects whose row is gone.
+	if files != nil {
+		go files.Sweep(ctx)
 	}
 
 	// The deadline digest. Off unless SOIREE_REMINDER_ENABLED is true, and a

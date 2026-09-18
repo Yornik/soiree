@@ -90,6 +90,9 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	register(api, phaseEntity(s.store, currency))
 	register(api, programmeEntity(s.store, currency))
 	api.HandleFunc("PATCH /settings", patchSettings(s.store, currency))
+	if s.files != nil {
+		s.files.route(api)
+	}
 
 	// Everything above is guarded as one subtree rather than per route.
 	//

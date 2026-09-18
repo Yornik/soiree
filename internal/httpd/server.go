@@ -52,6 +52,9 @@ type Server struct {
 
 	// robots is rendered once from the configuration, like the shell.
 	robots *Asset
+
+	// files is the attachments surface, nil when no bucket is configured.
+	files *Attachments
 }
 
 // WithAuth attaches the accounts, sessions and roles surface.
