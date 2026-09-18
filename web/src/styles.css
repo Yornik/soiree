@@ -628,7 +628,11 @@ table.budget thead th:first-child { background: var(--tint); z-index: 3; }
    table has been scrolled, and the field gives up the width the button takes
    rather than running underneath it. */
 td.has-files { position: relative; }
-td.has-files textarea, td.has-files input[type="text"] { padding-right: 46px; }
+/* The field is made narrower, not padded. Padding left the field's own right
+   edge under the button, and a name long enough to wrap gives a textarea a
+   scrollbar at exactly that edge: its arrows drew over the paperclip, which on
+   those rows could be neither seen nor pressed. */
+td.has-files textarea, td.has-files input[type="text"] { width: calc(100% - 40px); }
 .files-btn {
   appearance: none;
   position: absolute;
@@ -649,12 +653,18 @@ td.has-files textarea, td.has-files input[type="text"] { padding-right: 46px; }
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.55;
+  /* As strong as the remove button at the other end of the row, and no
+     fainter. It shipped at about half that, which in the dark theme is a grey
+     mark on a navy cell: the first person to look for it could not find it
+     while looking straight at it. A control nobody can see is not quiet, it is
+     absent. */
+  z-index: 1;
 }
-.files-btn:hover, .files-btn:focus-visible, .files-btn[aria-expanded="true"] { opacity: 1; color: var(--ink); }
+.files-btn svg { width: 16px; height: 16px; }
+.files-btn:hover, .files-btn:focus-visible, .files-btn[aria-expanded="true"] { color: var(--ink); background: var(--tint); }
 .files-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
 /* A row that has files says so at full strength; one that has none only offers. */
-.files-btn.has-some { opacity: 1; color: var(--ink); }
+.files-btn.has-some { color: var(--ink); }
 
 .files-pop { width: min(360px, calc(100vw - 16px)); max-height: min(420px, calc(100vh - 16px)); padding: 10px; }
 .files-title { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); padding: 2px 4px 8px; }
@@ -897,7 +907,7 @@ body.is-archived .when-data { display: block; }
   .toggle-line input, .sp-pop input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; }
   .del-btn { min-width: 44px; min-height: 44px; }
   .files-btn { min-width: 44px; height: 44px; top: 0; right: 0; justify-content: center; }
-  td.has-files textarea, td.has-files input[type="text"] { padding-right: 50px; }
+  td.has-files textarea, td.has-files input[type="text"] { width: calc(100% - 48px); }
   .tab-btn { padding: 14px 2px; }
   .pill, .add-row-btn, .ghost-btn { padding: 13px 16px; }
   .by-btn { min-height: 44px; }
