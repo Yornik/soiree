@@ -736,6 +736,12 @@
       return;
     }
     showPanel('panelAdmin', 'People', 'Everyone with an account on this planner.');
+    // Whatever link was last handed over goes out of the page with the panel
+    // it was shown in. "Shown once, and kept nowhere" has to survive somebody
+    // navigating away and back, or it is not true.
+    show(byId('adminLinkOut'), false);
+    byId('adminLinkValue').value = '';
+    setText(byId('adminLinkCopy'), 'Copy link');
     loadPeople();
   }
 
