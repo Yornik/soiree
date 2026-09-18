@@ -299,10 +299,20 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	email := normaliseEmail(req.Email)
 
+	// No address at all is a malformed request, and is said to be one. It used
+	// to share the branch below and answer 429 with Retry-After: 60 — telling a
+	// client with a bug to wait a minute and send the same bug again. Refusing
+	// it outright discloses nothing: whether the field is empty is a fact about
+	// the request, not about any account.
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "invalid_email", "email is required")
+		return
+	}
+
 	// Keyed on the submitted address, whether or not it names an account. A
 	// bucket that exists only for real accounts turns 429-versus-401 into the
 	// same disclosure the constant-time work above is avoiding.
-	if email == "" || !a.loginAcct.allow(email) {
+	if !a.loginAcct.allow(email) {
 		tooManyRequests(w)
 		return
 	}

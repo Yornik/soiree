@@ -314,9 +314,12 @@ func TestTheDocumentedErrorContractHolds(t *testing.T) {
 	editor := seat("contract-editor@example.test", store.RoleEditor)
 	viewer := seat("contract-viewer@example.test", store.RoleViewer)
 
-	call := func(method, path string, c *http.Cookie) (int, string) {
+	call := func(method, path, body string, c *http.Cookie) (int, string) {
 		t.Helper()
-		req := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		if body == "" {
+			body = "{}"
+		}
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		if c != nil {
 			req.AddCookie(c)
@@ -324,17 +327,18 @@ func TestTheDocumentedErrorContractHolds(t *testing.T) {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 
-		var body struct {
+		var answer struct {
 			Error string `json:"error"`
 		}
-		_ = json.Unmarshal(rec.Body.Bytes(), &body)
-		return rec.Code, body.Error
+		_ = json.Unmarshal(rec.Body.Bytes(), &answer)
+		return rec.Code, answer.Error
 	}
 
 	cases := []struct {
 		what       string
 		method     string
 		path       string
+		body       string
 		as         *http.Cookie
 		wantStatus int
 		wantCode   string
@@ -342,28 +346,56 @@ func TestTheDocumentedErrorContractHolds(t *testing.T) {
 		// A delete names the row it deletes. The specification says so for all
 		// seven deletes; this is the half of that claim the drift test cannot
 		// see, because it sends the parameter.
-		{"a collection delete with no revision", "DELETE", "/api/v1/tasks/" + specPathID, admin,
+		{"a collection delete with no revision", "DELETE", "/api/v1/tasks/" + specPathID, "", admin,
 			http.StatusBadRequest, "bad_request"},
-		{"an account delete with no revision", "DELETE", "/api/v1/users/" + specPathID, admin,
+		{"an account delete with no revision", "DELETE", "/api/v1/users/" + specPathID, "", admin,
 			http.StatusBadRequest, "revision_required"},
 
 		// The two 403s are different codes, and the specification now names
 		// both rather than calling them all "forbidden".
-		{"a viewer writing", "PATCH", "/api/v1/settings", viewer,
+		{"a viewer writing", "PATCH", "/api/v1/settings", "", viewer,
 			http.StatusForbidden, "read_only"},
-		{"an editor reaching the accounts surface", "GET", "/api/v1/users", editor,
+		{"an editor reaching the accounts surface", "GET", "/api/v1/users", "", editor,
 			http.StatusForbidden, "forbidden"},
 
 		// 401 is the answer that must never be confused with 404. See the note
 		// at the top of the file, and the Unauthorized response in the
 		// specification.
-		{"no session at all", "GET", "/api/v1/plan", nil,
+		{"no session at all", "GET", "/api/v1/plan", "", nil,
 			http.StatusUnauthorized, "unauthenticated"},
+
+		// A login with no address is a malformed request. It used to answer
+		// 429 with Retry-After: 60, which tells a client with a bug to wait a
+		// minute and send the same bug again.
+		{"a login with no address", "POST", "/api/v1/auth/login", `{"password":"x"}`, nil,
+			http.StatusBadRequest, "invalid_email"},
+
+		// "The plan refuses a field it does not know", and the three halves of
+		// that section: strict, null refused where null means nothing, and the
+		// four echoed fields let through so the obvious client stays legal.
+		{"a collection sent a field it does not have", "POST", "/api/v1/tasks", `{"nmae":"Book the band"}`, editor,
+			http.StatusBadRequest, "bad_request"},
+		{"null on a field that cannot be null", "POST", "/api/v1/budget-items", `{"item":"Flowers","unit":null}`, editor,
+			http.StatusBadRequest, "bad_request"},
+		{"a row echoed back whole", "POST", "/api/v1/tasks",
+			`{"id":"` + specPathID + `","revision":7,"updatedAt":"2026-01-04T10:00:00Z","updatedBy":null,"name":"Book the band"}`, editor,
+			http.StatusCreated, ""},
+		{"the settings do not have an id to echo", "PATCH", "/api/v1/settings", `{"revision":1,"id":"` + specPathID + `"}`, editor,
+			http.StatusBadRequest, "bad_request"},
+		{"the settings echoed back as they are read", "PATCH", "/api/v1/settings", `{"revision":1,"updatedAt":"2026-01-04T10:00:00Z"}`, editor,
+			http.StatusOK, ""},
+
+		// The accounts surface is NOT strict, and the specification says so.
+		// Pinned because it is the half of that sentence somebody would
+		// "fix" by assumption.
+		{"the accounts surface ignores a field it does not know", "POST", "/api/v1/auth/password-reset",
+			`{"email":"nobody@example.test","colour":"green"}`, nil,
+			http.StatusAccepted, ""},
 	}
 
 	for _, c := range cases {
 		t.Run(c.what, func(t *testing.T) {
-			status, code := call(c.method, c.path, c.as)
+			status, code := call(c.method, c.path, c.body, c.as)
 			if status != c.wantStatus || code != c.wantCode {
 				t.Errorf("%s %s as %s: got %d/%q, api/openapi.yaml documents %d/%q",
 					c.method, c.path, c.what, status, code, c.wantStatus, c.wantCode)
@@ -402,5 +434,84 @@ func TestTheRateLimitAnswersAsDocumented(t *testing.T) {
 	}
 	if parsed.Error != "rate_limited" {
 		t.Errorf("429 code is %q; api/openapi.yaml documents \"rate_limited\"", parsed.Error)
+	}
+}
+
+// The specification first described the `change` event as carrying the row
+// that changed. It carries four identifiers and never a row, and a client
+// written from that description would have waited forever for data that does
+// not come. The existing stream tests decode the frame into store.ChangeNotice,
+// which is exactly the check that cannot see this: a struct ignores a key it
+// has no field for, and says nothing about a key that was renamed.
+//
+// So this compares raw key sets — what is on the wire against the properties
+// of ChangeNotice in api/openapi.yaml — in both directions.
+func TestTheChangeFrameIsAsDocumented(t *testing.T) {
+	s, ts, _, h := newLiveServer(t)
+
+	st := openStream(t, ts)
+	st.awaitResync(t)
+	awaitListening(t, s)
+
+	created(t, h, "tasks", `{"name":"Book the band"}`)
+	frame := st.await(t, "change event", func(f string) bool {
+		return strings.HasPrefix(f, "event: change\n")
+	})
+	_, data, _ := strings.Cut(frame, "data: ")
+
+	var onWire map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &onWire); err != nil {
+		t.Fatalf("change data is not a JSON object: %v\n%s", err, frame)
+	}
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi.yaml"))
+	if err != nil {
+		t.Fatalf("read the specification: %v", err)
+	}
+	var doc struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]struct {
+					Enum []string `yaml:"enum"`
+				} `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse the specification: %v", err)
+	}
+	documented := doc.Components.Schemas["ChangeNotice"].Properties
+	if len(documented) == 0 {
+		t.Fatal("api/openapi.yaml has no ChangeNotice schema, or it has no properties")
+	}
+
+	for key := range onWire {
+		if _, ok := documented[key]; !ok {
+			t.Errorf("the change event carries %q, which ChangeNotice in api/openapi.yaml does not describe", key)
+		}
+	}
+	for key := range documented {
+		if _, ok := onWire[key]; !ok {
+			t.Errorf("ChangeNotice in api/openapi.yaml describes %q, which the change event does not carry", key)
+		}
+	}
+
+	// The entity names are table names with an underscore, not path names with
+	// a hyphen, and that is the other thing a reader would guess wrong.
+	announced := map[string]bool{}
+	for _, e := range []string{
+		store.EntityBudgetItems, store.EntityNotes, store.EntityPhases,
+		store.EntityProgrammeEntries, store.EntitySettings, store.EntitySponsors, store.EntityTasks,
+	} {
+		announced[e] = true
+	}
+	for _, e := range documented["entity"].Enum {
+		if !announced[e] {
+			t.Errorf("ChangeNotice.entity lists %q, which is not an entity the stream announces", e)
+		}
+		delete(announced, e)
+	}
+	for e := range announced {
+		t.Errorf("the stream announces %q, which ChangeNotice.entity does not list", e)
 	}
 }

@@ -85,6 +85,28 @@ info:
 
     These are three different requests. `{}` changes nothing.
 
+    ## The plan refuses a field it does not know
+
+    The collections and the settings read a body strictly. An unknown field
+    gets **400**. The field that a lenient server ignores is as likely to be
+    `unit` with a wrong letter as something harmless, and nobody sees a money
+    column that did not change.
+
+    Four fields are the exception. A client that reads a row, changes one
+    field and sends the whole row back is the obvious client, so the server
+    accepts `id`, `revision`, `updatedAt` and `updatedBy` on a collection, and
+    drops all but `revision`. The settings accept `revision` and `updatedAt`.
+    The settings have no id.
+
+    A `null` on a field that does not accept `null` gets **400**. The server
+    does not write a zero in its place.
+
+    No field is required on a create. A field you omit takes its default.
+
+    The accounts paths, `/auth` and `/users`, are different. They ignore an
+    unknown field. They name each refusal with its own code, such as
+    `invalid_email`.
+
     ## The API is absent without a database
 
     A deployment with no `DATABASE_URL` serves the frontend alone. Every path
@@ -661,9 +683,10 @@ paths:
         You cannot delete your own account. The server answers **400** with
         the code `self_change`. Ask another admin.
 
-        Consider the status `disabled` first. The change log is append-only
-        and holds the id of the account against each change. A deletion leaves
-        those entries with an id that resolves to nobody.
+        Consider the status `disabled` first. The change log holds the id of
+        the account against each change. A deletion sets that id to `null` on
+        every entry, and on `updatedBy` of every row. The history keeps what
+        changed and loses who changed it. The status `disabled` keeps both.
       parameters:
         - $ref: '#/components/parameters/RevisionQuery'
       responses:
@@ -753,24 +776,64 @@ paths:
         This is a Server-Sent Events stream. It stays open. One connection
         carries every change, so a change costs no handshake.
 
-        The stream carries two event names.
+        The stream carries identifiers. It never carries a row. Every event
+        ends in the same act: call `GET /plan` again, and merge the answer.
 
-        `change` carries the row that changed, with its collection and its new
-        revision. Apply it to the plan you hold.
+        The stream carries two event names. Register for each by name. The
+        server sends nothing as the default `message` event.
 
-        `resync` carries an empty object. It means the server lost its place.
-        Call `GET /plan` again.
+        `change` carries a `ChangeNotice`: the entity, the id, the action and
+        the revision the row now has. It does not carry the row.
 
-        A comment line arrives at intervals to hold the connection open
-        through a proxy.
+        `resync` carries an empty object. It means your copy is stale. It
+        arrives on every connect. It arrives again when the server connects to
+        the database again, because changes happened in that gap and nobody
+        announced them. There is no replay and no `Last-Event-ID`.
+
+        ## The rule a client obeys
+
+        On `create` and `update`: compare the revision in the notice with the
+        revision you hold. Ignore the notice when you hold that revision or a
+        later one. This removes the echo of your own write. The server does
+        not remove it for you.
+
+        On `delete`: never compare revisions. A delete announces the last
+        revision of the row, which is the revision you hold. A comparison
+        discards the one event you must keep.
+
+        In every other case, call `GET /plan`. Read the whole plan, and not
+        one row. A delete of a phase, a sponsor or a budget item changes other
+        rows and does not change their revisions, so the stream does not
+        announce those changes.
+
+        ## The other frames
+
+        A `retry: 3000` frame arrives first. It sets the reconnect interval of
+        the browser to three seconds.
+
+        A comment line, `: ping`, arrives every 20 seconds. It holds the
+        connection open through a proxy.
 
         Reconnect on a drop. The `EventSource` of the browser does this by
-        itself.
+        itself. It does not reconnect after a refusal with a status, such as
+        the 503 below or a 401. Reconnect from your own code in that case.
+
+        The stream does not announce a change to an account.
       responses:
         '200':
           description: The stream is open.
           content:
             text/event-stream:
+              # OpenAPI 3.1 has no way to give a type to the data of a
+              # Server-Sent Event, so the schema below is a string. This names
+              # the JSON that each event carries, for a reader and for a tool
+              # that looks.
+              x-events:
+                change:
+                  $ref: '#/components/schemas/ChangeNotice'
+                resync:
+                  type: object
+                  maxProperties: 0
               schema:
                 type: string
                 description: |
@@ -778,17 +841,31 @@ paths:
                   describes one frame poorly, so read the description above.
                 examples:
                   - |
-                    event: change
-                    data: {"collection":"tasks","row":{"id":"…","revision":4}}
+                    retry: 3000
 
                     event: resync
                     data: {}
+
+                    event: change
+                    data: {"entity":"tasks","id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","action":"update","revision":4}
+
+                    : ping
         '401':
           $ref: '#/components/responses/Unauthorized'
         '503':
           description: |
-            The server cannot reach the database, or it holds too many
-            streams. Retry with a backoff.
+            This instance holds the maximum number of streams. The code is
+            `unavailable`.
+
+            Wait for `Retry-After`, then open the stream again. Add a random
+            delay. Every client meets the limit at the same moment, and
+            clients that return at the same moment meet it again.
+          headers:
+            Retry-After:
+              description: Seconds to wait. It is `5`.
+              schema:
+                type: integer
+                examples: [5]
           content:
             application/json:
               schema:
@@ -1285,8 +1362,9 @@ components:
         The cookie is HttpOnly, Secure and SameSite=Lax. A script cannot read
         it. A browser sends it by itself.
 
-        The name carries no `__Host-` prefix. That prefix forbids a `Domain`
-        attribute, and this deployment serves the apex and the `www` name.
+        The name carries no `__Host-` prefix. That prefix demands HTTPS. A
+        plain `docker run` on `localhost` has none, and a browser accepts a
+        `Secure` cookie there without the prefix.
 
   parameters:
     RevisionQuery:
@@ -1316,8 +1394,16 @@ components:
   responses:
     BadRequest:
       description: |
-        The body does not parse, a field holds the wrong type, or a value
-        fails a rule. The code is `bad_request`. Read `message`.
+        The body does not parse, a field is unknown, a field holds the wrong
+        type, or a value fails a rule. Read `message`.
+
+        On the plan, the collections, the settings and the push paths, the
+        code is `bad_request`.
+
+        On the accounts paths the code names the fault: `invalid_json`,
+        `invalid_email`, `invalid_role`, `invalid_status`,
+        `revision_required`, `self_change`, `invalid_token`, `weak_password`,
+        `invalid_passkey` or `invalid_challenge`.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ApiError' }
@@ -1537,6 +1623,12 @@ components:
             - revision_required
             - self_change
             - unavailable
+            - invalid_json
+            - invalid_email
+            - invalid_role
+            - invalid_status
+            - invalid_passkey
+            - invalid_challenge
             - invalid_credentials
             - invalid_token
             - weak_password
@@ -1587,6 +1679,38 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Note' }
 
+    ChangeNotice:
+      type: object
+      description: |
+        What one change says about itself on `GET /events`. It holds enough to
+        know which row changed, and nothing more. It never holds the row.
+      required: [entity, id, action, revision]
+      additionalProperties: false
+      properties:
+        entity:
+          type: string
+          enum: [budget_items, notes, phases, programme_entries, settings, sponsors, tasks]
+          description: |
+            The table that changed. These are the names of the tables, with an
+            underscore. They are not the names of the paths, which use a
+            hyphen: `budget_items` here is `/budget-items` there.
+        id:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The id of the row. It is `null` for `settings`, which is one row
+            with no id.
+        action:
+          type: string
+          enum: [create, update, delete]
+        revision:
+          type: [integer, 'null']
+          format: int64
+          description: |
+            The revision the row now has. On a `delete` it is the last
+            revision of the row. It is `null` for a row that carries no
+            revision.
+
     Settings:
       type: object
       description: |
@@ -1623,6 +1747,7 @@ components:
 
     SettingsPatch:
       type: object
+      additionalProperties: false
       description: |
         A change to the settings.
 
@@ -1630,6 +1755,10 @@ components:
       required: [revision]
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt:
+          type: string
+          format: date-time
+          description: Accepted and dropped. The server sets it.
         ceiling: { $ref: '#/components/schemas/Money' }
         inflationPct:
           type: number
@@ -1654,12 +1783,23 @@ components:
 
     PhaseWrite:
       type: object
+      additionalProperties: false
       description: |
         A new phase, or a change to one.
 
         Send `revision` on a change. Omit it on a create.
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
+        id:
+          $ref: '#/components/schemas/Id'
+          description: Accepted and dropped. The path names the row.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Accepted and dropped. The server sets it.
+        updatedBy:
+          $ref: '#/components/schemas/UpdatedBy'
+          description: Accepted and dropped. The session names the account.
         name: { type: string }
         position: { $ref: '#/components/schemas/Position' }
 
@@ -1682,12 +1822,23 @@ components:
 
     SponsorWrite:
       type: object
+      additionalProperties: false
       description: |
         A new sponsor, or a change to one.
 
         Send `revision` on a change. Omit it on a create.
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
+        id:
+          $ref: '#/components/schemas/Id'
+          description: Accepted and dropped. The path names the row.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Accepted and dropped. The server sets it.
+        updatedBy:
+          $ref: '#/components/schemas/UpdatedBy'
+          description: Accepted and dropped. The session names the account.
         code:
           type: string
           description: The short label. It is unique. A clash gets 409.
@@ -1756,6 +1907,7 @@ components:
 
     BudgetItemWrite:
       type: object
+      additionalProperties: false
       description: |
         A new budget item, or a change to one.
 
@@ -1765,6 +1917,16 @@ components:
         accepts `null`.
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
+        id:
+          $ref: '#/components/schemas/Id'
+          description: Accepted and dropped. The path names the row.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Accepted and dropped. The server sets it.
+        updatedBy:
+          $ref: '#/components/schemas/UpdatedBy'
+          description: Accepted and dropped. The session names the account.
         phaseId:
           type: [string, 'null']
           format: uuid
@@ -1809,12 +1971,23 @@ components:
 
     ProgrammeEntryWrite:
       type: object
+      additionalProperties: false
       description: |
         A new entry, or a change to one.
 
         Send `revision` on a change. Omit it on a create.
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
+        id:
+          $ref: '#/components/schemas/Id'
+          description: Accepted and dropped. The path names the row.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Accepted and dropped. The server sets it.
+        updatedBy:
+          $ref: '#/components/schemas/UpdatedBy'
+          description: Accepted and dropped. The session names the account.
         title: { type: string }
         note: { type: string }
         position: { $ref: '#/components/schemas/Position' }
@@ -1850,6 +2023,7 @@ components:
 
     TaskWrite:
       type: object
+      additionalProperties: false
       description: |
         A new task, or a change to one.
 
@@ -1858,6 +2032,16 @@ components:
         A new task starts at `not-started` when you omit `status`.
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
+        id:
+          $ref: '#/components/schemas/Id'
+          description: Accepted and dropped. The path names the row.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Accepted and dropped. The server sets it.
+        updatedBy:
+          $ref: '#/components/schemas/UpdatedBy'
+          description: Accepted and dropped. The session names the account.
         name: { type: string }
         owner: { type: string }
         due:
@@ -1880,12 +2064,23 @@ components:
 
     NoteWrite:
       type: object
+      additionalProperties: false
       description: |
         A new note, or a change to one.
 
         Send `revision` on a change. Omit it on a create.
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
+        id:
+          $ref: '#/components/schemas/Id'
+          description: Accepted and dropped. The path names the row.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Accepted and dropped. The server sets it.
+        updatedBy:
+          $ref: '#/components/schemas/UpdatedBy'
+          description: Accepted and dropped. The session names the account.
         text: { type: string }
         position: { $ref: '#/components/schemas/Position' }
 
