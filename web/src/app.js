@@ -653,8 +653,15 @@
   };
 
   var state;
+  // Whether this browser arrived holding a planner somebody actually built,
+  // as opposed to a blank one or generated demo data. It is the difference
+  // between "this is a cached copy of the server's plan" and "this is the only
+  // copy in existence", and adopt() has to know which it is looking at.
+  var hadSavedCopy = false;
   try {
-    state = Store.read() || (CONFIG.demoData ? demoState() : emptyState());
+    var saved = Store.read();
+    hadSavedCopy = saved !== null;
+    state = saved || (CONFIG.demoData ? demoState() : emptyState());
   } catch (e) {
     state = emptyState();
   }
@@ -718,9 +725,11 @@
   // One failed write is a blip. Two in a row is worth telling somebody about,
   // because from here on their edits exist in one browser only.
   var FAILURES_BEFORE_NOTICE = 2;
-  // A ceiling on reconcile-and-retry rounds. The three-way merge below
-  // terminates on its own; this is only here so that a server disagreeing
-  // with us in a way we did not anticipate stops rather than spins.
+  // A ceiling on reconcile-and-retry rounds inside one attempt. The three-way
+  // merge below terminates on its own, so reaching this means somebody else is
+  // rewriting the same rows about as fast as we are. It books a retry rather
+  // than reporting success: stopping with work still queued and saying nothing
+  // is exactly the silent loss the retry exists to prevent.
   var MAX_PASSES = 8;
 
   /* ---------- Fields ----------
@@ -873,6 +882,17 @@
     return out;
   }
 
+  /* Every row in the plan becomes a row on the page, including the child rows
+   * of a broken-down quote. This page has no notion of a parent and a
+   * breakdown, so a plan loaded by cmd/soiree-import — where a caterer's
+   * per-dish sheet is child rows under one line — reads its headline figures
+   * high, because the parent and its children are both counted.
+   *
+   * Do not fix that by filtering parentId out here. The shadow would still
+   * hold those rows, so the very next difference would be a DELETE for every
+   * child in the breakdown, and the import would be destroyed by the act of
+   * looking at it. Teaching the page about parents is the fix, and it is a
+   * change to the page rather than to this function. */
   function stateFromPlan(plan) {
     var s = emptyState();
     var wire = plan.settings || {};
@@ -1226,22 +1246,26 @@
     if (!apiMode || Sync.running || Sync.timer || !Sync.queued) return;
     Sync.queued = false;
     Sync.running = true;
-    drain(0).then(Sync.done, function () { Sync.done(false); });
+    drain(0).then(Sync.done, function () { Sync.done('retry'); });
   };
 
-  Sync.done = function (ok) {
+  Sync.done = function (outcome) {
     Sync.running = false;
-    if (ok) {
+    if (outcome === 'done') {
       if (Sync.failures >= FAILURES_BEFORE_NOTICE) flash(t('d.online'));
       Sync.failures = 0;
       setSticky('');
       if (Sync.queued) Sync.run();
       return;
     }
+
+    // 'retry' and 'outrun' are different causes with the same consequence and
+    // the same remedy, so they share a message: in both, edits this person has
+    // made are not on the server, this browser is going to keep trying, and
+    // nothing has been thrown away — the shadow did not advance, so the same
+    // difference is still there to send when the wait is over.
     Sync.failures++;
     if (Sync.failures >= FAILURES_BEFORE_NOTICE) setSticky(t('d.offline'));
-    // Nothing was thrown away: the shadow did not advance, so the same
-    // difference is still there to be sent when the wait is over.
     Sync.queued = true;
     Sync.timer = setTimeout(function () {
       Sync.timer = null;
@@ -1251,11 +1275,16 @@
 
   // One pass, then look again: a reconcile changes what there is to send, and
   // a delete that lost a race has a new revision to try.
+  //
+  //   'done'   — nothing left to send
+  //   'retry'  — no answer from the origin
+  //   'outrun' — still not settled after MAX_PASSES rounds of reconciling
   function drain(pass) {
     var ops = planOps();
-    if (!ops.length || pass >= MAX_PASSES) return Promise.resolve(true);
+    if (!ops.length) return Promise.resolve('done');
+    if (pass >= MAX_PASSES) return Promise.resolve('outrun');
     return runOps(ops, 0).then(function (ok) {
-      return ok ? drain(pass + 1) : false;
+      return ok ? drain(pass + 1) : 'retry';
     });
   }
 
@@ -1284,16 +1313,43 @@
     });
   }
 
+  /* Take the plan the origin sent.
+   *
+   * Normally the server is simply right and what is on screen is a cached
+   * copy of it. Two cases are not normal, and in both the answer is to keep
+   * what this browser is holding and send it up instead:
+   *
+   *   1. Something was typed between the cached copy painting and the plan
+   *      arriving. Discarding those keystrokes because a request happened to
+   *      land after them is not a defensible reason to lose them.
+   *   2. This browser is holding a planner somebody built, and the server has
+   *      none. That is the database being added to a deployment that was
+   *      running without one — and replacing that planner with an empty plan
+   *      destroys the only copy of it, on the first load, with no warning.
+   *
+   * The second is deliberately narrow: only a planner that was actually saved
+   * (not a blank one, and not generated demo data) and only against a plan
+   * with nothing in it at all. The cost of getting it wrong is two browsers
+   * each seeding the same empty database and producing every row twice, which
+   * is visible and can be fixed by hand. The cost of not doing it is silent
+   * destruction of somebody's planner, which cannot.
+   */
   function adopt(plan) {
     shadow = shadowFromPlan(plan);
     apiMode = true;
 
-    if (dirty) {
-      // Something was typed between the cached copy painting and the plan
-      // arriving. Those edits are kept and pushed up, and the rows the server
-      // has that this browser has not are taken rather than deleted — in that
-      // window "absent here" means "not fetched yet", not "removed", and this
-      // is the union that makes the delete rule in planOps true.
+    var planIsEmpty = COLLECTIONS.every(function (c) {
+      return Object.keys(shadow[c.key]).length === 0;
+    });
+    var holdingRows = COLLECTIONS.some(function (c) {
+      return (state[c.key] || []).length > 0;
+    });
+
+    if (dirty || (hadSavedCopy && holdingRows && planIsEmpty)) {
+      // The rows the server has that this browser has not are taken rather
+      // than deleted: in this window "absent here" means "not fetched yet",
+      // not "removed". That union is what makes the delete rule in planOps
+      // true from here on.
       COLLECTIONS.forEach(function (c) {
         var present = {};
         (state[c.key] || []).forEach(function (r) { if (r && r.id) present[r.id] = true; });

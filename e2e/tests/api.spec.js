@@ -20,11 +20,23 @@
  * between them. If Docker is unavailable the launcher starts this instance
  * without a database; /api/v1/plan is then a 404 and every test here skips,
  * which is why the suite still runs on a machine that has no containers.
+ *
+ * Two things follow from the state being shared, and both are easy to undo by
+ * accident:
+ *
+ *  - Everything that touches the API belongs in this one file. The rest of
+ *    the suite runs files in parallel, and serial mode only orders the tests
+ *    inside a file — a second API spec would run against this database at the
+ *    same time as this one, and the failures would look like application bugs.
+ *  - Repeating it needs one worker (`--repeat-each=3 --workers=1`). Without
+ *    that, Playwright runs the copies of this group concurrently, which is the
+ *    same collision by another route.
  */
 const fs = require('fs/promises');
 const { test, expect } = require('@playwright/test');
 const {
   API_URL,
+  STORAGE_KEY,
   addBudgetLine,
   addSponsor,
   addTask,
@@ -377,4 +389,76 @@ test('a task with no due date is written without one', async ({ page, request })
 
   await page.locator('#tasksBody tr').first().locator('td').nth(2).locator('input').fill('2030-01-15');
   await expect.poll(async () => (await apiPlan(request)).tasks[0].due).toBe('2030-01-15');
+});
+
+test('a planner built before the database existed is carried up, not wiped', async ({ page, request }) => {
+  /*
+   * The upgrade path: somebody ran this without PostgreSQL, built a real
+   * planner in their browser, and then a database appeared. On that first load
+   * the server's plan is empty, and taking it would replace the only copy of
+   * their work with nothing — silently, and permanently as soon as the tab
+   * closes and the cache is overwritten.
+   *
+   * Narrow on purpose. It applies only to a planner that was actually saved,
+   * and only against a plan with nothing at all in it; anything else and the
+   * server is simply right. The risk it accepts is two browsers seeding the
+   * same empty database and producing every row twice, which somebody can see
+   * and fix. The risk it removes cannot be seen or fixed.
+   */
+  await page.addInitScript(
+    ([key, payload]) => {
+      try {
+        if (!localStorage.getItem(key)) localStorage.setItem(key, payload);
+      } catch (e) {
+        /* not on the origin yet */
+      }
+    },
+    [
+      STORAGE_KEY,
+      JSON.stringify({
+        ceiling: 10000,
+        inflationPct: 4,
+        fxRate: 0,
+        splitEvenly: false,
+        sponsors: [{ id: 'local-s1', code: 'Rose', name: 'Ada' }],
+        budgetItems: [
+          { id: 'local-b1', item: 'Venue deposit', unit: 2500, qty: 1, paid: 500, sponsors: ['local-s1'], note: '' },
+        ],
+        tasks: [{ id: 'local-t1', name: 'Confirm final guest count', owner: 'Ada', due: '', status: 'in-progress' }],
+        notes: [{ id: 'local-n1', text: 'Venue balance is due a month out.' }],
+      }),
+    ],
+  );
+
+  await openSharedPlanner(page);
+
+  await expect
+    .poll(async () => {
+      const plan = await apiPlan(request);
+      return {
+        items: plan.budgetItems.map((i) => [i.item, i.unit, i.paid]),
+        sponsors: plan.sponsors.map((s) => s.code),
+        tasks: plan.tasks.map((t) => t.name),
+        notes: plan.notes.map((n) => n.text),
+        ceiling: plan.settings.ceiling,
+        inflationPct: plan.settings.inflationPct,
+      };
+    })
+    .toEqual({
+      items: [['Venue deposit', '2500.00', '500.00']],
+      sponsors: ['Rose'],
+      tasks: ['Confirm final guest count'],
+      notes: ['Venue balance is due a month out.'],
+      ceiling: '10000.00',
+      inflationPct: 4,
+    });
+
+  // Attribution survived the change of identity: the line points at the
+  // sponsor under the id the server issued, not the one this browser invented.
+  const plan = await apiPlan(request);
+  expect(plan.budgetItems[0].sponsors).toEqual([plan.sponsors[0].id]);
+
+  // And nothing was carried up twice.
+  await expect(page.locator('#budgetBody tr')).toHaveCount(1);
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
 });

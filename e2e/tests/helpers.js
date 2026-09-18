@@ -231,6 +231,13 @@ async function apiPlan(request, base = API_URL) {
   return res.json();
 }
 
+const PLAN_COLLECTIONS = [
+  ['notes', 'notes'],
+  ['tasks', 'tasks'],
+  ['budgetItems', 'budget-items'],
+  ['sponsors', 'sponsors'],
+];
+
 /**
  * Empties the shared plan.
  *
@@ -238,20 +245,35 @@ async function apiPlan(request, base = API_URL) {
  * not start from a known page would be reading whatever the previous one left.
  * Done over the API rather than against the database directly, so the tests
  * need no second connection and no credentials of their own.
+ *
+ * Tried more than once on purpose. The page from the test before this one can
+ * still have a write in flight as its context closes, and a sweep that loses
+ * to it either gets a 409 on a revision that has moved or finishes and finds a
+ * row back. Either way the answer is to read again and sweep again, so that a
+ * stray write fails the test that made it rather than the one after.
  */
 async function resetPlan(request, base = API_URL) {
-  const plan = await apiPlan(request, base);
-  if (!plan) return;
+  let problem = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    problem = await sweepPlan(request, base);
+    if (!problem) return;
+  }
+  throw new Error(`could not reset the shared plan: ${problem}`);
+}
 
-  const collections = [
-    ['notes', 'notes'],
-    ['tasks', 'tasks'],
-    ['budgetItems', 'budget-items'],
-    ['sponsors', 'sponsors'],
-  ];
-  for (const [key, route] of collections) {
+/** One sweep. Returns null when the plan is empty afterwards, or what went wrong. */
+async function sweepPlan(request, base) {
+  const plan = await apiPlan(request, base);
+  if (!plan) return null;
+
+  for (const [key, route] of PLAN_COLLECTIONS) {
     for (const row of plan[key] || []) {
-      await request.delete(`${base}/api/v1/${route}/${row.id}?revision=${row.revision}`);
+      const res = await request.delete(`${base}/api/v1/${route}/${row.id}?revision=${row.revision}`);
+      // Already gone is the outcome that was wanted; a stale revision is the
+      // race this function exists to absorb.
+      if (![204, 404].includes(res.status())) {
+        return `DELETE ${route}/${row.id} answered ${res.status()}`;
+      }
     }
   }
 
@@ -269,7 +291,13 @@ async function resetPlan(request, base = API_URL) {
       splitEvenly: false,
     },
   });
-  expect(res.status(), 'PATCH /api/v1/settings while resetting').toBe(200);
+  if (res.status() !== 200) return `PATCH /api/v1/settings answered ${res.status()}`;
+
+  // Read it back: a row that reappeared means a write landed after the sweep
+  // passed it, and the sweep has to happen again.
+  const after = await apiPlan(request, base);
+  const left = PLAN_COLLECTIONS.reduce((n, [key]) => n + (after[key] || []).length, 0);
+  return left ? `${left} row(s) came back after the sweep` : null;
 }
 
 /**
