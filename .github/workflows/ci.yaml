@@ -108,6 +108,24 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  openapi:
+    name: API description (redocly lint)
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      # Checks that the document is valid OpenAPI 3.1. It does not check that
+      # the document is true: that the routes it describes exist is
+      # TestEveryDocumentedRouteExists, and what they answer is
+      # TestTheDocumentedErrorContractHolds. Both ask the running server.
+      #
+      # Pinned rather than @latest, like every action in this file: a floating
+      # version changes CI with no commit, and Renovate cannot track it.
+      - run: npx --yes @redocly/cli@2.53.3 lint api/openapi.yaml
+
   vuln:
     name: Vulnerabilities (govulncheck)
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}

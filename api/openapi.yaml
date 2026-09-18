@@ -1,0 +1,2006 @@
+openapi: 3.1.0
+
+# Written in a controlled subset of English, in the manner of ASD-STE100
+# Simplified Technical English. The rules this file obeys:
+#
+#   - One term for one concept. The term list is in the description below.
+#     A synonym used "for variety" is a second concept to the reader.
+#   - The active voice. "The server returns 409", not "a 409 is returned".
+#   - The simple present tense.
+#   - One instruction per sentence. Short sentences.
+#   - Articles stay. "Send the token", not "send token".
+#   - Positive phrasing where it says the same thing.
+#
+# The rules apply to the descriptions in this file only. The Go comments in
+# internal/ carry reasoning rather than reference text, and keep their own
+# voice deliberately.
+
+info:
+  title: soiree
+  version: 1.0.0
+  summary: The HTTP API of the soiree event planner.
+  description: |
+    soiree holds one **plan**. A plan is the settings, the phases, the
+    sponsors, the budget items, the programme, the tasks and the notes for a
+    single event. Every person who signs in reads the same plan.
+
+    ## The term list
+
+    This document uses one term for one concept.
+
+    | Term | Meaning |
+    |---|---|
+    | plan | The whole dataset. One per deployment. |
+    | collection | One group of rows in the plan, such as `tasks`. |
+    | revision | The version number of one row. It increases on every write. |
+    | session | The signed-in state. A cookie holds it. |
+    | account | One person's record. It has an email address and a role. |
+    | admin | The role that manages accounts. It also reads and writes the plan. |
+    | editor | The role that reads and writes the plan. |
+    | viewer | The role that reads the plan. |
+    | credential | One passkey. |
+    | subscription | One browser's registration for web push. |
+    | digest | The notification that lists the deadlines that come next. |
+    | major units | Money as a person writes it. `250.50` is EUR 250 and 50 cents. |
+    | minor units | Money as the database holds it. A whole number of cents. |
+
+    ## Money is a string
+
+    Every amount crosses this API as a **decimal string in major units**.
+    Send `"250.50"`. Do not send `250.50`.
+
+    A JSON number is an IEEE-754 double in every browser parser. Most
+    major-unit amounts have no exact binary form. One value survives the round
+    trip, but the arithmetic of the client does not: add two lines, and the
+    answer is one cent out. A budget exists to prevent that.
+
+    The server refuses a JSON number for an amount. It does not read the
+    literal text and accept it. One wire type for money, one rule for the
+    client.
+
+    The number of decimal places comes from the currency of the deployment.
+    The table is the table of this project, and it is not ISO 4217 exactly.
+    ISO 4217 gives IDR two decimal places, for a sen that left circulation
+    decades ago. This project gives IDR zero decimal places, because every
+    Indonesian price is a whole rupiah. `Intl.NumberFormat` in the browser
+    disagrees. Follow this API.
+
+    `qty` stays a JSON number. Nobody pays in it, and nothing sums it.
+
+    ## A write needs the revision you read
+
+    Every row carries a `revision`. Send that revision back with your write.
+
+    The server compares the revision you send against the revision it holds.
+    A match applies the write and increases the revision. A mismatch means
+    somebody else wrote first. The server then returns **409** with the row as
+    it now stands, in the `current` field. Reconcile against `current`. A
+    refetch of the whole plan is unnecessary.
+
+    ## A PATCH body has three states
+
+    A field you omit stays as it is. A field you send with a value takes that
+    value. A field you send as `null` clears it, where the field accepts
+    `null`.
+
+    These are three different requests. `{}` changes nothing.
+
+    ## The API is absent without a database
+
+    A deployment with no `DATABASE_URL` serves the frontend alone. Every path
+    in this document then answers **404**, not 401. The routes are never
+    registered.
+
+    Treat a 404 on `GET /api/v1/plan` as "this deployment has no API". Treat a
+    401 as "this deployment has an API, and it wants a session".
+  license:
+    name: MIT
+    identifier: MIT
+  contact:
+    name: soiree
+    url: https://github.com/Yornik/soiree
+
+servers:
+  - url: /api/v1
+    description: The API of this deployment. The paths below are relative to it.
+
+tags:
+  - name: session
+    description: Sign in, sign out, and read the current session.
+  - name: passkeys
+    description: |
+      Register and use a passkey in place of a password.
+
+      A passkey needs a domain to scope the credential to. A deployment that
+      sets no `SOIREE_BASE_URL` offers no passkeys, and then **these paths are
+      not routes**: they answer 404, in the same way as a deployment with no
+      database. They are never routes that answer a refusal.
+
+      Read the 404 as "this deployment has no passkeys", and offer the
+      password alone.
+  - name: accounts
+    description: Manage accounts. An admin does this.
+  - name: plan
+    description: Read the whole plan, and follow it live.
+  - name: budget
+    description: The settings, the phases, the sponsors and the budget items.
+  - name: schedule
+    description: The programme and the tasks.
+  - name: notes
+    description: The free notes on the plan.
+  - name: push
+    description: |
+      Receive the digest on a phone.
+
+      These paths are routes wherever the accounts surface is. The server
+      stores a subscription whether or not the deployment holds VAPID keys.
+      The keys decide whether the digest goes out, and not whether you may
+      subscribe.
+
+# Most operations need a session. The operations that do not carry their own
+# `security: []`, which overrides this.
+security:
+  - sessionCookie: []
+
+paths:
+  ############################################################################
+  # Session
+  ############################################################################
+
+  /auth/login:
+    post:
+      tags: [session]
+      operationId: login
+      summary: Sign in with an email address and a password.
+      description: |
+        The server sets the session cookie on success. Send the cookie with
+        every later request.
+
+        Two rate limits apply. One counts the attempts from your address. One
+        counts the attempts against the account. Both answer **429**.
+
+        The server gives one error for a wrong password and for an unknown
+        address. This keeps an attacker from learning which addresses have an
+        account.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: The sign-in succeeded. The session cookie is set.
+          headers:
+            Set-Cookie:
+              description: The session cookie. It is HttpOnly, Secure and SameSite=Lax.
+              schema:
+                type: string
+                examples: ['soiree_session=…; Path=/; HttpOnly; Secure; SameSite=Lax']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: |
+            The credentials do not match an active account. The error code is
+            `invalid_credentials`. It carries no further detail, on purpose.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/logout:
+    post:
+      tags: [session]
+      operationId: logout
+      summary: Sign out.
+      description: |
+        The server clears the session cookie and deletes the session.
+
+        This operation succeeds without a session. A signed-out client that
+        signs out again gets 204.
+      security: []
+      responses:
+        '204':
+          description: The session is gone. The cookie is cleared.
+
+  /auth/session:
+    get:
+      tags: [session]
+      operationId: getSession
+      summary: Read the account of the current session.
+      description: |
+        Call this once when the page loads. The answer tells you who is signed
+        in, and which role they hold.
+      responses:
+        '200':
+          description: The account of the current session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/password-reset:
+    post:
+      tags: [session]
+      operationId: requestPasswordReset
+      summary: Ask for a link that sets a new password.
+      description: |
+        The server sends the link by email. The link carries a token. Redeem
+        the token at `POST /auth/set-password`.
+
+        The server answers **202** for every address. It answers 202 for an
+        address with no account, and for a disabled account. The answer
+        therefore tells an attacker nothing about who holds an account.
+
+        A rate limit counts the requests from your address.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '202':
+          description: |
+            The server accepted the request. It sends the mail if the account
+            exists and is active.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: accepted
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/set-password:
+    post:
+      tags: [session]
+      operationId: setPassword
+      summary: Set a password with a token.
+      description: |
+        Use the token from the invitation mail or from the reset mail.
+
+        A token works one time. The server deletes it after use.
+
+        The password needs twelve characters or more. A shorter password gets
+        **400** with the code `weak_password`.
+
+        A rate limit counts the redemptions from your address.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                  description: The token from the mail.
+                password:
+                  type: string
+                  format: password
+                  minLength: 12
+      responses:
+        '204':
+          description: The password is set. Sign in with it.
+        '400':
+          description: |
+            The token is unknown, used or expired (`invalid_token`), or the
+            password is too short (`weak_password`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  ############################################################################
+  # Passkeys
+  ############################################################################
+
+  /auth/passkeys/register/begin:
+    post:
+      tags: [passkeys]
+      operationId: beginPasskeyRegistration
+      summary: Start the registration of a passkey.
+      description: |
+        Sign in first. A passkey attaches to the account of the current
+        session.
+
+        Pass the answer to `navigator.credentials.create()`. Send the result
+        to `POST /auth/passkeys/register/finish`.
+
+        The server holds the challenge against your session. Finish the
+        registration with the same session.
+      responses:
+        '200':
+          description: |
+            The `PublicKeyCredentialCreationOptions` of the WebAuthn
+            specification, as the browser expects them.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The creation options. The browser reads them.
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: |
+            The account holds the maximum number of passkeys
+            (`too_many_passkeys`). Delete one first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /auth/passkeys/register/finish:
+    post:
+      tags: [passkeys]
+      operationId: finishPasskeyRegistration
+      summary: Complete the registration of a passkey.
+      description: |
+        Send the credential that `navigator.credentials.create()` returned.
+
+        Use the session that began the registration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: The credential from the browser.
+              additionalProperties: true
+      responses:
+        '201':
+          description: The passkey is registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Passkey'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: The passkey is registered already (`passkey_exists`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /auth/passkeys/login/begin:
+    post:
+      tags: [passkeys]
+      operationId: beginPasskeyLogin
+      summary: Start a sign-in with a passkey.
+      description: |
+        Pass the answer to `navigator.credentials.get()`. Send the result to
+        `POST /auth/passkeys/login/finish`.
+
+        A session is unnecessary here. This operation replaces the password.
+      security: []
+      responses:
+        '200':
+          description: |
+            The `PublicKeyCredentialRequestOptions` of the WebAuthn
+            specification, as the browser expects them.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: The assertion options. The browser reads them.
+                additionalProperties: true
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/passkeys/login/finish:
+    post:
+      tags: [passkeys]
+      operationId: finishPasskeyLogin
+      summary: Complete a sign-in with a passkey.
+      description: |
+        Send the assertion that `navigator.credentials.get()` returned.
+
+        The server sets the session cookie on success. The result matches
+        `POST /auth/login`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: The assertion from the browser.
+              additionalProperties: true
+      responses:
+        '200':
+          description: The sign-in succeeded. The session cookie is set.
+          headers:
+            Set-Cookie:
+              description: The session cookie. It is HttpOnly, Secure and SameSite=Lax.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: The assertion does not match an active account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/passkeys:
+    get:
+      tags: [passkeys]
+      operationId: listPasskeys
+      summary: List the passkeys of the current account.
+      description: |
+        The list holds the passkeys of the current session alone. An admin
+        reads their own passkeys here, and nobody else's.
+      responses:
+        '200':
+          description: The passkeys of the current account.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [passkeys]
+                properties:
+                  passkeys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Passkey'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/passkeys/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    delete:
+      tags: [passkeys]
+      operationId: deletePasskey
+      summary: Delete one passkey.
+      description: |
+        Delete a passkey of the current account. The server answers **404**
+        for a passkey of another account, which keeps its existence private.
+
+        Keep a password or a second passkey. An account with no way in needs
+        an admin to send a new invitation.
+      responses:
+        '204':
+          description: The passkey is gone.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  ############################################################################
+  # Accounts
+  ############################################################################
+
+  /users:
+    get:
+      tags: [accounts]
+      operationId: listUsers
+      summary: List the accounts.
+      description: An admin calls this. Every other role gets 403.
+      responses:
+        '200':
+          description: Every account, and the role and status of each.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [accounts]
+      operationId: createUser
+      summary: Create an account and invite it.
+      description: |
+        An admin calls this. There are no invitation links that anybody may
+        redeem. An admin creates each account by hand.
+
+        The new account starts with the status `invited` and holds no
+        password. The server sends an invitation mail with a token. The person
+        redeems the token at `POST /auth/set-password`.
+
+        Read `mailSent` in the answer. A deployment with no mail configured
+        answers `false` and returns `setPasswordUrl`. Give that link to the
+        person by another route. A deployment with mail omits the link, so it
+        never reaches a log.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email:
+                  type: string
+                  format: email
+                role:
+                  $ref: '#/components/schemas/Role'
+      responses:
+        '201':
+          description: The account exists. The invitation is on its way.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invite'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The address holds an account already (`email_taken`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [accounts]
+      operationId: getUser
+      summary: Read one account.
+      description: An admin calls this.
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [accounts]
+      operationId: updateUser
+      summary: Change the role, the status or the address of an account.
+      description: |
+        An admin calls this. Send the `revision` you read.
+
+        A change of address keeps the password and the passkeys. The person
+        signs in with the new address.
+
+        Set the status to `disabled` to close an account. A disabled account
+        keeps its history in the change log. The server refuses the sign-in
+        and refuses the invitation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatch'
+      responses:
+        '200':
+          description: The account as it now stands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The revision is stale (`stale_revision`), the address is taken
+            (`email_taken`), or the account holds no password and cannot be
+            activated (`no_password`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    delete:
+      tags: [accounts]
+      operationId: deleteUser
+      summary: Delete an account.
+      description: |
+        An admin calls this. Pass `?revision=` with the revision you read.
+
+        You cannot delete your own account. The server answers **400** with
+        the code `self_change`. Ask another admin.
+
+        Consider the status `disabled` first. The change log is append-only
+        and holds the id of the account against each change. A deletion leaves
+        those entries with an id that resolves to nobody.
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '204':
+          description: The account is gone.
+        '400':
+          description: |
+            The `revision` is missing or will not parse
+            (`revision_required`), or the account is your own
+            (`self_change`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StaleRevision'
+
+  /users/{id}/invite:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [accounts]
+      operationId: inviteUser
+      summary: Send the invitation again.
+      description: |
+        An admin calls this. Use it when the first mail failed, or when the
+        token expired.
+
+        A new token replaces the old one. The old token stops working.
+
+        Read `mailSent`, as at `POST /users`.
+      responses:
+        '200':
+          description: The invitation is on its way.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invite'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The account is disabled (`account_disabled`). Enable it first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  ############################################################################
+  # The plan
+  ############################################################################
+
+  /plan:
+    get:
+      tags: [plan]
+      operationId: getPlan
+      summary: Read the whole plan.
+      description: |
+        This is one request. Call it once when the page loads, and follow
+        `GET /events` after that.
+
+        Every role reads the plan. A viewer reads it and writes nothing.
+      responses:
+        '200':
+          description: The whole plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /events:
+    get:
+      tags: [plan]
+      operationId: streamEvents
+      summary: Follow the plan live.
+      description: |
+        This is a Server-Sent Events stream. It stays open. One connection
+        carries every change, so a change costs no handshake.
+
+        The stream carries two event names.
+
+        `change` carries the row that changed, with its collection and its new
+        revision. Apply it to the plan you hold.
+
+        `resync` carries an empty object. It means the server lost its place.
+        Call `GET /plan` again.
+
+        A comment line arrives at intervals to hold the connection open
+        through a proxy.
+
+        Reconnect on a drop. The `EventSource` of the browser does this by
+        itself.
+      responses:
+        '200':
+          description: The stream is open.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  The frames of the Server-Sent Events stream. A schema
+                  describes one frame poorly, so read the description above.
+                examples:
+                  - |
+                    event: change
+                    data: {"collection":"tasks","row":{"id":"…","revision":4}}
+
+                    event: resync
+                    data: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: |
+            The server cannot reach the database, or it holds too many
+            streams. Retry with a backoff.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  ############################################################################
+  # Settings
+  ############################################################################
+
+  /settings:
+    patch:
+      tags: [budget]
+      operationId: updateSettings
+      summary: Change the settings of the plan.
+      description: |
+        An editor or an admin calls this. There is one settings row, so there
+        is no id.
+
+        `ceiling` is money. Send a decimal string in major units.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsPatch'
+      responses:
+        '200':
+          description: The settings as they now stand.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/StaleRevision'
+
+  ############################################################################
+  # Collections
+  ############################################################################
+
+  /phases:
+    post:
+      tags: [budget]
+      operationId: createPhase
+      summary: Add a phase.
+      description: A phase groups the budget items. An editor or an admin calls this.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhaseWrite'
+      responses:
+        '201': { $ref: '#/components/responses/PhaseCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /phases/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [budget]
+      operationId: updatePhase
+      summary: Change a phase.
+      description: Send the `revision` you read. Omit a field to leave it as it is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhaseWrite'
+      responses:
+        '200':
+          description: The phase as it now stands.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Phase' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+    delete:
+      tags: [budget]
+      operationId: deletePhase
+      summary: Delete a phase.
+      description: |
+        The budget items of the phase stay. Their `phaseId` becomes `null`.
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '204': { description: The phase is gone. }
+        '400': { $ref: '#/components/responses/RevisionRequired' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /sponsors:
+    post:
+      tags: [budget]
+      operationId: createSponsor
+      summary: Add a sponsor.
+      description: |
+        A sponsor pays for budget items. An editor or an admin calls this.
+
+        `code` is the short label the table shows. It is unique.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SponsorWrite'
+      responses:
+        '201': { $ref: '#/components/responses/SponsorCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: The `code` belongs to another sponsor (`conflict`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+  /sponsors/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [budget]
+      operationId: updateSponsor
+      summary: Change a sponsor.
+      description: Send the `revision` you read. Omit a field to leave it as it is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SponsorWrite'
+      responses:
+        '200':
+          description: The sponsor as it now stands.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sponsor' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+    delete:
+      tags: [budget]
+      operationId: deleteSponsor
+      summary: Delete a sponsor.
+      description: |
+        The budget items stay. The server removes the sponsor from the
+        `sponsors` list of each one. A line with no sponsor left reads as
+        unassigned.
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '204': { description: The sponsor is gone. }
+        '400': { $ref: '#/components/responses/RevisionRequired' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /budget-items:
+    post:
+      tags: [budget]
+      operationId: createBudgetItem
+      summary: Add a budget item.
+      description: |
+        An editor or an admin calls this.
+
+        `unit` and `paid` are money. Send a decimal string in major units.
+        `qty` is a JSON number.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BudgetItemWrite'
+      responses:
+        '201': { $ref: '#/components/responses/BudgetItemCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /budget-items/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [budget]
+      operationId: updateBudgetItem
+      summary: Change a budget item.
+      description: |
+        Send the `revision` you read. Omit a field to leave it as it is.
+
+        Send `sponsors` as the whole list. The server replaces the list it
+        holds. Send `[]` to clear it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BudgetItemWrite'
+      responses:
+        '200':
+          description: The budget item as it now stands.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BudgetItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+    delete:
+      tags: [budget]
+      operationId: deleteBudgetItem
+      summary: Delete a budget item.
+      description: |
+        A child item points at this one through `parentId`. The server deletes
+        the children with it.
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '204': { description: The budget item is gone. }
+        '400': { $ref: '#/components/responses/RevisionRequired' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /programme-entries:
+    post:
+      tags: [schedule]
+      operationId: createProgrammeEntry
+      summary: Add an entry to the programme.
+      description: |
+        The programme is the run of the day. An editor or an admin calls this.
+
+        Point `budgetItemId` at a budget item to tie the entry to a cost.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgrammeEntryWrite'
+      responses:
+        '201': { $ref: '#/components/responses/ProgrammeEntryCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /programme-entries/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [schedule]
+      operationId: updateProgrammeEntry
+      summary: Change an entry of the programme.
+      description: Send the `revision` you read. Omit a field to leave it as it is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgrammeEntryWrite'
+      responses:
+        '200':
+          description: The entry as it now stands.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProgrammeEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+    delete:
+      tags: [schedule]
+      operationId: deleteProgrammeEntry
+      summary: Delete an entry of the programme.
+      description: The budget item it points at stays.
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '204': { description: The entry is gone. }
+        '400': { $ref: '#/components/responses/RevisionRequired' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /tasks:
+    post:
+      tags: [schedule]
+      operationId: createTask
+      summary: Add a task.
+      description: |
+        An editor or an admin calls this.
+
+        A new task starts at the status `not-started`.
+
+        Set `due` to put the task in the digest. The digest lists the tasks
+        that fall due next, and it goes to every admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskWrite'
+      responses:
+        '201': { $ref: '#/components/responses/TaskCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /tasks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [schedule]
+      operationId: updateTask
+      summary: Change a task.
+      description: Send the `revision` you read. Omit a field to leave it as it is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskWrite'
+      responses:
+        '200':
+          description: The task as it now stands.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+    delete:
+      tags: [schedule]
+      operationId: deleteTask
+      summary: Delete a task.
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '204': { description: The task is gone. }
+        '400': { $ref: '#/components/responses/RevisionRequired' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notes:
+    post:
+      tags: [notes]
+      operationId: createNote
+      summary: Add a note.
+      description: A note is a free line of text. An editor or an admin calls this.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteWrite'
+      responses:
+        '201': { $ref: '#/components/responses/NoteCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /notes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    patch:
+      tags: [notes]
+      operationId: updateNote
+      summary: Change a note.
+      description: Send the `revision` you read. Omit a field to leave it as it is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NoteWrite'
+      responses:
+        '200':
+          description: The note as it now stands.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Note' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+    delete:
+      tags: [notes]
+      operationId: deleteNote
+      summary: Delete a note.
+      parameters:
+        - $ref: '#/components/parameters/RevisionQuery'
+      responses:
+        '204': { description: The note is gone. }
+        '400': { $ref: '#/components/responses/RevisionRequired' }
+        '409': { $ref: '#/components/responses/StaleRevision' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  ############################################################################
+  # Web push
+  ############################################################################
+
+  /push/subscriptions:
+    post:
+      tags: [push]
+      operationId: subscribePush
+      summary: Register this browser for the digest.
+      description: |
+        Send the `PushSubscription` of the browser, as `JSON.stringify()`
+        produces it.
+
+        Every role registers. The role decides who receives the digest at the
+        time it goes out, so a viewer who becomes an admin later starts to
+        receive it without a new registration.
+
+        Register again with the same endpoint to refresh it. The server keeps
+        one subscription for one endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushSubscription'
+      responses:
+        '204':
+          description: The subscription is stored.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [push]
+      operationId: unsubscribePush
+      summary: Stop the digest on this browser.
+      description: |
+        Send the endpoint of the subscription. The server deletes it.
+
+        This operation succeeds for an endpoint the server does not hold.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties:
+                endpoint:
+                  type: string
+                  format: uri
+                  description: The endpoint of the subscription to delete.
+      responses:
+        '204':
+          description: The subscription is gone.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: soiree_session
+      description: |
+        The session cookie. `POST /auth/login` sets it, and
+        `POST /auth/passkeys/login/finish` sets it.
+
+        The cookie is HttpOnly, Secure and SameSite=Lax. A script cannot read
+        it. A browser sends it by itself.
+
+        The name carries no `__Host-` prefix. That prefix forbids a `Domain`
+        attribute, and this deployment serves the apex and the `www` name.
+
+  parameters:
+    RevisionQuery:
+      name: revision
+      in: query
+      required: true
+      description: |
+        The revision you read. A delete names the row it deletes, in the same
+        way as a write.
+
+        A delete carries no body, so this is a query parameter rather than a
+        field. It is required. A delete with no revision is a delete that
+        cannot tell a stale row from a current one.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    Id:
+      name: id
+      in: path
+      required: true
+      description: The id of the row.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: |
+        The body does not parse, a field holds the wrong type, or a value
+        fails a rule. The code is `bad_request`. Read `message`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    Unauthorized:
+      description: |
+        There is no session. Sign in. The code is `unauthenticated`.
+
+        A 401 means this deployment has an API. Do not fall back to local
+        storage on a 401. Fall back on a **404**, which means the deployment
+        runs without a database.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    Forbidden:
+      description: |
+        The session exists, and the role is too low. A viewer writes nothing.
+        An admin alone manages accounts.
+
+        The code is `read_only` when a viewer tries to write, and `forbidden`
+        when a role is below the one a route needs.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    RevisionRequired:
+      description: |
+        The `revision` is missing, or it will not parse. The code is
+        `bad_request` on a collection, and `revision_required` on an account.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    NotFound:
+      description: |
+        The row does not exist. The code is `not_found`.
+
+        A whole-path 404 means something else. See "The API is absent without
+        a database" above.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    TooManyRequests:
+      description: |
+        A rate limit refused the request. The code is `rate_limited`.
+
+        Wait for `Retry-After`, then retry. The header reads a flat 60. The
+        bucket refills continuously, so the real wait is usually shorter — a
+        precise number would mostly help somebody pacing an attack against it.
+      headers:
+        Retry-After:
+          description: Seconds to wait. It is always `60`.
+          schema:
+            type: integer
+            examples: [60]
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    StaleRevision:
+      description: |
+        Somebody wrote first. The code is `stale_revision`.
+
+        Read `current`. It holds the row as it now stands, with its new
+        revision. Reconcile against it, and write again with that revision. A
+        call to `GET /plan` is unnecessary.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    PhaseCreated:
+      description: The phase exists.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Phase' }
+    SponsorCreated:
+      description: The sponsor exists.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Sponsor' }
+    BudgetItemCreated:
+      description: The budget item exists.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/BudgetItem' }
+    ProgrammeEntryCreated:
+      description: The entry exists.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ProgrammeEntry' }
+    TaskCreated:
+      description: The task exists.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Task' }
+    NoteCreated:
+      description: The note exists.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Note' }
+
+  schemas:
+
+    ########################################################################
+    # Building blocks
+    ########################################################################
+
+    Money:
+      type: string
+      pattern: '^-?[0-9]+(\.[0-9]+)?$'
+      description: |
+        An amount in **major units**, as a decimal string.
+
+        Send `"250.50"`. Do not send `250.50`. The server refuses a JSON
+        number here.
+
+        The number of decimal places comes from the currency of the
+        deployment. A value with too many places gets 400.
+      examples: ['250.50', '750000', '0.00']
+
+    CivilDate:
+      type: string
+      format: date
+      pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+      description: |
+        A calendar date. It carries no time and no zone.
+
+        A timestamp would read as the day before, east of UTC.
+      examples: ['2030-01-15']
+
+    Revision:
+      type: integer
+      format: int64
+      minimum: 1
+      description: |
+        The version of this row. It increases on every write.
+
+        Send the revision you read. A stale revision gets 409.
+
+    Id:
+      type: string
+      format: uuid
+      description: The id of the row.
+
+    UpdatedBy:
+      type: [string, 'null']
+      format: uuid
+      description: |
+        The id of the account that wrote this row last. It is `null` for a row
+        that no account has touched.
+
+        This is an id, and never an address. The change log outlives the
+        account.
+
+    Role:
+      type: string
+      enum: [admin, editor, viewer]
+      description: |
+        `admin` manages the accounts, and reads and writes the plan. The
+        digest goes to every active admin.
+
+        `editor` reads and writes the plan.
+
+        `viewer` reads the plan.
+
+    UserStatus:
+      type: string
+      enum: [invited, active, disabled]
+      description: |
+        `invited` holds no password yet. The person redeems the token from the
+        invitation mail.
+
+        `active` signs in.
+
+        `disabled` signs in with nothing, and takes no invitation. The history
+        of the account stays.
+
+    TaskStatus:
+      type: string
+      enum: [not-started, in-progress, done]
+      description: The state of a task. A new task starts at `not-started`.
+
+    Position:
+      type: integer
+      format: int32
+      description: |
+        The order of this row among its siblings. A lower number comes first.
+
+    ########################################################################
+    # Errors
+    ########################################################################
+
+    ApiError:
+      type: object
+      description: |
+        The body of every answer outside the 2xx range. One shape, so a client
+        never guesses.
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: |
+            A stable code. Branch on this, and never on `message`.
+          examples:
+            - bad_request
+            - not_found
+            - stale_revision
+            - payload_too_large
+            - conflict
+            - internal
+            - unauthenticated
+            - read_only
+            - forbidden
+            - rate_limited
+            - revision_required
+            - self_change
+            - unavailable
+            - invalid_credentials
+            - invalid_token
+            - weak_password
+            - email_taken
+            - account_disabled
+            - no_password
+            - too_many_passkeys
+            - passkey_exists
+        message:
+          type: string
+          description: |
+            A line for a person to read. It is absent on some errors. The
+            wording changes between releases.
+        current:
+          description: |
+            The row as it now stands. It is present on a 409 with the code
+            `stale_revision`, and absent otherwise.
+
+            Reconcile against this. A call to `GET /plan` is unnecessary.
+
+    ########################################################################
+    # The plan
+    ########################################################################
+
+    Plan:
+      type: object
+      description: |
+        The whole plan in one object. `GET /plan` returns this.
+      required: [settings, phases, sponsors, budgetItems, programme, tasks, notes]
+      properties:
+        settings: { $ref: '#/components/schemas/Settings' }
+        phases:
+          type: array
+          items: { $ref: '#/components/schemas/Phase' }
+        sponsors:
+          type: array
+          items: { $ref: '#/components/schemas/Sponsor' }
+        budgetItems:
+          type: array
+          items: { $ref: '#/components/schemas/BudgetItem' }
+        programme:
+          type: array
+          items: { $ref: '#/components/schemas/ProgrammeEntry' }
+        tasks:
+          type: array
+          items: { $ref: '#/components/schemas/Task' }
+        notes:
+          type: array
+          items: { $ref: '#/components/schemas/Note' }
+
+    Settings:
+      type: object
+      description: |
+        The settings of the plan. There is one row.
+      required: [ceiling, inflationPct, fxRate, splitEvenly, revision, updatedAt]
+      properties:
+        ceiling:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: |
+            The spending ceiling, in major units. `"0"` means no ceiling.
+        inflationPct:
+          type: number
+          format: double
+          description: |
+            The allowance for a price rise, as a percentage. `5` means five
+            percent. This is not money, so it is a number.
+        fxRate:
+          type: number
+          format: double
+          description: |
+            The rate that converts the primary currency into the second
+            readout. It is a number, because it multiplies rather than pays.
+        splitEvenly:
+          type: boolean
+          description: |
+            `true` divides a shared line between its sponsors in the totals.
+
+            The total of one sponsor always divides a shared line, whatever
+            this says.
+        revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt:
+          type: string
+          format: date-time
+
+    SettingsPatch:
+      type: object
+      description: |
+        A change to the settings.
+
+        Omit a field to leave it as it is. `{}` changes nothing.
+      required: [revision]
+      properties:
+        revision: { $ref: '#/components/schemas/Revision' }
+        ceiling: { $ref: '#/components/schemas/Money' }
+        inflationPct:
+          type: number
+          format: double
+        fxRate:
+          type: number
+          format: double
+        splitEvenly:
+          type: boolean
+
+    Phase:
+      type: object
+      description: A phase groups the budget items.
+      required: [id, name, position, revision, updatedAt, updatedBy]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+        revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { $ref: '#/components/schemas/UpdatedBy' }
+
+    PhaseWrite:
+      type: object
+      description: |
+        A new phase, or a change to one.
+
+        Send `revision` on a change. Omit it on a create.
+      properties:
+        revision: { $ref: '#/components/schemas/Revision' }
+        name: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+
+    Sponsor:
+      type: object
+      description: A sponsor pays for budget items.
+      required: [id, code, name, position, revision, updatedAt, updatedBy]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        code:
+          type: string
+          description: |
+            The short label the table shows. It is unique across the
+            sponsors.
+        name: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+        revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { $ref: '#/components/schemas/UpdatedBy' }
+
+    SponsorWrite:
+      type: object
+      description: |
+        A new sponsor, or a change to one.
+
+        Send `revision` on a change. Omit it on a create.
+      properties:
+        revision: { $ref: '#/components/schemas/Revision' }
+        code:
+          type: string
+          description: The short label. It is unique. A clash gets 409.
+        name: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+
+    BudgetItem:
+      type: object
+      description: |
+        One line of the budget.
+
+        `unit` and `paid` are money. `qty` is a number.
+      required:
+        [id, phaseId, parentId, item, vendor, unit, qty, paid, lockBy, note,
+         position, sponsors, revision, updatedAt, updatedBy]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        phaseId:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The phase of this line. It is `null` for a line in no phase.
+        parentId:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The line this one sits under. It is `null` for a top-level line.
+
+            A delete of the parent deletes this line with it.
+        item: { type: string }
+        vendor: { type: string }
+        unit:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: The price of one unit, in major units.
+        qty:
+          type: number
+          format: double
+          description: |
+            The count of units. This is not money. Nobody pays in it, and
+            nothing sums it, so it stays a JSON number.
+        paid:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: The amount paid so far, in major units.
+        lockBy:
+          oneOf:
+            - { $ref: '#/components/schemas/CivilDate' }
+            - { type: 'null' }
+          description: |
+            The date the price holds until. It is `null` for a line with no
+            deadline.
+
+            A line with a date enters the digest.
+        note: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+        sponsors:
+          type: array
+          items: { type: string, format: uuid }
+          description: |
+            The sponsors that cover this line.
+
+            An empty list reads as unassigned. Two or more sponsors make the
+            line shared.
+        revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { $ref: '#/components/schemas/UpdatedBy' }
+
+    BudgetItemWrite:
+      type: object
+      description: |
+        A new budget item, or a change to one.
+
+        Send `revision` on a change. Omit it on a create.
+
+        Omit a field to leave it as it is. Send `null` to clear a field that
+        accepts `null`.
+      properties:
+        revision: { $ref: '#/components/schemas/Revision' }
+        phaseId:
+          type: [string, 'null']
+          format: uuid
+        parentId:
+          type: [string, 'null']
+          format: uuid
+        item: { type: string }
+        vendor: { type: string }
+        unit: { $ref: '#/components/schemas/Money' }
+        qty: { type: number, format: double }
+        paid: { $ref: '#/components/schemas/Money' }
+        lockBy:
+          oneOf:
+            - { $ref: '#/components/schemas/CivilDate' }
+            - { type: 'null' }
+        note: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+        sponsors:
+          type: array
+          items: { type: string, format: uuid }
+          description: |
+            The whole list. The server replaces the list it holds. Send `[]`
+            to clear it.
+
+    ProgrammeEntry:
+      type: object
+      description: One entry in the run of the day.
+      required: [id, title, note, position, budgetItemId, revision, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        title: { type: string }
+        note: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+        budgetItemId:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The budget item this entry costs. It is `null` for an entry with
+            no cost.
+        revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt: { type: string, format: date-time }
+
+    ProgrammeEntryWrite:
+      type: object
+      description: |
+        A new entry, or a change to one.
+
+        Send `revision` on a change. Omit it on a create.
+      properties:
+        revision: { $ref: '#/components/schemas/Revision' }
+        title: { type: string }
+        note: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+        budgetItemId:
+          type: [string, 'null']
+          format: uuid
+
+    Task:
+      type: object
+      description: One task on the plan.
+      required: [id, name, owner, due, status, position, revision, updatedAt, updatedBy]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        owner:
+          type: string
+          description: |
+            The person who holds this task, as free text. This is not an
+            account.
+        due:
+          oneOf:
+            - { $ref: '#/components/schemas/CivilDate' }
+            - { type: 'null' }
+          description: |
+            The date the task falls due. It is `null` for a task with no date.
+
+            A task with a date enters the digest.
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        position: { $ref: '#/components/schemas/Position' }
+        revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { $ref: '#/components/schemas/UpdatedBy' }
+
+    TaskWrite:
+      type: object
+      description: |
+        A new task, or a change to one.
+
+        Send `revision` on a change. Omit it on a create.
+
+        A new task starts at `not-started` when you omit `status`.
+      properties:
+        revision: { $ref: '#/components/schemas/Revision' }
+        name: { type: string }
+        owner: { type: string }
+        due:
+          oneOf:
+            - { $ref: '#/components/schemas/CivilDate' }
+            - { type: 'null' }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        position: { $ref: '#/components/schemas/Position' }
+
+    Note:
+      type: object
+      description: One free line of text on the plan.
+      required: [id, text, position, revision, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        text: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+        revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt: { type: string, format: date-time }
+
+    NoteWrite:
+      type: object
+      description: |
+        A new note, or a change to one.
+
+        Send `revision` on a change. Omit it on a create.
+      properties:
+        revision: { $ref: '#/components/schemas/Revision' }
+        text: { type: string }
+        position: { $ref: '#/components/schemas/Position' }
+
+    ########################################################################
+    # Accounts
+    ########################################################################
+
+    User:
+      type: object
+      description: One account.
+      required: [id, email, role, status, createdBy, createdAt, revision, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/Role' }
+        status: { $ref: '#/components/schemas/UserStatus' }
+        createdBy:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The admin who created this account. It is `null` for the first
+            admin, which the deployment creates at startup.
+        createdAt: { type: string, format: date-time }
+        revision: { $ref: '#/components/schemas/Revision' }
+        updatedAt: { type: string, format: date-time }
+
+    UserPatch:
+      type: object
+      description: |
+        A change to an account.
+
+        Omit a field to leave it as it is.
+      required: [revision]
+      properties:
+        revision: { $ref: '#/components/schemas/Revision' }
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/Role' }
+        status: { $ref: '#/components/schemas/UserStatus' }
+
+    Invite:
+      type: object
+      description: |
+        The answer to a create and to an invitation.
+
+        Read `mailSent` first. It decides whether you show the link.
+      required: [user, mailSent]
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        mailSent:
+          type: boolean
+          description: |
+            `true` means the server sent the mail. `false` means the
+            deployment holds no mail configuration.
+        setPasswordUrl:
+          type: string
+          format: uri
+          description: |
+            The link that sets the password. It is present when `mailSent` is
+            `false`, and absent otherwise.
+
+            The link carries the token. Give it to the person by a private
+            route. A deployment with mail omits it, so the token never reaches
+            a log.
+
+    Passkey:
+      type: object
+      description: One passkey of the current account.
+      required: [id, label, transports, createdAt, lastUsedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        label:
+          type: string
+          description: The name of the passkey, for the person to recognise.
+        transports:
+          type: array
+          items: { type: string }
+          description: |
+            How the authenticator connects. The list says `phone` rather than
+            `passkey` three times.
+          examples: [['internal'], ['hybrid'], ['usb']]
+        createdAt: { type: string, format: date-time }
+        lastUsedAt:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            The last sign-in with this passkey. It is `null` for a passkey
+            that nobody has used.
+
+    ########################################################################
+    # Web push
+    ########################################################################
+
+    PushSubscription:
+      type: object
+      description: |
+        The `PushSubscription` of the browser, as `JSON.stringify()` produces
+        it. Send it unchanged.
+      required: [endpoint, keys]
+      properties:
+        endpoint:
+          type: string
+          format: uri
+          description: |
+            The address of the push service. It identifies the subscription.
+        expirationTime:
+          type: [string, 'null']
+          description: The browser sets this. It is `null` in most cases.
+        keys:
+          type: object
+          required: [p256dh, auth]
+          description: The keys that encrypt the payload.
+          properties:
+            p256dh:
+              type: string
+              description: The public key of the browser, in base64url.
+            auth:
+              type: string
+              description: The authentication secret, in base64url.

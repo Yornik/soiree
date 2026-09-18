@@ -146,6 +146,36 @@ real bug, not pedantry: `2027-06-12T00:00:00` is interpreted in the *viewer's*
 timezone, so the countdown silently reads a day differently depending on where
 someone is sitting — which is precisely the situation this app is built for.
 
+## The API
+
+[`api/openapi.yaml`](api/openapi.yaml) describes the whole HTTP surface, as
+OpenAPI 3.1. Read it there, or render it with any viewer:
+
+```bash
+npx @redocly/cli preview-docs api/openapi.yaml
+```
+
+Three things in it are easy to get wrong and worth reading before writing a
+client: money crosses the wire as a **decimal string in major units** and never
+as a JSON number; every write carries the `revision` you read, and a stale one
+comes back as 409 with the current row attached; and a `PATCH` body has three
+states, where an omitted field is left alone and an explicit `null` clears it.
+
+No Swagger UI is bundled. The strict CSP this app ships under forbids inline
+script and style, which is what the split-asset build exists to satisfy —
+vendoring a UI that needs both would mean weakening it.
+
+The document is hand-written, so it is checked rather than trusted. `redocly
+lint` in CI proves it is valid OpenAPI. `TestEveryDocumentedRouteExists` asks
+the running server for every path and method it describes, so a renamed or
+deleted route fails the build. `TestTheDocumentedErrorContractHolds` pins the
+answers a client branches on — the codes behind 400, 401, 403 and 429.
+
+That is narrower than "the document is correct", deliberately: nothing checks
+the prose or the schemas against live responses. Writing the first version of
+this specification produced two responses that were described from inference
+rather than read from the source, and the tests above are what found them.
+
 ## Design notes
 
 The people using this are spread across the world; the server is in one place.
