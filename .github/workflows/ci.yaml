@@ -46,7 +46,16 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
-      - run: go test -race -cover ./...
+      # -timeout, because Go's default is ten minutes per package and
+      # internal/httpd reached it. Nothing hung: under the race detector that
+      # package took 522 s, then 554 s, and the activity tests took it past
+      # 600, where Go kills the binary and reports whichever test happened to
+      # be running - one second into it - as if it were the culprit. The
+      # limit has to be somewhere the suite is not. Why the package is that
+      # slow under -race is a separate question, and not the first guess:
+      # a fresh database and its migrations cost 0.23 s a test, measured,
+      # which is a twentieth of the total.
+      - run: go test -race -cover -timeout 25m ./...
 
   # The Go tests prove the right bytes are served. They cannot prove the page
   # works, and soiree is mostly frontend — so this drives the real binary in a
