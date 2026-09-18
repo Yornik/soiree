@@ -1,7 +1,7 @@
 # This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
 # See https://redocly.com/docs/cli/ for more information.
 #
-# Both entries are the document being right and the rule being general:
+# Every entry is the document being right and the rule being general:
 #
 #   - POST /auth/logout has no 4xx because it has none. It answers 204 with or
 #     without a session, and inventing a refusal to satisfy a linter would make
@@ -10,6 +10,9 @@
 #     text/event-stream response. OpenAPI 3.1 cannot type the data of a
 #     Server-Sent Event, so no `$ref` the rule counts can point at it.
 #     TestTheChangeFrameIsAsDocumented is what keeps it true.
+#   - GET /attachments/{id}/content has no 2xx because it never answers one.
+#     It is a 303 to the file in the object store, always; the 200 belongs to
+#     another server. A documented 200 here would be a response nobody gets.
 #
 # Regenerate with `redocly lint api/openapi.yaml --generate-ignore-file` only
 # after reading what it would add: this file is a list of things somebody
@@ -17,5 +20,7 @@
 api/openapi.yaml:
   operation-4xx-response:
     - '#/paths/~1auth~1logout/post/responses'
+  operation-2xx-response:
+    - '#/paths/~1attachments~1{id}~1content/get/responses'
   no-unused-components:
     - '#/components/schemas/ChangeNotice'

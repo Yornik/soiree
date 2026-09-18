@@ -302,3 +302,44 @@ func TestTheListenerDoesNotComeFromThePool(t *testing.T) {
 		t.Error("the listener is using a connection from the pool")
 	}
 }
+
+// A file is announced when it is confirmed, and when it goes — and at no other
+// moment. Reserving room for an upload is nobody else's business yet: a page
+// that re-read the plan on that notice would find nothing new in it.
+func TestAFileIsAnnouncedWhenItIsConfirmedAndWhenItGoes(t *testing.T) {
+	s := newNotifyStore(t)
+	item, err := s.CreateBudgetItem(t.Context(), BudgetItem{Item: "Catering", Unit: 100, Qty: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notices := listenTo(t, s)
+
+	pending, err := s.BeginAttachment(t.Context(),
+		Attachment{BudgetItemID: &item.ID, Name: "quote.pdf", ContentType: "application/pdf", Size: 10}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompleteAttachment(t.Context(), pending.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first thing heard is the confirmation: had the reservation been
+	// announced, it would have arrived ahead of it.
+	got := nextNotice(t, notices)
+	if got.Entity != EntityAttachments || got.Action != ChangeCreate || got.ID == nil || *got.ID != pending.ID {
+		t.Fatalf("first notice = %+v, want the file's create", got)
+	}
+	// No revision: a file is never edited, and a client holding none must
+	// read the plan again rather than compare.
+	if got.Revision != nil {
+		t.Errorf("revision = %d, want none", *got.Revision)
+	}
+
+	if _, err := s.DeleteAttachment(t.Context(), pending.ID); err != nil {
+		t.Fatal(err)
+	}
+	got = nextNotice(t, notices)
+	if got.Entity != EntityAttachments || got.Action != ChangeDelete {
+		t.Fatalf("second notice = %+v, want the file's delete", got)
+	}
+}
