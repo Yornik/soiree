@@ -50,3 +50,32 @@ test('a browser that opens the page ends up with an active worker and the shell 
     await context.close();
   }
 });
+
+test('under a working worker, only the planner itself is answered from the cache', async ({ browser }) => {
+  const context = await browser.newContext({ baseURL: BASE_URL, serviceWorkers: 'allow' });
+  try {
+    const page = await context.newPage();
+    await page.goto('/');
+    // The worker claims the page once it is active; from then on every
+    // request the page makes, navigations included, goes through it.
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15000 });
+
+    // A link to anything else on the site is a navigation too - an attached
+    // file is opened with one. It has to get the server's answer. Answered
+    // with the cached shell, it would open the planner where the file should be.
+    const res = await page.goto('/healthz');
+    expect(res && res.status()).toBe(200);
+    expect((await page.locator('body').innerText()).trim()).toBe('ok');
+    await expect(page.locator('#daysNum')).toHaveCount(0);
+
+    // And the planner still comes from the worker: it opens with the network gone.
+    await page.goto('/');
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15000 });
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator('#daysNum')).toBeVisible();
+  } finally {
+    await context.setOffline(false).catch(() => {});
+    await context.close();
+  }
+});
