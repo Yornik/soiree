@@ -1703,6 +1703,10 @@
     sessionGone = false;
     blocked = {};
     setSticky('');
+    // Signing out is what raised this, so signing in is what lowers it. It
+    // exists to stop a signed-out page writing its emptied planner back; a
+    // signed-in page has a plan again, and one worth keeping.
+    forgotten = false;
 
     // Never signed in on this page before: the ordinary first load.
     if (!apiMode) { connect(0); return; }
@@ -3297,6 +3301,14 @@
         // A wholesale replacement is the largest edit this page can make, and
         // in API mode it is a real one: every row the server holds and this
         // file does not is removed, and every row in the file is created.
+        //
+        // `forgotten` is cleared here because this path calls flushSave()
+        // directly and save() is the only other place that clears it. On a
+        // page that had been signed out of and back into, the flag was still
+        // up, flushSave() returned at its first line, and the import sat on
+        // screen looking finished: not sent to the server, not even written to
+        // this browser. Everybody else saw an empty plan.
+        forgotten = false;
         dirty = true;
         state = incoming;
         if (!Array.isArray(state.sponsors)) state.sponsors = [];
