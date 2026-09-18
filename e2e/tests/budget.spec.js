@@ -185,3 +185,28 @@ test('a line paid to the cent is settled, not a rounding error short', async ({ 
   await expect(page.locator('#sumOwing')).toHaveText('€0');
   await expect(page.locator('#sumOwingAlt')).toHaveText('€0');
 });
+
+// Reported from the first real deployment, by people on desktop monitors: "add
+// a remove button". There was one. The page was capped at 1000px and the
+// table's columns add up to more, so Remarks and the remove button were cut
+// off at any screen width, reachable only by scrolling the table sideways with
+// nothing to say so.
+for (const width of [1280, 1920]) {
+  test(`on a ${width}px desktop the whole budget table is on screen, remove button included`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+    await gotoTab(page, 'budget');
+    await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+
+    const wrap = page.locator('.table-wrap', { has: page.locator('#budgetBody') });
+    const overflow = await wrap.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow, 'pixels of table hidden behind a sideways scroll').toBe(0);
+
+    const remove = page.locator('#budgetBody .del-btn').first();
+    await expect(remove).toBeInViewport({ ratio: 1 });
+    await remove.click();
+    // The line is gone. (The empty table draws a row of its own to say so.)
+    await expect(page.locator('#budgetBody .del-btn')).toHaveCount(0);
+  });
+}
+

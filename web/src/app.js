@@ -582,7 +582,11 @@
   // satuan (EUR)" — and a header that ellipses away its currency code is a
   // header that has stopped saying what the column holds. The width comes off
   // remarks, which wraps rather than truncating. Total unchanged.
-  var DEFAULT_COL_WIDTHS = [230, 140, 70, 135, 110, 135, 135, 200, 40];
+  // They add up to 1240, which is the page (--page in styles.css, 1280) less
+  // its gutters: the whole table, Remarks and the remove button included, is on
+  // screen at once on a desktop. Widen one without narrowing another and the
+  // last columns go back to being reachable only by scrolling sideways.
+  var DEFAULT_COL_WIDTHS = [230, 140, 70, 135, 110, 135, 135, 245, 40];
 
   function emptyState() {
     return {
