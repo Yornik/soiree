@@ -523,6 +523,15 @@ body.is-empty .when-data { display: none; }
   font-size: 14px;
 }
 .upnext-list li:last-child, .split-list li:last-child { border-bottom: 0; }
+
+/* Who is covering what, as lengths. The list is held to a readable width - a
+   name at one edge of a desktop and its amount at the other is two facts, not
+   one - and each share is drawn under its row. */
+.split-list { max-width: 760px; }
+.split-list li { row-gap: 7px; }
+.split-list .share { grid-column: 1 / -1; height: 6px; background: var(--tint); }
+.split-list .share-fill { display: block; height: 100%; background: var(--committed); }
+.split-list .share-fill.unassigned { background: var(--rule-mid); }
 .upnext-list .due.late { color: var(--alarm); font-weight: 600; }
 .upnext-list .who, .upnext-list .due {
   color: var(--ink-2);
@@ -656,11 +665,29 @@ td.calc {
 }
 td.calc.strong { color: var(--ink); font-weight: 600; }
 td.calc.owing { color: var(--owed); }
+table.budget tbody tr.settled td.calc:nth-child(6) { color: var(--paid); font-weight: 600; }
 td.calc.paid { color: var(--paid); }
 td.num-cell input { text-align: right; }
 td.del-cell { width: 40px; text-align: center; }
 td.empty-cell { color: var(--ink-2); padding: 18px 12px; }
 .status-select { min-width: 124px; }
+
+/* --- Tasks: a row shows its state --------------------------------------------
+   The edge of the first cell carries the status, so a column of tasks can be
+   scanned for what is moving without reading a single dropdown. */
+table.tasks tbody tr[data-status] td:first-child { box-shadow: inset 3px 0 0 var(--rule-mid); }
+table.tasks tbody tr[data-status="in-progress"] td:first-child { box-shadow: inset 3px 0 0 var(--lamp); }
+table.tasks tbody tr[data-status="done"] td:first-child { box-shadow: inset 3px 0 0 var(--paid); }
+table.tasks tbody tr[data-status="in-progress"] .status-select { color: var(--owed); font-weight: 600; }
+table.tasks tbody tr[data-status="done"] .status-select { color: var(--paid); font-weight: 600; }
+table.tasks tbody tr[data-status="done"] td:first-child input { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--ink-2); }
+table.tasks tbody tr[data-status="done"] td:nth-child(2) input,
+table.tasks tbody tr[data-status="done"] input[type="date"] { color: var(--ink-2); }
+table.tasks tbody tr.late input[type="date"] { color: var(--alarm); font-weight: 600; }
+
+/* How many, beside the filter that would show them. */
+.pill-count { margin-left: 7px; font-weight: 400; font-variant-numeric: tabular-nums; opacity: 0.75; }
+.pill-count:empty { display: none; }
 
 /* Single rule above the totals, double rule below: the one piece of received
    notation here, because it already means "this is the figure that counts". */

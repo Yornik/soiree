@@ -2820,6 +2820,14 @@
       li.appendChild(cell('span', '', k));
       li.appendChild(cell('span', 'amt', fmtCur(Math.round(toMajor(groups[k])))));
       li.appendChild(cell('span', 'pct', share + '%'));
+      // The share again, as a length: five percentages in a column have to be
+      // read and compared, five bars are compared by looking.
+      var bar = cell('span', 'share', '');
+      bar.setAttribute('aria-hidden', 'true');
+      var fill = cell('span', 'share-fill' + (k === t('sp.unassigned') ? ' unassigned' : ''), '');
+      fill.style.width = share + '%';
+      bar.appendChild(fill);
+      li.appendChild(bar);
       list.appendChild(li);
     });
 
@@ -3703,6 +3711,9 @@
     tr.children[3].textContent = fmtCur(tot);
     tr.children[5].textContent = fmtCur(owing);
     tr.children[5].classList.toggle('owing', owing > 0);
+    // Paid in full: the line is settled, and the figure that said what was
+    // owed says so in the colour of money paid rather than as a bare zero.
+    tr.classList.toggle('settled', tot > 0 && owing <= 0);
   }
 
   document.getElementById('addBudgetRow').addEventListener('click', function () {
@@ -3731,10 +3742,39 @@
     btn.addEventListener('click', function () { setFilter(btn.dataset.filter); });
   });
 
+  /* Today's date where the event is, as YYYY-MM-DD, so that "late" means the
+   * same thing on every screen - and on a planner with no date, the reader's
+   * own today, which is the only one there is. */
+  function todayISO() {
+    if (EVENT) return new Date(Date.now() + EVENT.offsetMinutes * 60000).toISOString().slice(0, 10);
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  /* A row says what state it is in without being read: the stylesheet draws a
+   * done task struck through and quiet, one in progress with the lamp at its
+   * edge, and a late date in the alarm colour. Set here, on the row, so a
+   * change of status or date repaints one row and not the table under a
+   * cursor. */
+  function markTaskRow(tr, task) {
+    tr.setAttribute('data-status', task.status || 'not-started');
+    tr.classList.toggle('late', !!task.due && task.status !== 'done' && String(task.due) < todayISO());
+  }
+
+  // How many of each, beside the filter that would show them.
+  function renderTaskCounts() {
+    var counts = { all: state.tasks.length, 'not-started': 0, 'in-progress': 0, done: 0 };
+    state.tasks.forEach(function (task) { if (task.status in counts) counts[task.status] += 1; });
+    Array.prototype.forEach.call(document.querySelectorAll('#taskFilters .pill-count'), function (el) {
+      el.textContent = counts[el.getAttribute('data-count')] || 0;
+    });
+  }
+
   function renderTasksTable() {
     var body = document.getElementById('tasksBody');
     body.innerHTML = '';
     var shown = 0;
+    renderTaskCounts();
     state.tasks.forEach(function (task) {
       if (currentFilter !== 'all' && task.status !== currentFilter) return;
       shown++;
@@ -3768,6 +3808,7 @@
       dueInput.addEventListener('input', function () {
         task.due = dueInput.value;
         save();
+        markTaskRow(tr, task);
         renderOverview();
         // The one gesture on this page that makes a deadline reminder obvious:
         // somebody has just written a date they intend to be held to.
@@ -3788,6 +3829,8 @@
       statusSelect.addEventListener('change', function () {
         task.status = statusSelect.value;
         save();
+        markTaskRow(tr, task);
+        renderTaskCounts();
         renderOverview();
         if (currentFilter !== 'all') renderTasksTable();
       });
@@ -3803,6 +3846,7 @@
       }));
 
       addFilesButton(tdName, 'task', task);
+      markTaskRow(tr, task);
 
       tr.appendChild(tdName);
       tr.appendChild(tdOwner);

@@ -128,3 +128,43 @@ test('removing the last task puts the start screen back', async ({ page }) => {
   await expect(rows(page)).toHaveCount(0);
   await expect(page.locator('body')).toHaveClass(/is-empty/);
 });
+
+// A column of tasks has to be scannable for what is moving and what is late
+// without opening a single dropdown. The row carries its state, and the state
+// follows an edit without the table being redrawn under the cursor.
+test('a row shows its state, and the filters say how many of each there are', async ({ page }) => {
+  // Noon on 3 June where the event is (12 June 2030 at +09:00).
+  await page.clock.setFixedTime(new Date('2030-06-03T03:00:00Z'));
+  await page.goto('/');
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Sign the contract', due: '2030-05-01', status: 'done' });   // done, so not late
+  await addTask(page, { name: 'Choose the menu', due: '2030-06-08', status: 'in-progress' });
+  await addTask(page, { name: 'Pay the florist', due: '2030-06-02' });                      // yesterday there
+  await addTask(page, { name: 'Think about speeches' });
+
+  const rows = page.locator('#tasksBody tr');
+  const state = () => rows.evaluateAll((trs) => trs.map((tr) => [tr.getAttribute('data-status'), tr.classList.contains('late')]));
+  expect(await state()).toEqual([['done', false], ['in-progress', false], ['not-started', true], ['not-started', false]]);
+
+  const counts = () => page.locator('#taskFilters .pill-count').allTextContents();
+  expect(await counts()).toEqual(['4', '2', '1', '1']);
+
+  // Done is struck through; late is in the alarm colour.
+  expect(await rows.nth(0).locator('td').first().locator('input').evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe('line-through');
+  const colour = (el) => getComputedStyle(el).color;
+  const late = await rows.nth(2).locator('input[type="date"]').evaluate(colour);
+  const onTime = await rows.nth(1).locator('input[type="date"]').evaluate(colour);
+  expect(late).not.toBe(onTime);
+
+  // Finishing the late one: the same row, repainted, and the counts move.
+  await rows.nth(2).locator('select.status-select').selectOption('done');
+  expect(await state()).toEqual([['done', false], ['in-progress', false], ['done', false], ['not-started', false]]);
+  expect(await counts()).toEqual(['4', '1', '1', '2']);
+
+  // A new date makes a task late, or not, as it is typed.
+  await rows.nth(3).locator('input[type="date"]').fill('2030-06-01');
+  expect((await state())[3]).toEqual(['not-started', true]);
+  await rows.nth(3).locator('input[type="date"]').fill('2030-06-03');       // today is not late
+  expect((await state())[3]).toEqual(['not-started', false]);
+});
+
