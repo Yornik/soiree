@@ -93,22 +93,26 @@
     <!-- The run-up: from today to the day, with what is due pinned along it.
          Everything in planning an evening is measured against one date, so
          that distance is the first thing on the page rather than a number in
-         a corner. The scale is a picture of what "Up next" already says in
-         words, so it is hidden from assistive technology; the count and the
-         date beside it are not. -->
+         a corner. The drawing itself - the line, its two ends, the month
+         ticks - is hidden from assistive technology. The marks are not: each
+         one is a button that says what is due there and opens the list, so
+         they are one toolbar, one stop in the tab order, walked with the
+         arrow keys. -->
     <div class="runup" id="runup">
       <p class="countdown">
         <span class="countdown-num" id="daysNum">–</span>
         <span class="countdown-unit" id="daysLabel">days to go</span>
       </p>
-      <div class="runup-scale" id="runupScale" aria-hidden="true">
-        <span class="runup-line"></span>
+      <div class="runup-scale" id="runupScale">
+        <span class="runup-line" aria-hidden="true"></span>
+        <span class="runup-ticks" id="runupTicks" aria-hidden="true"></span>
         <span class="runup-marks" id="runupMarks"></span>
-        <span class="runup-today"></span>
-        <span class="runup-day"></span>
+        <span class="runup-today" aria-hidden="true"></span>
+        <span class="runup-day" aria-hidden="true"></span>
       </div>
       <p class="runup-ends">
         <span class="runup-from" id="runupFrom" data-i18n="ru.today">today</span>
+        <span class="runup-months" id="runupMonths" aria-hidden="true"></span>
         <span class="countdown-date" id="statDaysLabel">–</span>
       </p>
     </div>

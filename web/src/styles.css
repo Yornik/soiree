@@ -209,7 +209,10 @@ body {
   display: flex;
   flex-direction: column;
   margin: 0;
-  align-self: center;
+  /* Beside the line, not beside the names: when a crowded month stacks the
+     scale several lanes high the count stays where the scale starts. With one
+     lane the count is the taller of the two and this changes nothing. */
+  align-self: end;
 }
 .countdown-num {
   font-family: var(--font-display);
@@ -224,7 +227,7 @@ body {
 .runup-scale {
   grid-area: scale;
   position: relative;
-  height: 44px;               /* room above the line for the names */
+  height: 44px;               /* one lane of names; app.js adds the rest */
   margin: 0 7px;              /* half a dot, so the end dots sit inside */
 }
 .runup-line {
@@ -234,6 +237,13 @@ body {
   background: var(--rule-ink);
   transform-origin: left center;
 }
+/* The first of each month, hanging under the line like the marks on a rule. */
+.runup-tick {
+  position: absolute;
+  bottom: 0;
+  width: 1px; height: 6px;
+  background: var(--rule-ink);
+}
 .runup-today, .runup-day, .runup-mark {
   position: absolute;
   bottom: 0;
@@ -241,31 +251,135 @@ body {
   margin-left: -7px;
   border-radius: 50%;
 }
-.runup-today { left: 0; background: var(--lamp); box-shadow: 0 0 0 4px color-mix(in srgb, var(--lamp) 24%, transparent); }
+/* The lamp is never covered: a mark due tomorrow tucks under its edge. The
+   ring is the other way about, so something due on the day shows inside it.
+   Neither takes a press meant for the mark beside it. */
+.runup-today, .runup-day { pointer-events: none; }
+.runup-today { z-index: 2; left: 0; background: var(--lamp); box-shadow: 0 0 0 4px color-mix(in srgb, var(--lamp) 24%, transparent); }
 .runup-day { left: 100%; background: var(--paper); border: 3px solid var(--ink); }
+
+/* A mark is a button: the dot is its box, and its leader and its name hang off
+   that box. */
 .runup-mark {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   bottom: 3px;
   width: 8px; height: 8px;
   margin-left: -4px;
+  padding: 0;
+  border: 0;
   background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  cursor: pointer;
+  z-index: 1;
 }
-.runup-mark.late { background: var(--alarm); }
+/* A dot is eight pixels; a fingertip is not. */
+.runup-mark::before { content: ""; position: absolute; inset: -8px -2px; }
+/* Marks that would have touched, as one: as long as the dates it covers, with
+   the number of tasks in it. app.js sets the width. */
+.runup-mark.many {
+  bottom: -1px;
+  height: 16px;
+  min-width: 16px;
+  margin-left: -8px;
+  border-radius: 8px;
+}
+.runup-count {
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+/* Late: a ring in the alarm colour around today's lamp, which stays lit
+   inside it. How many is said in words underneath. */
+.runup-mark.late {
+  bottom: -6px;
+  width: 26px; height: 26px;
+  margin-left: -13px;
+  background: none;
+  border: 2px solid var(--alarm);
+}
+.runup-mark:focus-visible { outline-offset: 3px; }
+
+.runup-leader {
+  position: absolute;
+  left: 4px;
+  bottom: 100%;
+  width: 1px;
+  /* Stronger than --rule-mid on purpose. A leader is what says which date a
+     name belongs to, so it is held to the 3:1 a graphic needs: half ink is
+     3.1:1 on the light page and 4.7:1 on the dark one. */
+  background: var(--rule-ink);
+  background: color-mix(in srgb, var(--ink) 50%, transparent);
+  pointer-events: none;
+}
+.runup-mark.many .runup-leader { left: 8px; }
 .runup-label {
   position: absolute;
-  left: 50%;
-  bottom: 14px;
-  max-width: 150px;
+  left: 4px;
   padding-left: 7px;
-  border-left: 1px solid var(--rule-mid);
   font-size: 12px;
   line-height: 1.25;
   color: var(--ink-2);
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.runup-mark.many .runup-label { left: 8px; }
+.runup-when { font-variant-numeric: tabular-nums; }
+.runup-name { margin-left: 4px; }
+/* Near the day a name runs back from its leader instead of off the end, and
+   the date still stands against the leader: name, date, line. */
+.runup-mark.flip .runup-label {
+  display: flex;
+  flex-direction: row-reverse;
+  left: auto;
+  right: 3px;
+  padding: 0 7px 0 0;
+}
+.runup-mark.many.flip .runup-label { right: calc(100% - 9px); }
+.runup-mark.flip .runup-name { min-width: 0; margin: 0 8px 0 0; overflow: hidden; text-overflow: ellipsis; }
+/* The next thing due is the one name in ink. */
+.runup-mark.next .runup-label { color: var(--ink); font-weight: 600; }
+.runup-mark:hover .runup-label, .runup-mark:focus-visible .runup-label, .runup-mark[aria-expanded="true"] .runup-label { color: var(--ink); }
+.runup-mark:hover .runup-leader, .runup-mark:focus-visible .runup-leader, .runup-mark[aria-expanded="true"] .runup-leader { background: var(--rule-ink); }
+
+/* What is due at a mark: the rows of "Up next", in the popover the cost-by
+   picker uses. */
+.runup-pop { width: min(420px, calc(100vw - 16px)); max-height: min(320px, calc(100vh - 16px)); padding: 3px 14px; }
+.runup-pop ul { list-style: none; margin: 0; padding: 0; }
+.runup-pop li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 14px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: 13.5px;
+}
+.runup-pop li:last-child { border-bottom: 0; }
+/* One set of columns for the whole list, so the names start in a line however
+   wide each date is. */
+@supports (grid-template-columns: subgrid) {
+  .runup-pop ul { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 14px; }
+  .runup-pop li { grid-column: 1 / -1; grid-template-columns: subgrid; }
+}
+.runup-pop .what { overflow-wrap: anywhere; }
+.runup-pop .when, .runup-pop .who {
+  color: var(--ink-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.runup-pop .when.late { color: var(--alarm); font-weight: 600; }
+
 .runup-ends {
   grid-area: ends;
+  position: relative;
   display: flex;
   justify-content: space-between;
   gap: 16px;
@@ -274,10 +388,13 @@ body {
   color: var(--ink-2);
 }
 .runup-from.late { color: var(--alarm); font-weight: 600; }
+/* Month names, under their ticks, on the same line as the two ends. */
+.runup-months { position: absolute; left: 7px; right: 7px; top: 0; pointer-events: none; }
+.runup-month { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
 .countdown-date { font-weight: 600; color: var(--ink); text-align: right; }
 .countdown-date:empty { display: none; }
 /* No date, the day itself, or a finished event: there is no distance to draw. */
-.runup.no-scale .runup-scale, .runup.no-scale .runup-from { display: none; }
+.runup.no-scale .runup-scale, .runup.no-scale .runup-from, .runup.no-scale .runup-months { display: none; }
 .runup.no-scale { grid-template-areas: "count ends"; align-items: center; }
 
 /* The one piece of motion on the page: the line draws itself from today to
@@ -983,7 +1100,6 @@ body.is-archived .when-data { display: block; }
   /* One column: the count, then the scale under it, then money, then to do. */
   .runup { grid-template-columns: minmax(0, 1fr); grid-template-areas: "count" "scale" "ends"; row-gap: 6px; margin-top: 22px; }
   .runup.no-scale { grid-template-areas: "count" "ends"; }
-  .runup-label { max-width: 96px; }
   .overview-cols { grid-template-columns: minmax(0, 1fr); }
   .reckoning.ledger .fig { border-bottom: 0; padding-left: 0; }
   .reckoning.ledger .fig-num { font-size: 22px; }
