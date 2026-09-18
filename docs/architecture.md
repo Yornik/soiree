@@ -332,7 +332,7 @@ constraint drives the design:
    required for either.
 
 Measured at 1.2.0, brotli, from a running server: shell 4.5 kB, stylesheet
-11 kB, planner script 46 kB, accounts script 25 kB, font 37 kB. Both scripts
+11 kB, planner script 46 kB, accounts script 25 kB, font 69 kB. Both scripts
 are `defer`, so first paint needs the shell and stylesheet only — about 16 kB.
 
 ### Deliberately excluded

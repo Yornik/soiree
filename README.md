@@ -243,7 +243,7 @@ Measured transfer at 1.0.0, brotli:
 | Stylesheet | 11 kB |
 | Planner script | 46 kB (`defer`, does not block paint) |
 | Accounts script | 25 kB (`defer`, does not block paint; three languages) |
-| Display font | 37 kB (`font-display: swap`, does not block paint) |
+| Display font | 69 kB (`font-display: swap`, does not block paint) |
 | **First paint** | **~16 kB** |
 
 **Writes are debounced.** Edits apply to local state instantly and persist
@@ -432,9 +432,11 @@ it cannot.
 ### Regenerating the font subset
 
 The shipped `web/src/fonts/bricolage-display.woff2` is [Bricolage
-Grotesque][bricolage] (SIL OFL 1.1), reduced from 408 kB to 37 kB: the optical
-size and the width are pinned (36 and 87, a condensed cut loose enough to read
-at heading sizes), the weight axis is kept from 500 to 800, and the glyphs are
+Grotesque][bricolage] (SIL OFL 1.1), reduced from 408 kB to 69 kB: the width is
+pinned at 87, a condensed cut; the weight axis is kept from 500 to 800 and the
+optical-size axis from 14 to 96, so the event's name gets the tight display
+drawing and a 22px heading the looser one the face was designed to use at that
+size; and the glyphs are
 cut to Latin, Latin-1 and Latin Extended-A, which covers English, Dutch and
 Indonesian and most of Europe. It is used for the event's name, the countdown,
 headings and the large figures; everything else is the reader's system font.
@@ -448,7 +450,7 @@ from fontTools.ttLib import TTFont
 from fontTools.varLib import instancer
 from fontTools import subset
 f = TTFont('bricolage-var.ttf')
-inst = instancer.instantiateVariableFont(f, {'opsz': 36, 'wdth': 87, 'wght': (500, 800)})
+inst = instancer.instantiateVariableFont(f, {'opsz': (14, 96), 'wdth': 87, 'wght': (500, 800)})
 o = subset.Options(); o.flavor = 'woff2'
 o.layout_features = ['kern', 'liga', 'tnum', 'lnum', 'ccmp', 'locl', 'mark', 'mkmk']
 s = subset.Subsetter(o)
@@ -458,6 +460,21 @@ s.subset(inst); inst.flavor = 'woff2'
 inst.save('web/src/fonts/bricolage-display.woff2')
 "
 ```
+
+### Regenerating the app icons
+
+The PNG icons in `web/src/icons/` are rendered from `web/src/favicon.svg`, so
+the drawing is changed in one place:
+
+```bash
+cd e2e && node scripts/make-icons.js
+```
+
+A phone's home screen does not take an SVG. iOS uses the 180px
+`apple-touch-icon`; Android will not offer to install the page without the 192
+and 512px PNGs in the manifest, and crops the maskable one to the launcher's
+shape, which is why that one is drawn full-bleed with the glass inside the
+inner 80%.
 
 ## Contributing and security
 
