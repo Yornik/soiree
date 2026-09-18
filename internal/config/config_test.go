@@ -48,8 +48,15 @@ func TestMetricsAddrIsSeparateFromTheListenAddr(t *testing.T) {
 	// fail to bind, naming a port without saying why.
 	t.Setenv("SOIREE_LISTEN_ADDR", ":9999")
 	t.Setenv("SOIREE_METRICS_ADDR", ":9999")
-	if _, err := Load(); err == nil {
-		t.Error("Load() accepted the metrics listener on the public port")
+	_, err = Load()
+	if err == nil {
+		t.Fatal("Load() accepted the metrics listener on the public port")
+	}
+	// Load has a dozen error paths and this test leaves several variables set.
+	// Naming the one that failed is what stops a reordering from turning this
+	// into a test that passes for an unrelated reason.
+	if !strings.Contains(err.Error(), "SOIREE_METRICS_ADDR") {
+		t.Errorf("Load() failed for some other reason: %v", err)
 	}
 }
 
