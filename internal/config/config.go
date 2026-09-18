@@ -127,6 +127,51 @@ type Config struct {
 	// VAPID is the Web Push signing identity. The zero value means no push
 	// notifications, which is a supported deployment rather than a broken one.
 	VAPID VAPIDConfig
+
+	// Attachments is the bucket files are kept in. The zero value means no
+	// attachments, which is also a supported deployment.
+	Attachments AttachmentsConfig
+}
+
+// AttachmentsConfig is where uploaded files live and how large they may be.
+//
+// The bytes are in an S3 bucket and never pass through this server: the browser
+// uploads to the bucket and downloads from it, over URLs signed here. So the
+// endpoint has to be reachable from wherever the people are, not merely from
+// the server, and the bucket needs a CORS rule that lets this site's pages PUT
+// to it. docs/operating.md has the rule.
+//
+// This is the environment surface; internal/objstore is what uses it, and
+// cmd/soiree maps one onto the other, as it does for mail and push.
+type AttachmentsConfig struct {
+	Endpoint        string
+	Region          string
+	Bucket          string
+	AccessKeyID     string
+	SecretAccessKey string
+
+	// MaxBytes is the most one file may be, and TotalBytes the most all of
+	// them together may be. Both are enforced before an upload starts: the
+	// size is signed into the upload URL, so the bucket itself refuses a body
+	// of any other length.
+	MaxBytes   int64
+	TotalBytes int64
+}
+
+// Defaults that fit a phone photograph of a receipt or a scanned contract with
+// room to spare, and a whole event inside a small bucket.
+const (
+	DefaultAttachmentMaxMB    = 25
+	DefaultAttachmentsTotalMB = 2048
+)
+
+// Enabled reports whether files can be attached.
+func (a AttachmentsConfig) Enabled() bool { return a.Endpoint != "" }
+
+// ClientAttachments is what the page needs to know about attachments: that
+// they exist, and the size past which it should not bother asking.
+type ClientAttachments struct {
+	MaxBytes int64 `json:"maxBytes"`
 }
 
 // VAPIDConfig identifies this deployment to the browsers' push services.
@@ -216,6 +261,11 @@ type ClientConfig struct {
 	// A capability flag and nothing more: it names no domain, carries no key,
 	// and reveals nothing a request to the login page would not.
 	Passkeys bool `json:"passkeys"`
+	// Attachments is present only when files can actually be attached, so that
+	// "is this here?" is the one question the page asks before drawing the
+	// control. It names no bucket and no endpoint: the browser learns where to
+	// send a file from the signed URL it is handed, one upload at a time.
+	Attachments *ClientAttachments `json:"attachments,omitempty"`
 }
 
 // Client returns the browser-facing view of the configuration.
@@ -232,7 +282,20 @@ func (c Config) Client() ClientConfig {
 		DemoData:          c.DemoData,
 		VAPIDPublicKey:    c.publishablePushKey(),
 		Passkeys:          c.PasskeysEnabled,
+		Attachments:       c.publishableAttachments(),
 	}
+}
+
+// publishableAttachments is the limit, and only when an upload could succeed.
+//
+// A file's record lives in the database, so a bucket with no database behind
+// it is not a feature that is half on; it is one that is off. Publishing it
+// anyway would draw a control whose every use fails.
+func (c Config) publishableAttachments() *ClientAttachments {
+	if !c.Attachments.Enabled() || c.DatabaseURL == "" {
+		return nil
+	}
+	return &ClientAttachments{MaxBytes: c.Attachments.MaxBytes}
 }
 
 // publishablePushKey is the public key, and only when the server could
@@ -336,8 +399,68 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	c.loadPush()
+	if err := c.loadAttachments(); err != nil {
+		return Config{}, err
+	}
 
 	return c, nil
+}
+
+// loadAttachments reads the bucket, and refuses a half-configured one.
+//
+// Push tolerates a missing part and this does not, for the reason SMTP does
+// not: the failure would otherwise surface late and to the wrong person. A
+// bucket with no secret starts cleanly, draws the upload control, and then
+// fails every upload in somebody's hand, on a phone, with an error from a
+// storage service they have never heard of. All five or none.
+func (c *Config) loadAttachments() error {
+	vars := []struct {
+		name string
+		into *string
+	}{
+		{"SOIREE_S3_ENDPOINT", &c.Attachments.Endpoint},
+		{"SOIREE_S3_REGION", &c.Attachments.Region},
+		{"SOIREE_S3_BUCKET", &c.Attachments.Bucket},
+		{"SOIREE_S3_ACCESS_KEY_ID", &c.Attachments.AccessKeyID},
+		{"SOIREE_S3_SECRET_ACCESS_KEY", &c.Attachments.SecretAccessKey},
+	}
+	var set, missing []string
+	for _, v := range vars {
+		*v.into = strings.TrimSpace(os.Getenv(v.name))
+		if *v.into == "" {
+			missing = append(missing, v.name)
+		} else {
+			set = append(set, v.name)
+		}
+	}
+	if len(set) > 0 && len(missing) > 0 {
+		return fmt.Errorf("attachments need all five SOIREE_S3_* variables or none of them; %s set, %s missing",
+			strings.Join(set, ", "), strings.Join(missing, ", "))
+	}
+
+	for _, limit := range []struct {
+		name string
+		def  int64
+		into *int64
+	}{
+		{"SOIREE_ATTACHMENT_MAX_MB", DefaultAttachmentMaxMB, &c.Attachments.MaxBytes},
+		{"SOIREE_ATTACHMENTS_TOTAL_MB", DefaultAttachmentsTotalMB, &c.Attachments.TotalBytes},
+	} {
+		mb := limit.def
+		if v := strings.TrimSpace(os.Getenv(limit.name)); v != "" {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n <= 0 {
+				return fmt.Errorf("%s must be a whole number of megabytes above zero, got %q", limit.name, v)
+			}
+			mb = n
+		}
+		*limit.into = mb << 20
+	}
+	if c.Attachments.MaxBytes > c.Attachments.TotalBytes {
+		return fmt.Errorf("SOIREE_ATTACHMENT_MAX_MB (%d) is larger than SOIREE_ATTACHMENTS_TOTAL_MB (%d): no file could ever be that large",
+			c.Attachments.MaxBytes>>20, c.Attachments.TotalBytes>>20)
+	}
+	return nil
 }
 
 // loadPush reads the Web Push identity.
