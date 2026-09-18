@@ -1,7 +1,8 @@
 // @ts-check
 /*
- * The one place a real service worker runs. Every other spec blocks it (see
- * playwright.config.js), and for three releases that hid a worker no browser
+ * The worker, run for real. Almost every spec blocks service workers (see
+ * playwright.config.js; the reminders switch in api.spec.js is the other
+ * exception), and for three releases that hid a worker no browser
  * could parse: the server had escaped it as HTML, `i < n` reached the browser
  * as `i &lt; n`, registration failed, and the page - which does not report a
  * failed registration - told people their browser could not take reminders.

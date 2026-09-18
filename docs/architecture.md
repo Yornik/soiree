@@ -77,8 +77,9 @@ the worker is a script, so they go through `text/template`, and every value
 they take is written with the `json` template function. Do not move them to
 `html/template`: it escapes a template's own text as the text of a page, and a
 `<` in the worker reaches the browser as `&lt;`, which is a syntax error that
-no server-side check reports. `e2e/tests/service-worker.spec.js` is the one
-spec that runs a real worker, and it is there for this.
+no server-side check reports. Only a browser that runs the worker finds it:
+`e2e/tests/service-worker.spec.js` does, and so does the test of the reminders
+switch in `api.spec.js`; every other spec blocks service workers.
 
 Every text asset is gzip- and brotli-compressed once at startup, and a
 compressed variant is kept only when it is actually smaller. `woff2` is skipped
