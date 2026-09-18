@@ -167,12 +167,18 @@ func BuildAssets(srcFS fs.FS) (*Assets, error) {
 	)
 	a.buildAsset("styles.css", css)
 
-	// 3. Application script.
-	js, err := fs.ReadFile(srcFS, "app.js")
-	if err != nil {
-		return nil, fmt.Errorf("read app.js: %w", err)
+	// 3. Scripts. Two of them, hashed and served the same way: the planner, and
+	// the accounts surface that shares its page. Separate files because they
+	// are separate things — a deployment with no database has no accounts at
+	// all, and auth.js is then a script that finds a 404 and draws nothing,
+	// rather than a branch inside the planner.
+	for _, name := range []string{"app.js", "auth.js"} {
+		js, err := fs.ReadFile(srcFS, name)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+		a.buildAsset(name, js)
 	}
-	a.buildAsset("app.js", js)
 
 	return a, nil
 }

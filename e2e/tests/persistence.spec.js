@@ -119,7 +119,7 @@ test('a full planner comes back after a reload', async ({ page }) => {
   await expect(task.locator('select.status-select')).toHaveValue('in-progress');
 });
 
-test('with no database behind it, the planner asks once and then stays off the network', async ({ page }) => {
+test('with no database behind it, the page asks its two questions once and then stays off the network', async ({ page }) => {
   /** @type {string[]} */
   const apiRequests = [];
   page.on('request', (r) => {
@@ -138,26 +138,31 @@ test('with no database behind it, the planner asks once and then stays off the n
   await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
   await expectStored(page, (s) => !!s && s.budgetItems.length === 1, 'the write lands in localStorage');
 
-  // Exactly one request, ever: "is there a database here". The answer was a
-  // 404, which is final — those routes are not registered in this deployment
-  // and asking again would only be a second 404. A planner that spent a round
-  // trip per keystroke rediscovering that would be worse than one that never
-  // asked.
+  // Two questions at startup, each asked exactly once: "is there a database
+  // here" from the planner, and "does this deployment have accounts" from the
+  // accounts surface. Both were answered 404, and a 404 here is final — those
+  // routes are not registered in this deployment, so asking again would only
+  // be a second 404. A page that spent a round trip per keystroke
+  // rediscovering that would be worse than one that never asked.
+  //
+  // Named rather than counted: a third probe, or either of these repeating,
+  // has to fail this — which counting a total would not catch on its own.
+  const probed = () => apiRequests.map((u) => new URL(u).pathname).sort();
   await expect
-    .poll(() => apiRequests.length, { message: 'the API is probed exactly once at startup' })
-    .toBe(1);
-  expect(apiRequests[0]).toContain('/api/v1/plan');
+    .poll(probed, { message: 'each startup probe is made exactly once' })
+    .toEqual(['/api/v1/auth/session', '/api/v1/plan']);
 
   // More edits, and a flush, and still nothing goes out.
   await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 300 });
   await flushToStorage(page);
-  expect(apiRequests).toHaveLength(1);
+  expect(probed()).toEqual(['/api/v1/auth/session', '/api/v1/plan']);
 
-  // Nothing in the console that the application put there. The 404 itself is
-  // logged by the browser's own network stack against the API URL — that is
-  // Chromium reporting the probe, not soiree reporting a fault — so it is
+  // Nothing in the console that the application put there. The two 404s are
+  // logged by the browser's own network stack against the URLs above — that is
+  // Chromium reporting the probes, not soiree reporting a fault — so they are
   // named here rather than swept up in a blanket filter.
-  expect(errors.filter((e) => e.url.indexOf('/api/v1/plan') === -1)).toEqual([]);
+  const probes = ['/api/v1/plan', '/api/v1/auth/session'];
+  expect(errors.filter((e) => !probes.some((p) => e.url.indexOf(p) !== -1))).toEqual([]);
 });
 
 test('the planner is stored under one known key, and nothing else', async ({ page }) => {

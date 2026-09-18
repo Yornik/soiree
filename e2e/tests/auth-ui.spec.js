@@ -1,0 +1,554 @@
+// @ts-check
+/*
+ * The accounts interface, driven against a scripted server.
+ *
+ * Why scripted rather than real: this spec is about what the *page* does —
+ * which request it sends, what it puts in the body, what it draws with the
+ * answer, and what it refuses to send at all. Those are properties of
+ * auth.js, and pinning them against a live PostgreSQL would make every one of
+ * them depend on a container, on rate limiters shared across the whole run,
+ * and on state left by the test before. The companion spec, auth-api.spec.js,
+ * does the same journeys against the real server; between them the boundary
+ * is covered from both sides.
+ *
+ * It runs against the default instance, which has no database and therefore
+ * no /api/v1 at all. Every route below is intercepted before it reaches it,
+ * and anything not intercepted is answered 404 — exactly as that server would.
+ * So there is no shared state here, and these tests stay parallel-safe.
+ *
+ * Two rules inherited from the rest of the suite: never wait on a clock, and
+ * never assert on an exact Intl string where the point is the behaviour.
+ */
+const { test, expect } = require('@playwright/test');
+const { STORAGE_KEY } = require('./helpers');
+
+// Synthetic throughout. No real person, no real address, no real secret.
+const ADA = { id: 'a0000000-0000-4000-8000-000000000001', email: 'ada@example.test', role: 'admin', status: 'active', createdBy: null, createdAt: '2026-01-04T10:00:00Z', revision: 1, updatedAt: '2026-01-04T10:00:00Z' };
+const GRACE = { id: 'a0000000-0000-4000-8000-000000000002', email: 'grace@example.test', role: 'editor', status: 'active', createdBy: ADA.id, createdAt: '2026-02-11T10:00:00Z', revision: 3, updatedAt: '2026-02-11T10:00:00Z' };
+const LINUS = { id: 'a0000000-0000-4000-8000-000000000003', email: 'linus@example.test', role: 'viewer', status: 'invited', createdBy: ADA.id, createdAt: '2026-03-02T10:00:00Z', revision: 1, updatedAt: '2026-03-02T10:00:00Z' };
+
+const PASSWORD = 'a-long-enough-one';
+// Stands in for the 256-bit token a real link carries. It is a fixture, and
+// the assertions on it are the point: it must arrive in the body and must not
+// stay in the URL.
+const TOKEN = 'fixture-token-not-a-real-credential';
+
+/**
+ * Mounts a scripted accounts surface in front of the page.
+ *
+ * Returns the state it keeps, so a test can read what was asked of it —
+ * `calls` is every request the page made, in order, with its body.
+ */
+async function mountAccounts(page, opts = {}) {
+  const state = {
+    session: opts.session || null,
+    users: (opts.users || []).map((u) => ({ ...u })),
+    passkeys: opts.passkeys || [],
+    mailSent: !!opts.mailSent,
+    // A test sets this to make the next write answer 409 with the row as the
+    // server has it, which is the concurrent-edit path.
+    stale: opts.stale || null,
+    calls: [],
+  };
+
+  const json = (route, status, body) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+
+  await page.route('**/api/v1/**', async (route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    const path = url.pathname.replace('/api/v1', '');
+    let body = null;
+    try { body = req.postDataJSON(); } catch (e) { body = null; }
+    state.calls.push({ method: req.method(), path, search: url.search, body });
+
+    const user = (id) => state.users.find((u) => u.id === id);
+
+    if (path === '/auth/session') {
+      return state.session
+        ? json(route, 200, state.session)
+        : json(route, 401, { error: 'unauthenticated' });
+    }
+    if (path === '/auth/login') {
+      const who = state.users.find((u) => u.email === (body && body.email));
+      if (who && body.password === PASSWORD) {
+        state.session = who;
+        return json(route, 200, who);
+      }
+      return json(route, 401, { error: 'invalid_credentials' });
+    }
+    if (path === '/auth/logout') {
+      state.session = null;
+      return route.fulfill({ status: 204, body: '' });
+    }
+    if (path === '/auth/password-reset') return json(route, 202, { status: 'accepted' });
+    if (path === '/auth/set-password') {
+      if (!body || body.token !== TOKEN) return json(route, 400, { error: 'invalid_token' });
+      state.session = null;
+      return route.fulfill({ status: 204, body: '' });
+    }
+    if (path === '/auth/passkeys') return json(route, 200, { passkeys: state.passkeys });
+
+    if (path === '/users' && req.method() === 'GET') {
+      if (!state.session || state.session.role !== 'admin') return json(route, 403, { error: 'forbidden' });
+      return json(route, 200, { users: state.users });
+    }
+    if (path === '/users' && req.method() === 'POST') {
+      const made = {
+        ...LINUS,
+        id: 'a0000000-0000-4000-8000-00000000009' + state.users.length,
+        email: body.email,
+        role: body.role,
+        status: 'invited',
+        revision: 1,
+      };
+      state.users.push(made);
+      return json(route, 201, {
+        user: made,
+        mailSent: state.mailSent,
+        setPasswordUrl: state.mailSent ? undefined : `http://127.0.0.1/#/set-password?token=${TOKEN}`,
+      });
+    }
+    const invite = path.match(/^\/users\/([^/]+)\/invite$/);
+    if (invite) {
+      const who = user(invite[1]);
+      return json(route, 200, {
+        user: who,
+        mailSent: state.mailSent,
+        setPasswordUrl: state.mailSent ? undefined : `http://127.0.0.1/#/set-password?token=${TOKEN}`,
+      });
+    }
+    const one = path.match(/^\/users\/([^/]+)$/);
+    if (one && req.method() === 'PATCH') {
+      if (state.stale) {
+        const current = state.stale;
+        state.stale = null;
+        return json(route, 409, { error: 'stale_revision', current });
+      }
+      const who = user(one[1]);
+      if (body.status === 'active' && who.noPassword) {
+        return json(route, 409, {
+          error: 'no_password',
+          message: 'this account has never set a password; invite it instead',
+        });
+      }
+      Object.assign(who, body.role ? { role: body.role } : {}, body.status ? { status: body.status } : {});
+      who.revision += 1;
+      return json(route, 200, who);
+    }
+    if (one && req.method() === 'DELETE') {
+      state.users = state.users.filter((u) => u.id !== one[1]);
+      return route.fulfill({ status: 204, body: '' });
+    }
+
+    // Everything else, /api/v1/plan included: this deployment has no database.
+    return json(route, 404, { error: 'not_found' });
+  });
+
+  return state;
+}
+
+/** Opens the planner and waits for the session probe to have been answered. */
+async function open(page, path = '/') {
+  await page.goto(path);
+  await expect
+    .poll(() => page.evaluate(() => document.body.className), {
+      message: 'auth.js records what the session probe answered on the body',
+    })
+    .toMatch(/accounts-none|signed-out|signed-in/);
+}
+
+/** Seeds a planner in localStorage, so a signed-in role has a ledger to act on. */
+async function seedPlanner(page) {
+  await page.addInitScript(
+    ([key, payload]) => {
+      try { if (!localStorage.getItem(key)) localStorage.setItem(key, payload); } catch (e) { /* not on the origin yet */ }
+    },
+    [
+      STORAGE_KEY,
+      JSON.stringify({
+        ceiling: 10000,
+        inflationPct: 0,
+        fxRate: 0,
+        splitEvenly: false,
+        sponsors: [{ id: 'local-s1', code: 'Rose', name: 'Ada' }],
+        budgetItems: [{ id: 'local-b1', item: 'Venue deposit', unit: 2500, qty: 1, paid: 500, sponsors: ['local-s1'], note: '' }],
+        tasks: [
+          { id: 'local-t1', name: 'Confirm the final guest count', owner: 'Ada', due: '', status: 'not-started' },
+          { id: 'local-t2', name: 'Send the menu', owner: 'Grace', due: '', status: 'done' },
+        ],
+        notes: [],
+      }),
+    ],
+  );
+}
+
+/* ------------------------------------------------------------------
+ * Is there a door at all
+ * ------------------------------------------------------------------ */
+
+test('a deployment with no accounts draws no way in', async ({ page }) => {
+  // No interception: the real server behind these tests has no /api/v1, so
+  // the session probe genuinely 404s. That is the answer "this deployment has
+  // no accounts", and it must not be treated as an error or as a sign-out.
+  await open(page);
+  await expect(page.locator('body')).toHaveClass(/accounts-none/);
+  await expect(page.locator('#accountBar')).toBeHidden();
+
+  // And the routes lead nowhere either, rather than to a form nothing is
+  // behind.
+  await page.goto('/#/login');
+  await expect(page.locator('#authScreen')).toBeHidden();
+  await expect(page.locator('#plannerWrap')).toBeVisible();
+});
+
+test('a visitor with accounts to sign in to is offered the door, and the planner still works', async ({ page }) => {
+  await mountAccounts(page, { users: [ADA] });
+  await open(page);
+
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+  await expect(page.locator('#accountActs button')).toHaveText(['Sign in']);
+  // The planner is not held hostage: the server does not gate the plan API, so
+  // neither does the page.
+  await expect(page.locator('#plannerWrap')).toBeVisible();
+  await page.locator('#tab-budget').click();
+  await expect(page.locator('#addBudgetRow')).toBeVisible();
+  await expect(page.locator('#startCeiling')).toBeEnabled();
+});
+
+/* ------------------------------------------------------------------
+ * Signing in
+ * ------------------------------------------------------------------ */
+
+test('signing in sends the address and password, and the page says who you are', async ({ page }) => {
+  const server = await mountAccounts(page, { users: [ADA] });
+  await open(page);
+
+  await page.locator('#accountActs button').click();
+  await expect(page.locator('#panelLogin')).toBeVisible();
+  await expect(page.locator('#plannerWrap')).toBeHidden();
+
+  await page.fill('#loginEmail', ADA.email);
+  await page.fill('#loginPassword', PASSWORD);
+  await page.click('#loginSubmit');
+
+  await expect(page.locator('.account-email')).toHaveText(ADA.email);
+  await expect(page.locator('.account-role')).toHaveText('admin');
+  await expect(page.locator('#plannerWrap')).toBeVisible();
+  await expect(page.locator('#authScreen')).toBeHidden();
+
+  const login = server.calls.find((c) => c.path === '/auth/login');
+  expect(login.body).toEqual({ email: ADA.email, password: PASSWORD });
+
+  // The session is an HttpOnly cookie, so the page has no way to read it and
+  // must not have kept a copy of anything either. The planner's own key is the
+  // only thing this origin is allowed to be holding.
+  const kept = await page.evaluate(() => [Object.keys(localStorage), Object.keys(sessionStorage)]);
+  expect(kept[0].filter((k) => k !== STORAGE_KEY)).toEqual([]);
+  expect(kept[1]).toEqual([]);
+});
+
+test('a refusal is reported without saying which half was wrong', async ({ page }) => {
+  await mountAccounts(page, { users: [ADA] });
+  await open(page, '/#/login');
+
+  await page.fill('#loginEmail', ADA.email);
+  await page.fill('#loginPassword', 'not-the-password');
+  await page.click('#loginSubmit');
+
+  await expect(page.locator('#loginMsg')).toHaveText('That email and password do not match an account.');
+  // Still on the form, with the address kept so it can be tried again.
+  await expect(page.locator('#panelLogin')).toBeVisible();
+  await expect(page.locator('#loginEmail')).toHaveValue(ADA.email);
+});
+
+test('asking for a link answers the same way whoever asks', async ({ page }) => {
+  const server = await mountAccounts(page, { users: [ADA] });
+  await open(page, '/#/login');
+
+  await page.fill('#loginEmail', 'nobody@example.test');
+  await page.click('#loginForgot');
+
+  await expect(page.locator('#loginMsg')).toContainText('If that address has an account');
+  expect(server.calls.filter((c) => c.path === '/auth/password-reset')).toHaveLength(1);
+});
+
+test('signing out asks the server to end the session and puts the door back', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA] });
+  await open(page, '/#/account');
+
+  await page.click('#signOutBtn');
+
+  await expect(page.locator('#accountActs button')).toHaveText(['Sign in']);
+  expect(server.calls.some((c) => c.path === '/auth/logout' && c.method === 'POST')).toBe(true);
+});
+
+/* ------------------------------------------------------------------
+ * The mailed link
+ * ------------------------------------------------------------------ */
+
+test('a set-password link is redeemed from the body, and the token leaves the URL', async ({ page }) => {
+  const server = await mountAccounts(page, { users: [LINUS] });
+  await page.goto(`/#/set-password?token=${TOKEN}`);
+  await expect(page.locator('#panelSetPassword')).toBeVisible();
+
+  // The whole reason the token travels in the fragment is that it reaches no
+  // log. Leaving it in the address bar would put it in browser history and in
+  // the next screenshot somebody takes.
+  expect(page.url()).not.toContain(TOKEN);
+  expect(page.url()).toContain('#/set-password');
+
+  await page.fill('#newPassword', PASSWORD);
+  await page.fill('#newPassword2', PASSWORD);
+  await page.click('#setPasswordSubmit');
+
+  await expect(page.locator('#panelNote')).toBeVisible();
+  await expect(page.locator('#authNote')).toContainText('Your password is saved');
+
+  const sent = server.calls.find((c) => c.path === '/auth/set-password');
+  expect(sent.body).toEqual({ token: TOKEN, password: PASSWORD });
+  // In the body, never the query string.
+  expect(sent.search).toBe('');
+
+  // From here the only thing to do is sign in, and the button says so.
+  await page.click('#authNoteAct');
+  await expect(page.locator('#panelLogin')).toBeVisible();
+});
+
+test('a password that cannot work is refused before it costs a round trip', async ({ page }) => {
+  const server = await mountAccounts(page, { users: [LINUS] });
+  await page.goto(`/#/set-password?token=${TOKEN}`);
+
+  await page.fill('#newPassword', 'short');
+  await page.fill('#newPassword2', 'short');
+  await page.click('#setPasswordSubmit');
+  await expect(page.locator('#setPasswordMsg')).toHaveText('A password needs at least 12 characters.');
+
+  await page.fill('#newPassword', PASSWORD);
+  await page.fill('#newPassword2', PASSWORD + '-not');
+  await page.click('#setPasswordSubmit');
+  await expect(page.locator('#setPasswordMsg')).toHaveText('The two passwords are not the same.');
+
+  // Neither attempt was sent: a link is allowed a limited number of
+  // redemptions, and a typo should not spend one.
+  expect(server.calls.filter((c) => c.path === '/auth/set-password')).toHaveLength(0);
+});
+
+test('a spent or expired link says what to do next', async ({ page }) => {
+  await mountAccounts(page, { users: [LINUS] });
+  await page.goto('/#/set-password?token=some-other-token');
+
+  await page.fill('#newPassword', PASSWORD);
+  await page.fill('#newPassword2', PASSWORD);
+  await page.click('#setPasswordSubmit');
+
+  await expect(page.locator('#setPasswordMsg')).toContainText('expired or has already been used');
+});
+
+test('a link with no token in it says so rather than failing at the server', async ({ page }) => {
+  await mountAccounts(page, { users: [LINUS] });
+  await page.goto('/#/set-password');
+
+  await expect(page.locator('#setPasswordMsg')).toContainText('incomplete');
+  await expect(page.locator('#setPasswordSubmit')).toBeDisabled();
+});
+
+/* ------------------------------------------------------------------
+ * People
+ * ------------------------------------------------------------------ */
+
+test('the admin panel lists everyone, and offers nothing on your own row that the server would refuse', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS] });
+  await open(page, '/#/admin');
+
+  await expect(page.locator('#peopleList .person')).toHaveCount(3);
+  const mine = page.locator('.person', { hasText: ADA.email });
+  await expect(mine.locator('.person-you')).toHaveText('you');
+  // Changing your own role or status, and deleting your own account, are all
+  // refused server-side — the way back from demoting the only admin is
+  // another admin.
+  await expect(mine.locator('select.person-role')).toHaveCount(0);
+  await expect(mine.getByText('Remove')).toHaveCount(0);
+  await expect(mine.getByText('Turn off access')).toHaveCount(0);
+
+  // An invited account reads as invited, an active one as active.
+  await expect(page.locator('.person', { hasText: LINUS.email }).locator('.person-status')).toHaveText('invited');
+  await expect(page.locator('.person', { hasText: GRACE.email }).locator('.person-status')).toHaveText('active');
+});
+
+test('adding somebody surfaces the link when there is no mail to send it by', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA], mailSent: false });
+  await open(page, '/#/admin');
+
+  await page.fill('#newUserEmail', 'grace@example.test');
+  await page.selectOption('#newUserRole', 'editor');
+  await page.click('#createUserSubmit');
+
+  // Without this the deployment has no way to onboard anybody at all.
+  await expect(page.locator('#adminLinkOut')).toBeVisible();
+  await expect(page.locator('#adminLinkValue')).toHaveValue(new RegExp(`#/set-password\\?token=${TOKEN}$`));
+  await expect(page.locator('#adminLinkLede')).toContainText('grace@example.test');
+  await expect(page.locator('#peopleList .person')).toHaveCount(2);
+
+  const made = server.calls.find((c) => c.path === '/users' && c.method === 'POST');
+  expect(made.body).toEqual({ email: 'grace@example.test', role: 'editor' });
+
+  // Dismissed, and gone from the page with it.
+  await page.click('#adminLinkDismiss');
+  await expect(page.locator('#adminLinkOut')).toBeHidden();
+  await expect(page.locator('#adminLinkValue')).toHaveValue('');
+});
+
+test('with mail configured the link is not shown to the admin at all', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA], mailSent: true });
+  await open(page, '/#/admin');
+
+  await page.fill('#newUserEmail', 'grace@example.test');
+  await page.click('#createUserSubmit');
+
+  await expect(page.locator('#adminMsg')).toContainText('on its way to grace@example.test');
+  await expect(page.locator('#adminLinkOut')).toBeHidden();
+});
+
+test('every write carries the revision it was made against', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE] });
+  await open(page, '/#/admin');
+
+  const row = page.locator('.person', { hasText: GRACE.email });
+  await row.locator('select.person-role').selectOption('admin');
+  await expect(row.locator('select.person-role')).toHaveValue('admin');
+
+  const patch = server.calls.find((c) => c.method === 'PATCH');
+  expect(patch.body).toEqual({ revision: GRACE.revision, role: 'admin' });
+
+  // The revision moved with the answer, so the next write is made against the
+  // row as it now stands rather than as it was drawn.
+  await row.getByText('Turn off access').click();
+  await expect(row.locator('.person-status')).toHaveText('no access');
+  const patches = server.calls.filter((c) => c.method === 'PATCH');
+  expect(patches[1].body).toEqual({ revision: GRACE.revision + 1, status: 'disabled' });
+
+  // A disabled account is not offered a link: the server refuses one, and
+  // saying "turn access back on first" is more use than a refusal.
+  await expect(row.getByText('Send a password link')).toHaveCount(0);
+});
+
+test('removing an account asks first and sends the revision in the query', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE] });
+  await open(page, '/#/admin');
+
+  page.on('dialog', (d) => d.accept().catch(() => {}));
+  await page.locator('.person', { hasText: GRACE.email }).getByText('Remove').click();
+
+  await expect(page.locator('#peopleList .person')).toHaveCount(1);
+  await expect(page.locator('#adminMsg')).toContainText('Removed grace@example.test');
+  const gone = server.calls.find((c) => c.method === 'DELETE');
+  expect(gone.search).toBe(`?revision=${GRACE.revision}`);
+});
+
+test("another admin's change is adopted rather than overwritten", async ({ page }) => {
+  const moved = { ...GRACE, role: 'viewer', revision: GRACE.revision + 5 };
+  await mountAccounts(page, { session: ADA, users: [ADA, GRACE], stale: moved });
+  await open(page, '/#/admin');
+
+  const row = page.locator('.person', { hasText: GRACE.email });
+  await row.locator('select.person-role').selectOption('admin');
+
+  // The refusal carries the row as it now stands, so the list shows the truth
+  // instead of this browser's guess — and says why it changed under them.
+  await expect(row.locator('select.person-role')).toHaveValue('viewer');
+  await expect(page.locator('#adminMsg')).toContainText('Somebody else changed that account first');
+});
+
+test("an account with no password cannot be switched on, and the server's reason is shown", async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA, { ...LINUS, status: 'disabled', noPassword: true }] });
+  await open(page, '/#/admin');
+
+  await page.locator('.person', { hasText: LINUS.email }).getByText('Turn access back on').click();
+  await expect(page.locator('#adminMsg')).toContainText('never set a password');
+});
+
+/* ------------------------------------------------------------------
+ * Roles shape the page
+ * ------------------------------------------------------------------ */
+
+test('an editor is not offered the admin panel, and cannot reach it by URL either', async ({ page }) => {
+  await mountAccounts(page, { session: GRACE, users: [ADA, GRACE] });
+  await open(page);
+
+  await expect(page.locator('#accountActs')).not.toContainText('People');
+  await expect(page.locator('#accountActs')).toContainText('Your account');
+
+  await page.goto('/#/admin');
+  await expect(page.locator('#panelNote')).toBeVisible();
+  await expect(page.locator('#authNote')).toContainText("Managing accounts is an admin's job");
+  await expect(page.locator('#panelAdmin')).toBeHidden();
+});
+
+test('an editor keeps every control the ledger has', async ({ page }) => {
+  await seedPlanner(page);
+  await mountAccounts(page, { session: GRACE, users: [GRACE] });
+  await open(page);
+
+  await page.locator('#tab-budget').click();
+  await expect(page.locator('#addBudgetRow')).toBeVisible();
+  await expect(page.locator('#budgetBody tr').first().locator('textarea').first()).not.toHaveAttribute('readonly', '');
+});
+
+test('a viewer is shown the ledger and offered nothing to change it with', async ({ page }) => {
+  await seedPlanner(page);
+  await mountAccounts(page, { session: { ...LINUS, status: 'active' }, users: [LINUS] });
+  await open(page);
+
+  await expect(page.locator('body')).toHaveClass(/role-viewer/);
+  await expect(page.locator('.account-role')).toHaveText('viewer, read-only');
+
+  await page.locator('#tab-budget').click();
+  // Hidden, not merely inert: a button that does nothing is worse than no
+  // button.
+  await expect(page.locator('#addBudgetRow')).toBeHidden();
+  await expect(page.locator('#budgetBody .del-btn').first()).toBeHidden();
+  await expect(page.locator('#importData')).toBeDisabled();
+
+  // The figures are still readable, selectable and copyable — read-only
+  // rather than disabled, which is the rule an archived ledger already
+  // follows.
+  const row = page.locator('#budgetBody tr').first();
+  await expect(row.locator('textarea').first()).toHaveAttribute('readonly', '');
+  await expect(row.locator('input').first()).toHaveAttribute('readonly', '');
+  await expect(row.locator('button.by-btn')).toBeDisabled();
+  await expect(row.locator('td').nth(3)).toHaveText('€2,500');
+
+  // Export stays open. A ledger nobody can take a copy of is a worse ledger.
+  await expect(page.locator('#exportData')).toBeEnabled();
+});
+
+test("a viewer's lock survives the page rebuilding its own rows", async ({ page }) => {
+  await seedPlanner(page);
+  await mountAccounts(page, { session: { ...LINUS, status: 'active' }, users: [LINUS] });
+  await open(page);
+
+  await page.locator('#tab-tasks').click();
+  await expect(page.locator('#tasksBody tr')).toHaveCount(2);
+
+  // Filtering rebuilds every row from scratch. Controls that did not exist
+  // when the lock was applied have to come back locked, or a viewer gets an
+  // editable ledger by pressing a filter.
+  await page.locator('#taskFilters button[data-filter="done"]').click();
+  await expect(page.locator('#tasksBody tr')).toHaveCount(1);
+
+  const row = page.locator('#tasksBody tr').first();
+  await expect(row.locator('input').first()).toHaveAttribute('readonly', '');
+  await expect(row.locator('select.status-select')).toBeDisabled();
+});
+
+test('a deployment without passkeys does not offer them', async ({ page }) => {
+  // The instance behind this spec sets no base URL, so the server derived no
+  // relying party and mounted no passkey routes. The config block says so,
+  // and the button that would 404 is never drawn.
+  await mountAccounts(page, { users: [ADA] });
+  await open(page, '/#/login');
+
+  expect(await page.evaluate(() => JSON.parse(document.getElementById('soiree-config').textContent).passkeys)).toBe(false);
+  await expect(page.locator('#loginPasskey')).toBeHidden();
+});
