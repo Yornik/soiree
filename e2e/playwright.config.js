@@ -42,6 +42,10 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 // locale" — and the only honest way to test a configuration branch is to
 // configure it.
 const ALT_PORT = PORT + 1;
+// Metrics listeners, one per server. Derived from the site ports rather than
+// fixed, so overriding SOIREE_E2E_PORT moves all four together.
+const METRICS_PORT = PORT + 1000;
+const ALT_METRICS_PORT = ALT_PORT + 1000;
 const ALT_URL = `http://127.0.0.1:${ALT_PORT}`;
 
 const repoRoot = path.resolve(__dirname, '..');
@@ -103,6 +107,11 @@ module.exports = defineConfig({
     env: {
       ...process.env,
       SOIREE_LISTEN_ADDR: `127.0.0.1:${PORT}`,
+      // Each server needs its own metrics port. The exposition moved to a
+      // listener of its own, and it defaults to :9090 — so two servers left on
+      // the default fight over it and the second exits before a single test
+      // runs. Bound to loopback because nothing scrapes these.
+      SOIREE_METRICS_ADDR: `127.0.0.1:${METRICS_PORT}`,
       // Synthetic throughout. No real event, no real people.
       SOIREE_EVENT_NAME: 'Rehearsal Dinner (e2e)',
       SOIREE_EVENT_TAGLINE: 'Synthetic fixture data',
@@ -132,6 +141,7 @@ module.exports = defineConfig({
     env: {
       ...process.env,
       SOIREE_LISTEN_ADDR: `127.0.0.1:${ALT_PORT}`,
+      SOIREE_METRICS_ADDR: `127.0.0.1:${ALT_METRICS_PORT}`,
       SOIREE_EVENT_NAME: 'Ongedateerd Feest (e2e)',
       SOIREE_EVENT_TAGLINE: '',
       // Deliberately unset: this is the "no date configured" deployment.
