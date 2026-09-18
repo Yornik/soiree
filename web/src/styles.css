@@ -535,7 +535,9 @@ table.budget { table-layout: fixed; min-width: 0; }
 table.budget thead th { position: relative; overflow: hidden; text-overflow: ellipsis; }
 table.budget td { overflow: hidden; vertical-align: top; }
 table.budget tbody td.calc { padding-top: 12px; }
-table.budget textarea { height: 100%; min-height: 32px; resize: none; overflow: auto; }
+/* No scrollbar: app.js sizes the field to its text (fitText), so there is
+   nothing to scroll, and a scrollbar in a cell this narrow covers the words. */
+table.budget textarea { height: 100%; min-height: 32px; resize: none; overflow: hidden; }
 table.budget td.note-cell textarea { font-size: 13px; }
 td.item-cell { position: relative; }
 

@@ -210,3 +210,39 @@ for (const width of [1280, 1920]) {
   });
 }
 
+// "It is ugly if it is a long title." The name field was as tall as its row and
+// no taller, so a name that wrapped showed a line and a half and a scrollbar.
+test('a long name makes its row taller instead of hiding behind a scrollbar', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Band', unit: 100, qty: 1, paid: 0 });
+  await addBudgetLine(page, { item: 'Printing of every sign, the pop-up banner by the lift and the cue cards', unit: 25, qty: 1, paid: 0 });
+
+  const short = budgetRow(page, 0).item;
+  const long = budgetRow(page, 1).item;
+  const hidden = (field) => field.evaluate((el) => el.scrollHeight - el.clientHeight);
+
+  expect(await hidden(long), 'pixels of the name out of sight').toBeLessThanOrEqual(1);
+  const heights = await Promise.all([short, long].map((f) => f.evaluate((el) => el.getBoundingClientRect().height)));
+  expect(heights[1], 'the long name takes more room than the short one').toBeGreaterThan(heights[0] * 1.5);
+  expect(await long.evaluate((el) => getComputedStyle(el).overflowY)).toBe('hidden');
+
+  // A tab that is not showing cannot be measured, and sizing a field to a
+  // height of zero makes its text disappear. Away and back, it still fits.
+  await gotoTab(page, 'tasks');
+  await gotoTab(page, 'budget');
+  expect(await hidden(long)).toBeLessThanOrEqual(1);
+  expect(await long.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(30);
+
+  // Typing more makes more room; a narrower column does too.
+  const before = await long.evaluate((el) => el.getBoundingClientRect().height);
+  await long.fill('Printing of every sign, the pop-up banner by the lift, the cue cards, the table numbers, the menu cards and the thank-you notes');
+  expect(await hidden(long)).toBeLessThanOrEqual(1);
+  expect(await long.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(before);
+
+  // And after a reload, when the table is drawn from what was saved.
+  await page.reload();
+  await gotoTab(page, 'budget');
+  expect(await hidden(budgetRow(page, 1).item)).toBeLessThanOrEqual(1);
+});
