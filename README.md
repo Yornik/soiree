@@ -200,10 +200,10 @@ Measured transfer at 1.0.0, brotli:
 
 | | |
 |---|---|
-| HTML shell | 3.6 kB |
+| HTML shell | 3.7 kB |
 | Stylesheet | 8.4 kB |
-| Planner script | 35 kB (`defer`, does not block paint) |
-| Accounts script | 13 kB (`defer`, does not block paint) |
+| Planner script | 36 kB (`defer`, does not block paint) |
+| Accounts script | 19 kB (`defer`, does not block paint; three languages) |
 | Display font | 33 kB (`font-display: swap`, does not block paint) |
 | **First paint** | **~12 kB** |
 
@@ -258,9 +258,10 @@ What works end to end:
 
 What is not there, stated rather than left to be discovered:
 
-- **The accounts screens are in English only.** The planner is translated into
-  English, Dutch and Indonesian; the sign-in, set-password, account and admin
-  screens are not yet, whatever `SOIREE_LOCALE` says.
+- **The mails are in English only.** Every screen is in English, Dutch and
+  Indonesian, the accounts screens included — but the invitation and the
+  password-reset mail that lead to them are not, and neither is the deadline
+  digest. The link inside them opens in the deployment's language.
 - **Phases and the programme have an API and no interface.** Both are in the
   plan and in `/api/v1`; the page draws neither. For the same reason a budget
   row with a `parentId`, which only a client writing to the API directly can

@@ -285,8 +285,8 @@ constraint drives the design:
 4. **Compression and cache headers in the binary.** No proxy configuration is
    required for either.
 
-Measured at 1.0.0, brotli: shell 3.6 kB, stylesheet 8.4 kB, planner script
-35 kB, accounts script 13 kB, font 33 kB. Both scripts are `defer`, so first
+Measured at 1.0.0, brotli: shell 3.7 kB, stylesheet 8.4 kB, planner script
+36 kB, accounts script 19 kB, font 33 kB. Both scripts are `defer`, so first
 paint needs the shell and stylesheet only — about 12 kB.
 
 ### Deliberately excluded
@@ -403,9 +403,12 @@ struck only halfway.
 
 Open, in the order they matter:
 
-- **Translate the accounts screens.** The planner speaks English, Dutch and
-  Indonesian; `auth.js` speaks English, whatever `SOIREE_LOCALE` says. The
-  first screen an invited person sees is the one that is not in their language.
+- **Translate the mails.** Every screen speaks English, Dutch and Indonesian.
+  The invitation, the password-reset mail and the deadline digest are composed
+  on the server (`inviteMessage` in `internal/httpd/auth.go`,
+  `internal/reminders/render.go`) and are in English. The server knows the
+  deployment's locale and nothing about the recipient's, so this is also a
+  question of whose language a mail should be in.
 - **A standing control for reminders.** See *Web push*: the offer is the only
   way in and there is no way out.
 - **What a signed-out browser shows.** The page draws its cached copy of the
@@ -898,8 +901,17 @@ and `auth.js` is then a script that finds nothing and draws nothing. It draws
 four screens, routed in the URL fragment so they can be linked to — sign in,
 set a password (where an invitation link lands, with the token taken out of the
 address bar before anything else happens), your own account and its passkeys,
-and the accounts screen for an admin. It enforces nothing; the server does. It
-is in English only, where the planner is translated, and that is a gap.
+and the accounts screen for an admin. It enforces nothing; the server does.
+
+It is translated like the planner, and deliberately not *by* the planner. The
+table is `auth.js`'s own — a deployment with no database never draws these
+screens and should not carry their strings — and its static markup is keyed
+with `data-i18n-auth`, because `app.js` walks the whole document for
+`data-i18n` and answers a key it does not know with the key itself. What the
+two share is the choice of language: `app.js` resolves it and writes it to
+`<html lang>`, and `auth.js`, a deferred script after it, reads it from there
+rather than resolving it a second time. Refusals are worded from the server's
+error *code*; its English `message` is shown only to somebody reading English.
 
 #### Sessions
 

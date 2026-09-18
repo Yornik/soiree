@@ -19,6 +19,8 @@
  * Two rules inherited from the rest of the suite: never wait on a clock, and
  * never assert on an exact Intl string where the point is the behaviour.
  */
+const fs = require('fs');
+const path = require('path');
 const { test, expect } = require('@playwright/test');
 const { STORAGE_KEY } = require('./helpers');
 
@@ -208,8 +210,8 @@ test('a visitor with accounts to sign in to is offered the door, and the planner
 
   await expect(page.locator('body')).toHaveClass(/signed-out/);
   await expect(page.locator('#accountActs button')).toHaveText(['Sign in']);
-  // The planner is not held hostage: the server does not gate the plan API, so
-  // neither does the page.
+  // The page does not hide the planner from somebody signed out. The server is
+  // what refuses them the plan; this browser's own copy is theirs to see.
   await expect(page.locator('#plannerWrap')).toBeVisible();
   await page.locator('#tab-budget').click();
   await expect(page.locator('#addBudgetRow')).toBeVisible();
@@ -551,4 +553,148 @@ test('a deployment without passkeys does not offer them', async ({ page }) => {
 
   expect(await page.evaluate(() => JSON.parse(document.getElementById('soiree-config').textContent).passkeys)).toBe(false);
   await expect(page.locator('#loginPasskey')).toBeHidden();
+});
+
+/*
+ * The accounts screens are not English-only.
+ *
+ * They were, for a release in which the planner behind them was already in
+ * three languages — so the first screen somebody invited to a planner ever saw
+ * was the one that was not in theirs. auth.js keeps its own table, and takes
+ * the choice of language from the <html lang> app.js has already set, so the
+ * two can never disagree about which language the page is in.
+ */
+
+/** The string table, read out of the source rather than copied into the test. */
+function authStrings() {
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'src', 'auth.js'), 'utf8');
+  const start = src.indexOf('var STRINGS = {');
+  const end = src.indexOf('\n  };', start);
+  expect(start, 'auth.js should hold a STRINGS table').toBeGreaterThan(-1);
+  // A literal of single-quoted strings and nothing else, so it can simply be
+  // evaluated; this is the repository's own source, not input.
+  return new Function(`return ${src.slice(start + 'var STRINGS = '.length, end + '\n  }'.length)};`)();
+}
+
+test('every accounts string exists in all three languages, with the same blanks to fill', () => {
+  const table = authStrings();
+  expect(Object.keys(table).sort()).toEqual(['en', 'id', 'nl']);
+
+  const blanks = (str) => (str.match(/\{\w+\}/g) || []).sort().join(' ');
+  const problems = [];
+  for (const key of Object.keys(table.en)) {
+    for (const lang of ['nl', 'id']) {
+      const str = table[lang][key];
+      if (typeof str !== 'string' || !str.trim()) problems.push(`${lang} has no ${key}`);
+      // "{email}" left out of a translation is a sentence with a hole in it,
+      // and one spelt differently is a sentence with the braces still showing.
+      else if (blanks(str) !== blanks(table.en[key])) problems.push(`${lang} ${key} fills different blanks`);
+    }
+  }
+  for (const lang of ['nl', 'id']) {
+    for (const key of Object.keys(table[lang])) {
+      if (!(key in table.en)) problems.push(`${lang} has ${key}, which English does not`);
+    }
+  }
+  expect(problems).toEqual([]);
+});
+
+test('the sign-in screen is in Dutch when the page is', async ({ page }) => {
+  await mountAccounts(page, { users: [ADA] });
+  await open(page, '/?lang=nl#/login');
+
+  await expect(page.locator('html')).toHaveAttribute('lang', 'nl');
+  await expect(page.locator('#authTitle')).toHaveText('Aanmelden');
+  await expect(page.locator('#authLede')).toHaveText('Meld je aan met het adres waarop je de uitnodiging hebt ontvangen.');
+  await expect(page.locator('label[for="loginEmail"]')).toHaveText('E-mailadres');
+  await expect(page.locator('label[for="loginPassword"]')).toHaveText('Wachtwoord');
+  await expect(page.locator('#loginSubmit')).toHaveText('Aanmelden');
+  await expect(page.locator('#loginForgot')).toHaveText('Mail me een link om een nieuw wachtwoord in te stellen');
+  await expect(page.locator('#accountActs button')).toHaveText(['Aanmelden']);
+
+  // What the page says by itself, and what it says about a refusal.
+  await page.click('#loginSubmit');
+  await expect(page.locator('#loginMsg')).toHaveText('Vul zowel je e-mailadres als je wachtwoord in.');
+  await page.fill('#loginEmail', ADA.email);
+  await page.fill('#loginPassword', 'not-the-password');
+  await page.click('#loginSubmit');
+  await expect(page.locator('#loginMsg')).toHaveText('Dat e-mailadres en wachtwoord horen niet bij een account.');
+});
+
+test('an invitation opened in Indonesian is in Indonesian from the first screen', async ({ page }) => {
+  await mountAccounts(page, { users: [ADA] });
+  // The link as the mail carries it, with the language an operator can add.
+  await page.goto(`/?lang=id#/set-password?token=${TOKEN}`);
+
+  await expect(page.locator('#authTitle')).toHaveText('Buat kata sandi');
+  await expect(page.locator('label[for="newPassword"]')).toHaveText('Kata sandi baru');
+  await expect(page.locator('#setPasswordSubmit')).toHaveText('Simpan kata sandi');
+  expect(page.url()).not.toContain('token=');
+
+  await page.fill('#newPassword', 'pendek');
+  await page.fill('#newPassword2', 'pendek');
+  await page.click('#setPasswordSubmit');
+  await expect(page.locator('#setPasswordMsg')).toHaveText('Kata sandi harus minimal 12 karakter.');
+
+  await page.fill('#newPassword', PASSWORD);
+  await page.fill('#newPassword2', PASSWORD);
+  await page.click('#setPasswordSubmit');
+  await expect(page.locator('#authTitle')).toHaveText('Kata sandi tersimpan');
+  await expect(page.locator('#authNoteAct')).toHaveText('Masuk');
+});
+
+test('no accounts screen leaves English, or a raw key, showing in another language', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS] });
+  await open(page, '/?lang=id#/admin');
+  await expect(page.locator('#peopleList .person')).toHaveCount(3);
+
+  // Words that are the same in both languages are not evidence of anything,
+  // so the check is for sentences and labels that could only be English.
+  const english = [
+    'Sign in', 'Sign out', 'Your account', 'People', 'Add person', 'Role',
+    'Back to the planner', 'Send a password link', 'Send the link again',
+    'Turn off access', 'Remove', 'added ', 'invited', 'active', 'Everyone with',
+    'A viewer reads', 'Viewer', 'Editor', 'read-only', 'you',
+  ];
+  const rawKey = /(^|\s)[a-z]+(\.[a-z_-]+)+(\s|$)/;
+
+  async function check(where) {
+    // innerText: what is on screen, so a hidden panel's English is not counted
+    // against the one that is showing.
+    const text = await page.evaluate(() =>
+      [document.getElementById('authScreen'), document.getElementById('accountBar')]
+        .map((el) => (el ? el.innerText : '')).join('\n'));
+    // Addresses are data, and they are made of lowercase words and dots.
+    const prose = text.replace(/\S+@\S+/g, '');
+    for (const phrase of english) {
+      const re = new RegExp(`(^|[^A-Za-z])${phrase.trim()}([^A-Za-z]|$)`);
+      expect(re.test(prose), `${where} still shows English: "${phrase.trim()}"\n${prose}`).toBe(false);
+    }
+    expect(rawKey.test(prose), `${where} shows a raw key\n${prose}`).toBe(false);
+  }
+
+  await expect(page.locator('#authTitle')).toHaveText('Anggota');
+  await expect(page.locator('.person-you')).toHaveText('kamu');
+  await expect(page.locator('.person', { hasText: LINUS.email }).locator('.person-status')).toHaveText('diundang');
+  await check('the people screen');
+
+  await page.goto('/?lang=id#/account');
+  await expect(page.locator('#authTitle')).toHaveText('Akunmu');
+  await expect(page.locator('#authLede')).toHaveText(`${ADA.email}, masuk sebagai admin.`);
+  await expect(page.locator('#signOutBtn')).toHaveText('Keluar');
+  await check('the account screen');
+});
+
+test('a refusal the server words in English is reworded, not passed through', async ({ page }) => {
+  // no_password comes back with a message, in English, written for a person.
+  // To somebody reading Indonesian it is a line of another language in the
+  // middle of their screen; the code is what the page should act on.
+  await mountAccounts(page, { session: ADA, users: [ADA, { ...LINUS, status: 'disabled', noPassword: true }] });
+  await open(page, '/?lang=id#/admin');
+
+  const row = page.locator('.person', { hasText: LINUS.email });
+  await row.getByRole('button', { name: 'Aktifkan lagi akses' }).click();
+  await expect(page.locator('#adminMsg')).toHaveText(
+    'Akun itu belum pernah membuat kata sandi, jadi tidak bisa diaktifkan. Kirimi tautan saja.');
+  await expect(page.locator('#adminMsg')).not.toContainText('never set a password');
 });

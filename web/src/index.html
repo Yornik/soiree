@@ -319,7 +319,7 @@
 <div class="auth-wrap" id="authScreen" hidden>
   <header class="auth-head">
     <p class="auth-event">{{ .EventName }}</p>
-    <h1 class="auth-title" id="authTitle">Sign in</h1>
+    <h1 class="auth-title" id="authTitle" data-i18n-auth="signin">Sign in</h1>
     <p class="auth-lede" id="authLede"></p>
   </header>
 
@@ -327,24 +327,24 @@
   <section class="auth-panel" id="panelLogin" hidden>
     <form class="auth-form" id="loginForm" novalidate>
       <div class="auth-field">
-        <label for="loginEmail">Email</label>
+        <label for="loginEmail" data-i18n-auth="f.email">Email</label>
         <input type="email" id="loginEmail" autocomplete="username"
                autocapitalize="none" autocorrect="off" spellcheck="false">
       </div>
       <div class="auth-field">
-        <label for="loginPassword">Password</label>
+        <label for="loginPassword" data-i18n-auth="f.password">Password</label>
         <input type="password" id="loginPassword" autocomplete="current-password">
       </div>
       <p class="auth-msg" id="loginMsg" role="status" aria-live="polite"></p>
       <div class="auth-acts">
-        <button class="solid-btn" type="submit" id="loginSubmit">Sign in</button>
+        <button class="solid-btn" type="submit" id="loginSubmit" data-i18n-auth="signin">Sign in</button>
         <!-- Shown only where the server mounted the passkey routes; the
              config block says whether it did. -->
-        <button class="ghost-btn" type="button" id="loginPasskey" hidden>Use a passkey</button>
+        <button class="ghost-btn" type="button" id="loginPasskey" data-i18n-auth="login.passkey" hidden>Use a passkey</button>
       </div>
     </form>
     <p class="auth-aside">
-      <button class="link-btn" type="button" id="loginForgot">Email me a link to set a new password</button>
+      <button class="link-btn" type="button" id="loginForgot" data-i18n-auth="login.forgot">Email me a link to set a new password</button>
     </p>
   </section>
 
@@ -352,18 +352,18 @@
   <section class="auth-panel" id="panelSetPassword" hidden>
     <form class="auth-form" id="setPasswordForm" novalidate>
       <div class="auth-field">
-        <label for="newPassword">New password</label>
+        <label for="newPassword" data-i18n-auth="setpw.new">New password</label>
         <input type="password" id="newPassword" autocomplete="new-password">
-        <p class="auth-hint">At least 12 characters. Length is what makes a password
+        <p class="auth-hint" data-i18n-auth="setpw.hint">At least 12 characters. Length is what makes a password
            hard to guess, so a short sentence beats a short scramble.</p>
       </div>
       <div class="auth-field">
-        <label for="newPassword2">Type it again</label>
+        <label for="newPassword2" data-i18n-auth="setpw.again">Type it again</label>
         <input type="password" id="newPassword2" autocomplete="new-password">
       </div>
       <p class="auth-msg" id="setPasswordMsg" role="status" aria-live="polite"></p>
       <div class="auth-acts">
-        <button class="solid-btn" type="submit" id="setPasswordSubmit">Set password</button>
+        <button class="solid-btn" type="submit" id="setPasswordSubmit" data-i18n-auth="setpw.submit">Set password</button>
       </div>
     </form>
   </section>
@@ -374,21 +374,21 @@
   <section class="auth-panel" id="panelAdmin" hidden>
     <form class="auth-form auth-form-row" id="createUserForm" novalidate>
       <div class="auth-field">
-        <label for="newUserEmail">Email</label>
+        <label for="newUserEmail" data-i18n-auth="f.email">Email</label>
         <input type="email" id="newUserEmail" autocomplete="off"
                autocapitalize="none" autocorrect="off" spellcheck="false">
       </div>
       <div class="auth-field">
-        <label for="newUserRole">Role</label>
+        <label for="newUserRole" data-i18n-auth="people.role">Role</label>
         <select id="newUserRole">
-          <option value="viewer">Viewer</option>
-          <option value="editor" selected>Editor</option>
-          <option value="admin">Admin</option>
+          <option value="viewer" data-i18n-auth="opt.viewer">Viewer</option>
+          <option value="editor" data-i18n-auth="opt.editor" selected>Editor</option>
+          <option value="admin" data-i18n-auth="opt.admin">Admin</option>
         </select>
       </div>
-      <button class="solid-btn" type="submit" id="createUserSubmit">Add person</button>
+      <button class="solid-btn" type="submit" id="createUserSubmit" data-i18n-auth="people.add">Add person</button>
     </form>
-    <p class="auth-roles">A viewer reads the ledger. An editor changes it. An admin
+    <p class="auth-roles" data-i18n-auth="people.roles">A viewer reads the ledger. An editor changes it. An admin
        also decides who has an account.</p>
 
     <p class="auth-msg" id="adminMsg" role="status" aria-live="polite"></p>
@@ -399,37 +399,37 @@
          once, here, and kept nowhere. -->
     <div class="auth-link-out" id="adminLinkOut" hidden>
       <p class="auth-link-lede" id="adminLinkLede"></p>
-      <input type="text" id="adminLinkValue" readonly aria-label="Set-password link">
+      <input type="text" id="adminLinkValue" readonly aria-label="Set-password link" data-i18n-auth-aria="link.aria">
       <div class="auth-acts">
-        <button class="ghost-btn" type="button" id="adminLinkCopy">Copy link</button>
-        <button class="link-btn" type="button" id="adminLinkDismiss">Done</button>
+        <button class="ghost-btn" type="button" id="adminLinkCopy" data-i18n-auth="link.copy">Copy link</button>
+        <button class="link-btn" type="button" id="adminLinkDismiss" data-i18n-auth="link.done">Done</button>
       </div>
     </div>
 
     <ul class="people" id="peopleList"></ul>
-    <p class="empty-note" id="peopleEmpty" hidden>No accounts yet.</p>
+    <p class="empty-note" id="peopleEmpty" data-i18n-auth="people.empty" hidden>No accounts yet.</p>
   </section>
 
   <!-- YOUR ACCOUNT -->
   <section class="auth-panel" id="panelAccount" hidden>
     <section class="auth-block" id="passkeySection" hidden>
-      <h2>Passkeys</h2>
-      <p class="auth-note-body">A passkey signs you in with the fingerprint reader or
+      <h2 data-i18n-auth="pk.title">Passkeys</h2>
+      <p class="auth-note-body" data-i18n-auth="pk.body">A passkey signs you in with the fingerprint reader or
          screen lock on a device you already have. It never leaves that device,
          and it cannot be phished or reused anywhere else.</p>
       <ul class="passkey-list" id="passkeyList"></ul>
-      <p class="empty-note" id="passkeyEmpty">No passkeys on this account yet.</p>
+      <p class="empty-note" id="passkeyEmpty" data-i18n-auth="pk.empty">No passkeys on this account yet.</p>
       <form class="auth-form auth-form-row" id="passkeyForm" novalidate>
         <div class="auth-field">
-          <label for="passkeyLabel">Name this device</label>
-          <input type="text" id="passkeyLabel" maxlength="64" placeholder="Phone">
+          <label for="passkeyLabel" data-i18n-auth="pk.name">Name this device</label>
+          <input type="text" id="passkeyLabel" maxlength="64" placeholder="Phone" data-i18n-auth-placeholder="pk.placeholder">
         </div>
-        <button class="add-row-btn" type="submit" id="passkeyAdd">Add a passkey</button>
+        <button class="add-row-btn" type="submit" id="passkeyAdd" data-i18n-auth="pk.add">Add a passkey</button>
       </form>
       <p class="auth-msg" id="passkeyMsg" role="status" aria-live="polite"></p>
     </section>
     <div class="auth-acts auth-acts-parted">
-      <button class="ghost-btn" type="button" id="signOutBtn">Sign out</button>
+      <button class="ghost-btn" type="button" id="signOutBtn" data-i18n-auth="signout">Sign out</button>
     </div>
   </section>
 
@@ -437,12 +437,12 @@
   <section class="auth-panel" id="panelNote" hidden>
     <p class="auth-note-body" id="authNote"></p>
     <div class="auth-acts">
-      <button class="solid-btn" type="button" id="authNoteAct" hidden>Sign in</button>
+      <button class="solid-btn" type="button" id="authNoteAct" data-i18n-auth="signin" hidden>Sign in</button>
     </div>
   </section>
 
   <p class="auth-foot">
-    <button class="link-btn" type="button" data-auth-goto="">Back to the planner</button>
+    <button class="link-btn" type="button" data-auth-goto="" data-i18n-auth="back">Back to the planner</button>
   </p>
 </div>
 
