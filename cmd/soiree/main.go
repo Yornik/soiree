@@ -16,7 +16,7 @@ import (
 
 	"github.com/Yornik/soiree/internal/config"
 	"github.com/Yornik/soiree/internal/httpd"
-	"github.com/Yornik/soiree/internal/mail"
+	"github.com/Yornik/soiree/internal/mailer"
 	"github.com/Yornik/soiree/internal/migrate"
 	"github.com/Yornik/soiree/internal/store"
 	"github.com/Yornik/soiree/web"
@@ -93,23 +93,17 @@ func main() {
 	}
 
 	if st != nil {
-		var mailer httpd.Mailer
+		var accountMail httpd.Mailer
 		if cfg.SMTP.Enabled() {
 			// Assigned only when configured: a typed nil in an interface is
 			// not nil, and the accounts surface reads a nil Mailer as "hand
 			// the link back to the admin instead".
-			mailer = mail.New(mail.Config{
-				Host:     cfg.SMTP.Host,
-				Port:     cfg.SMTP.Port,
-				Username: cfg.SMTP.Username,
-				Password: cfg.SMTP.Password,
-				From:     cfg.SMTP.From,
-			})
+			accountMail = accountMailer{send: mailer.New(smtpConfig(cfg.SMTP))}
 		}
 
 		accounts = httpd.NewAuth(httpd.AuthOptions{
 			Store:             st,
-			Mailer:            mailer,
+			Mailer:            accountMail,
 			Logger:            log,
 			BaseURL:           cfg.BaseURL,
 			TrustProxyHeaders: cfg.TrustProxyHeaders,
@@ -187,6 +181,49 @@ func main() {
 		log.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// smtpConfig maps the validated environment surface onto the transport.
+//
+// Two structs rather than one because they answer to different things:
+// config.SMTPConfig is what the operator set and is checked against what a
+// deployment needs (a sender with no relay is refused, a relay with no base URL
+// is refused), while mailer.Config is what the SMTP conversation needs. This is
+// the single place that knows the mapping.
+func smtpConfig(c config.SMTPConfig) mailer.Config {
+	return mailer.Config{
+		Host:     c.Host,
+		Port:     c.Port,
+		Username: c.Username,
+		Password: c.Password,
+		From:     c.From,
+	}
+}
+
+// accountMailer adapts internal/mailer to the interface internal/httpd asks
+// for.
+//
+// The accounts surface wants one recipient, a subject and a plain-text body,
+// and deliberately knows nothing else about mail — it is the package that
+// decides what to say, not how to say it. internal/mailer wants a Message. The
+// translation is this, and it is the whole of what used to be a second SMTP
+// client.
+//
+// The error comes back unwrapped, so a caller that cares can still ask
+// mailer.Ambiguous whether the message might have gone out. The accounts
+// surface does not — it has nothing to retry and no ledger to release — but
+// flattening the error here would take that away from whatever does next.
+type accountMailer struct{ send mailer.Sender }
+
+func (m accountMailer) Send(ctx context.Context, to, subject, body string) error {
+	// Text only: a set-password link is a credential, and nothing about it
+	// wants rendering. No HTML part means nothing in the mail can fetch
+	// anything from anywhere, which is the same rule the digest follows.
+	return m.send.Send(ctx, mailer.Message{
+		To:      []string{to},
+		Subject: subject,
+		Text:    body,
+	})
 }
 
 // openDatabase connects, proves the connection works, brings the schema up to

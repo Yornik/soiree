@@ -235,7 +235,7 @@ func TestAccountsConfigReadsEnv(t *testing.T) {
 	if !c.TrustProxyHeaders {
 		t.Error("SOIREE_TRUST_PROXY_HEADERS=true was not read")
 	}
-	if !c.SMTP.Enabled() || c.SMTP.Port != "465" {
+	if !c.SMTP.Enabled() || c.SMTP.Port != DefaultSMTPPort {
 		t.Errorf("SMTP = %+v, want enabled on the default implicit-TLS port", c.SMTP)
 	}
 

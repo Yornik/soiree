@@ -78,13 +78,23 @@ type Config struct {
 
 // SMTPConfig is the outgoing mail relay. The zero value means no mail, which
 // is a supported deployment rather than a broken one.
+//
+// This is the environment surface, validated here; the transport it is handed
+// to is internal/mailer, and cmd/soiree maps one onto the other. Port is a
+// number rather than the string the environment carries, so the parse happens
+// once, where the variable it came from can still be named in the error.
 type SMTPConfig struct {
 	Host     string
-	Port     string
+	Port     int
 	Username string
 	Password string
 	From     string
 }
+
+// DefaultSMTPPort is implicit TLS. It matches mailer.DefaultPort, which is the
+// value that actually decides how the connection is made; cmd/soiree's tests
+// pin the two together rather than leaving the pair to drift.
+const DefaultSMTPPort = 465
 
 // Enabled reports whether mail can be sent.
 func (s SMTPConfig) Enabled() bool { return s.Host != "" }
@@ -239,7 +249,7 @@ func (c *Config) loadAccounts() error {
 
 	c.SMTP = SMTPConfig{
 		Host:     strings.TrimSpace(os.Getenv("SOIREE_SMTP_HOST")),
-		Port:     strings.TrimSpace(env("SOIREE_SMTP_PORT", "465")),
+		Port:     DefaultSMTPPort,
 		Username: os.Getenv("SOIREE_SMTP_USER"),
 		Password: os.Getenv("SOIREE_SMTP_PASSWORD"),
 		From:     strings.TrimSpace(os.Getenv("SOIREE_SMTP_FROM")),
@@ -258,8 +268,12 @@ func (c *Config) loadAccounts() error {
 		return nil
 	}
 
-	if _, err := strconv.Atoi(c.SMTP.Port); err != nil {
-		return fmt.Errorf("SOIREE_SMTP_PORT must be a port number, got %q", c.SMTP.Port)
+	if v := strings.TrimSpace(os.Getenv("SOIREE_SMTP_PORT")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("SOIREE_SMTP_PORT must be a port number, got %q", v)
+		}
+		c.SMTP.Port = n
 	}
 	if c.SMTP.From == "" {
 		return fmt.Errorf("SOIREE_SMTP_FROM is required when SOIREE_SMTP_HOST is set")

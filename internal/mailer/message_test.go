@@ -85,6 +85,126 @@ func TestBuildIsAMultipartAlternative(t *testing.T) {
 	}
 }
 
+// setPasswordLink is the shape internal/httpd builds: a 43-character
+// base64url token — 32 bytes, RawURLEncoding — in the URL fragment. Its length
+// is the point of the test below, so it is spelled out rather than shortened.
+const setPasswordLink = "https://soiree.example.test/#/set-password?token=" +
+	"Zm91cnRlZW4tYnl0ZXMtbm90LXJlYWxseS1hLXRva2Vu"
+
+// Every header the account mail relies on, and the body arriving intact.
+//
+// Carried over from internal/mail, which was deleted in favour of this package
+// and whose test asserted the same set on a simpler message. The headers are
+// not decoration: Auto-Submitted is what stops a recipient's out-of-office
+// responder answering the mail, and answering it again next week.
+func TestBuildCarriesTheHeadersTheAccountMailNeeds(t *testing.T) {
+	raw, err := testConfig.Build(Message{
+		To:      []string{"ada@example.test"},
+		Subject: "Your account is ready",
+		Text:    "An account has been created for you. Choose a password here:\n\n" + setPasswordLink + "\n",
+	}, testTime, "<abc@example.test>")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	head, body, ok := strings.Cut(string(raw), "\r\n\r\n")
+	if !ok {
+		t.Fatalf("no blank line between headers and body:\n%s", raw)
+	}
+	for _, want := range []string{
+		"From: ",
+		"To: ",
+		"Subject: Your account is ready",
+		"Date: ",
+		"Message-ID: <abc@example.test>",
+		"MIME-Version: 1.0",
+		"Auto-Submitted: auto-generated",
+		"Content-Type: multipart/alternative",
+	} {
+		if !strings.Contains(head, want) {
+			t.Errorf("headers are missing %q:\n%s", want, head)
+		}
+	}
+
+	// A bare newline is the sort of thing a strict relay rejects at the worst
+	// possible moment, and net/textproto's dot-writer only fixes what it sees.
+	for _, line := range strings.Split(body, "\r\n") {
+		if strings.ContainsAny(line, "\r\n") {
+			t.Errorf("body line %q is not CRLF-terminated", line)
+		}
+	}
+}
+
+// A set-password link is 91 characters, so quoted-printable wraps it with a
+// soft break and encodes the `=` in `?token=` as `=3D`. Neither is a problem —
+// every mail client decodes both — but "the reset link arrives broken" is a
+// silent account-recovery failure, so the round trip is asserted rather than
+// assumed.
+func TestSetPasswordLinkSurvivesQuotedPrintable(t *testing.T) {
+	raw, err := testConfig.Build(Message{
+		To:      []string{"ada@example.test"},
+		Subject: "Set a new password",
+		Text:    "Someone asked to set a new password on your account.\n\n" + setPasswordLink + "\n",
+	}, testTime, "<abc@example.test>")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	// Encoded on the wire: a reader of the raw bytes must not find the link
+	// sitting there unwrapped, or this test is checking nothing.
+	if strings.Contains(string(raw), setPasswordLink) {
+		t.Error("the link was not quoted-printable encoded; this test no longer proves anything")
+	}
+
+	msg, err := mail.ReadMessage(strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("content type: %v", err)
+	}
+	part, err := multipart.NewReader(msg.Body, params["boundary"]).NextPart()
+	if err != nil {
+		t.Fatalf("first part: %v", err)
+	}
+	decoded, err := io.ReadAll(quotedprintable.NewReader(part))
+	if err != nil {
+		t.Fatalf("decode part: %v", err)
+	}
+	if !strings.Contains(string(decoded), setPasswordLink) {
+		t.Errorf("the link did not survive the round trip:\n%s", decoded)
+	}
+}
+
+// The account mail has no HTML part. A password-reset link is a credential and
+// nothing about it wants rendering, so the message is text and nothing else —
+// the one shape the reminder digest never exercises.
+func TestBuildWithoutHTMLHasOneTextPart(t *testing.T) {
+	msg := buildMessage(t, testConfig, Message{
+		To:      []string{"ada@example.test"},
+		Subject: "Your account is ready",
+		Text:    "Choose a password here:\n\n" + setPasswordLink + "\n",
+	})
+
+	_, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("content type: %v", err)
+	}
+	mr := multipart.NewReader(msg.Body, params["boundary"])
+	var types []string
+	for {
+		p, err := mr.NextPart()
+		if err != nil {
+			break
+		}
+		types = append(types, p.Header.Get("Content-Type"))
+	}
+	if len(types) != 1 || !strings.HasPrefix(types[0], "text/plain") {
+		t.Errorf("parts = %v, want a single text/plain", types)
+	}
+}
+
 // The event names this serves are Dutch and Indonesian, so a subject is not
 // ASCII and a raw 8-bit header is not portable.
 func TestSubjectIsEncoded(t *testing.T) {
