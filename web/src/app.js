@@ -1567,10 +1567,11 @@
     return true;
   }
 
-  // A request of ours was refused for want of a session. That is definitive,
-  // so halt first and tell auth.js second.
+  // A request of ours was refused for want of a session. That is definitive —
+  // the server has just said 401 to this browser's own cookie — so halt first,
+  // and tell auth.js as a fact rather than as a question.
   function sessionLost() {
-    if (haltSync()) doubtSession();
+    if (haltSync()) doubtSession(true);
   }
 
   /* Ask auth.js to look again.
@@ -1579,9 +1580,17 @@
    * `soiree:session` like any other change. Used directly by the one caller
    * that cannot know: an EventSource reports a refused connection as an error
    * with no status, so a closed stream may be a 401 or may be the subscriber
-   * cap, and only one of those is a reason to stop. */
-  function doubtSession() {
-    document.dispatchEvent(new CustomEvent('soiree:session-check'));
+   * cap, and only one of those is a reason to stop.
+   *
+   * `definitive` is for the callers that do know. auth.js then acts on it at
+   * once instead of asking the server to repeat itself. That second request
+   * was a round trip nobody needed — 300 ms from the far side of the world —
+   * and a second thing that could go missing: when it did, the status line
+   * said "sign in again" and no sign-in screen ever opened. */
+  function doubtSession(definitive) {
+    document.dispatchEvent(new CustomEvent('soiree:session-check', {
+      detail: { definitive: !!definitive }
+    }));
   }
 
   /* ---------- Signing out ----------
