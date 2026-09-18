@@ -195,6 +195,13 @@ func TestBucketRefusesAnExpiredURL(t *testing.T) {
 		t.Fatalf("PUT = %d", code)
 	}
 
+	// Put back before the cleanup newKey registered runs - cleanups are LIFO.
+	// Without this the DELETE that tidies up is signed an hour ago as well,
+	// the bucket refuses it like any other expired address, and the object
+	// stays. Against a throwaway container nobody notices; against somebody's
+	// real bucket it breaks the promise that these tests remove what they write,
+	// which is how it was found.
+	t.Cleanup(func() { s.SetClock(time.Now) })
 	s.SetClock(func() time.Time { return time.Now().Add(-time.Hour) })
 	res, err := http.Get(s.PresignGet(key, time.Minute, "attachment", ""))
 	if err != nil {
