@@ -27,6 +27,9 @@
    themes. Dark is the same ledger by lamplight, not an inversion: each hue is
    re-picked rather than lightened by rule. */
 :root {
+  /* The width of the page. One number, because the language switch above the
+     planner has to line up with its right edge. */
+  --page: 1280px;
   --paper: #F6F0DE;
   --tint: #EDE6CE;
   --raise: #FFFCF2;
@@ -87,7 +90,7 @@ body {
    name underneath it. The target is larger than the picture — 24 by 16 is a
    flag, and nobody's thumb. */
 .lang-switch {
-  max-width: 1000px;
+  max-width: var(--page);
   margin: 0 auto;
   padding: 10px 14px 0;
   display: flex;
@@ -120,8 +123,14 @@ body {
    not rest on telling two red-and-white flags apart by their blue. */
 .flag-btn[aria-pressed="true"] { opacity: 1; box-shadow: inset 0 -2px 0 var(--ink); }
 
+/* Wide enough for the budget table to show every column at its default
+   width - they add up to 1195px, and the last two are Remarks and the button
+   that removes a row. At the 1000px this used to be, both were cut off on any
+   screen, however wide: reaching them meant scrolling the table sideways, and
+   nothing on the page said there was anything there to scroll to. Prose is
+   held to a readable measure by its own max-width in ch, not by this. */
 .wrap {
-  max-width: 1000px;
+  max-width: var(--page);
   margin: 0 auto;
   padding: 34px 20px 80px;
 }
