@@ -258,6 +258,116 @@ func TestAccountsConfigReadsEnv(t *testing.T) {
 	}
 }
 
+// Push is off unless all three VAPID variables are set, and a deployment that
+// sets none of them must start exactly as it does today — which is what a bare
+// `docker run` and the image smoke test in CI do.
+func TestPushIsOffWhenUnconfigured(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with no VAPID variables: %v", err)
+	}
+	if c.VAPID.Enabled() {
+		t.Error("push reports itself enabled with nothing configured")
+	}
+	if c.Client().VAPIDPublicKey != "" {
+		t.Error("an unconfigured deployment publishes a push key")
+	}
+
+	raw, err := c.ClientJSON()
+	if err != nil {
+		t.Fatalf("ClientJSON(): %v", err)
+	}
+	// Absent, not present-and-empty: "is there a key?" is the single question
+	// the client asks before offering to turn notifications on.
+	if strings.Contains(raw, "vapidPublicKey") {
+		t.Errorf("the client config carries a push key field with push off: %s", raw)
+	}
+}
+
+// A half-configured pair is never a startup failure — but it must not reach
+// the browser either, or the page offers to subscribe against a key the server
+// cannot send with, and every notification after that is silently lost.
+func TestHalfConfiguredPushNeitherFailsNorPublishes(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"a public key alone": {
+			"SOIREE_VAPID_PUBLIC_KEY": "BPublicKeyThatIsNotHalfOfAnythingUsable",
+		},
+		"a pair with no subject": {
+			"SOIREE_VAPID_PUBLIC_KEY":  "BPublicKeyThatIsNotHalfOfAnythingUsable",
+			"SOIREE_VAPID_PRIVATE_KEY": "a-private-key-for-a-test",
+		},
+		"a subject alone": {
+			"SOIREE_VAPID_SUBJECT": "mailto:ada@example.test",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			c, err := Load()
+			if err != nil {
+				t.Fatalf("Load() refused to start on %s: %v", name, err)
+			}
+			if c.VAPID.Enabled() {
+				t.Errorf("%s reports push as usable", name)
+			}
+			if c.Client().VAPIDPublicKey != "" {
+				t.Errorf("%s published a public key the server cannot send with", name)
+			}
+		})
+	}
+}
+
+// The public key is meant to reach the page — a browser that has not seen it
+// cannot subscribe at all. The private key is a signing key and must never get
+// anywhere near it.
+func TestPushKeysAreReadAndOnlyThePublicOneIsPublished(t *testing.T) {
+	const (
+		publicKey  = "BOnlyThisHalfMayEverReachABrowser"
+		privateKey = "this-private-half-is-the-signing-key"
+	)
+	t.Setenv("SOIREE_VAPID_PUBLIC_KEY", "  "+publicKey+"  ")
+	t.Setenv("SOIREE_VAPID_PRIVATE_KEY", privateKey)
+	t.Setenv("SOIREE_VAPID_SUBJECT", "mailto:ada@example.test")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.VAPID.PublicKey != publicKey {
+		t.Errorf("PublicKey = %q, want it trimmed to %q", c.VAPID.PublicKey, publicKey)
+	}
+	if c.VAPID.PrivateKey != privateKey {
+		t.Errorf("PrivateKey = %q, want it read", c.VAPID.PrivateKey)
+	}
+	if !c.VAPID.Enabled() {
+		t.Error("a complete VAPID configuration does not report itself enabled")
+	}
+
+	raw, err := c.ClientJSON()
+	if err != nil {
+		t.Fatalf("ClientJSON(): %v", err)
+	}
+	if !strings.Contains(raw, publicKey) {
+		t.Errorf("the public key never reaches the browser, so nothing can subscribe: %s", raw)
+	}
+	if strings.Contains(raw, privateKey) {
+		t.Fatalf("the client config leaks the VAPID private key: %s", raw)
+	}
+
+	// The struct, not just its rendering: a field added to ClientConfig later
+	// must not be able to smuggle the private half in under another name.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatalf("ClientJSON is not valid JSON: %v", err)
+	}
+	for key, value := range m {
+		if s, ok := value.(string); ok && s == privateKey {
+			t.Errorf("the client config publishes the private key as %q", key)
+		}
+	}
+}
+
 func TestAccountsConfigRejectsHalfConfigurations(t *testing.T) {
 	// Each of these otherwise fails days later, as a mail that never arrives
 	// or a link that goes nowhere, to somebody who cannot see the logs.

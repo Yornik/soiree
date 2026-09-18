@@ -2,9 +2,16 @@
 /*
  * Export / import round trip.
  *
- * Until state is shared server-side this is the only way to move a planner
- * between people, which makes it the highest-consequence path in the app: a
- * broken export is silent, and is discovered when someone needs the data.
+ * In the deployment with no database this is the only way to move a planner
+ * between people; in the one with a database it is how a planner gets in and
+ * out of the deployment altogether, and how anything stranded in a browser is
+ * recovered when writes are not reaching the server. Either way it is the
+ * highest-consequence path in the app: a broken export is silent, and is
+ * discovered when someone needs the data.
+ *
+ * These run against the no-database instance. The same two buttons over a
+ * shared plan are covered in api.spec.js, where an import replaces what the
+ * server holds rather than what this browser holds.
  *
  * The round trip is done properly — export, wipe, import, compare — rather
  * than importing over state that already matches, which would pass whether or

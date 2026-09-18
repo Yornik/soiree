@@ -11,6 +11,7 @@
  *    does not break when ICU changes its mind about a space.
  */
 const { expect } = require('@playwright/test');
+const { API_URL } = require('../servers');
 
 // Must match STORAGE_KEY in web/src/app.js. If that changes, a saved planner
 // is silently orphaned, so the constant is worth asserting on directly.
@@ -215,8 +216,124 @@ async function readSplit(page) {
   return rows.map((r) => ({ label: r.label, amount: money(r.amount), pct: r.pct }));
 }
 
+/* ------------------------------------------------------------------
+ * The instance with a database behind it
+ * ------------------------------------------------------------------
+ * Only api.spec.js uses these. Everything above works against any of the
+ * three servers and knows nothing about whether one of them has an API.
+ * ------------------------------------------------------------------ */
+
+/** The whole plan as the server reports it, or null if this one has no database. */
+async function apiPlan(request, base = API_URL) {
+  const res = await request.get(`${base}/api/v1/plan`);
+  if (res.status() === 404) return null;
+  expect(res.status(), 'GET /api/v1/plan').toBe(200);
+  return res.json();
+}
+
+const PLAN_COLLECTIONS = [
+  ['notes', 'notes'],
+  ['tasks', 'tasks'],
+  ['budgetItems', 'budget-items'],
+  ['sponsors', 'sponsors'],
+];
+
+/**
+ * Empties the shared plan.
+ *
+ * This state really is shared — one database, one event — so a test that did
+ * not start from a known page would be reading whatever the previous one left.
+ * Done over the API rather than against the database directly, so the tests
+ * need no second connection and no credentials of their own.
+ *
+ * Tried more than once on purpose. The page from the test before this one can
+ * still have a write in flight as its context closes, and a sweep that loses
+ * to it either gets a 409 on a revision that has moved or finishes and finds a
+ * row back. Either way the answer is to read again and sweep again, so that a
+ * stray write fails the test that made it rather than the one after.
+ */
+async function resetPlan(request, base = API_URL) {
+  let problem = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    problem = await sweepPlan(request, base);
+    if (!problem) return;
+  }
+  throw new Error(`could not reset the shared plan: ${problem}`);
+}
+
+/** One sweep. Returns null when the plan is empty afterwards, or what went wrong. */
+async function sweepPlan(request, base) {
+  const plan = await apiPlan(request, base);
+  if (!plan) return null;
+
+  for (const [key, route] of PLAN_COLLECTIONS) {
+    for (const row of plan[key] || []) {
+      const res = await request.delete(`${base}/api/v1/${route}/${row.id}?revision=${row.revision}`);
+      // Already gone is the outcome that was wanted; a stale revision is the
+      // race this function exists to absorb.
+      if (![204, 404].includes(res.status())) {
+        return `DELETE ${route}/${row.id} answered ${res.status()}`;
+      }
+    }
+  }
+
+  // The singleton cannot be deleted, only put back. Its ceiling is money, so
+  // zero has to carry the currency's decimal places — taken from the value the
+  // server just reported rather than hardcoded, which keeps this honest if the
+  // instance is ever reconfigured.
+  const places = (String(plan.settings.ceiling).split('.')[1] || '').length;
+  const res = await request.patch(`${base}/api/v1/settings`, {
+    data: {
+      revision: plan.settings.revision,
+      ceiling: (0).toFixed(places),
+      inflationPct: 0,
+      fxRate: 0,
+      splitEvenly: false,
+    },
+  });
+  if (res.status() !== 200) return `PATCH /api/v1/settings answered ${res.status()}`;
+
+  // Read it back: a row that reappeared means a write landed after the sweep
+  // passed it, and the sweep has to happen again.
+  const after = await apiPlan(request, base);
+  const left = PLAN_COLLECTIONS.reduce((n, [key]) => n + (after[key] || []).length, 0);
+  return left ? `${left} row(s) came back after the sweep` : null;
+}
+
+/**
+ * Runs an action that loads the page, and waits for the plan it fetches.
+ *
+ * The page paints from its cached copy first and adopts the server's plan when
+ * it arrives, so "the document is loaded" is not the same moment as "this
+ * browser has the shared planner". Waiting on the request is the honest
+ * signal, and it is a condition rather than a clock.
+ */
+async function awaitPlan(page, action) {
+  const planned = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && r.url().includes('/api/v1/plan'),
+  );
+  await action();
+  await planned;
+}
+
+/** Opens the shared planner and waits for it to have the server's plan. */
+async function openSharedPlanner(page, path = '/') {
+  await awaitPlan(page, () => page.goto(path));
+}
+
+/** Reloads it, same wait. */
+async function reloadSharedPlanner(page) {
+  await awaitPlan(page, () => page.reload());
+}
+
 module.exports = {
+  API_URL,
   STORAGE_KEY,
+  apiPlan,
+  awaitPlan,
+  openSharedPlanner,
+  reloadSharedPlanner,
+  resetPlan,
   addBudgetLine,
   addSponsor,
   addTask,

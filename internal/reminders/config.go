@@ -56,6 +56,13 @@ type Config struct {
 	// so the digest reads like it belongs to this event.
 	EventName string
 	Currency  string
+
+	// BaseURL is the origin a notification's click opens, e.g.
+	// https://soiree.example.test. Empty produces a relative URL, which a
+	// service worker still resolves against its own scope — so this being
+	// unset costs nothing for the notification, unlike the mailed links that
+	// internal/config refuses to build without it.
+	BaseURL string
 }
 
 // LoadConfig reads the reminder settings from the environment.
@@ -73,6 +80,11 @@ func LoadConfig() (Config, error) {
 		Zone:       "UTC",
 		EventName:  strings.TrimSpace(os.Getenv("SOIREE_EVENT_NAME")),
 		Currency:   strings.ToUpper(strings.TrimSpace(os.Getenv("SOIREE_CURRENCY"))),
+		// Not validated here. internal/config has already refused to start on
+		// a SOIREE_BASE_URL that is not an absolute http(s) URL, so by the
+		// time this runs it is either empty or usable; the trailing slash is
+		// stripped so that appending one does not produce two.
+		BaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("SOIREE_BASE_URL")), "/"),
 	}
 	if c.Currency == "" {
 		c.Currency = "EUR"
