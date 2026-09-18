@@ -180,7 +180,7 @@ func TestBucketRefusesATamperedDisposition(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		res.Body.Close()
+		_ = res.Body.Close()
 		if ok := res.StatusCode == http.StatusOK; ok != c.want {
 			t.Errorf("%s: GET = %d", name, res.StatusCode)
 		}
@@ -200,7 +200,7 @@ func TestBucketRefusesAnExpiredURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode/100 == 2 {
 		t.Fatalf("GET with a URL that expired 59 minutes ago = %d, want a refusal", res.StatusCode)
 	}
