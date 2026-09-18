@@ -95,6 +95,62 @@ test('an edit reaches the server, and from there the next person', async ({ page
   }
 });
 
+/*
+ * The one above proves a second browser reads the same ledger when it opens.
+ * This one is the part that was still missing: neither of them had any way to
+ * learn about the other until somebody reloaded, and two people editing the
+ * same budget without seeing each other is how a venue gets booked twice.
+ *
+ * Nothing here reloads, and nothing here waits on a clock. Every assertion is
+ * an ordinary Playwright poll on what the *other* browser is showing, which is
+ * the only honest witness that the change crossed on its own.
+ *
+ * One deliberate detail: before asserting that the first browser has caught up,
+ * the caret is moved out of the budget table. A rebuild of a table somebody is
+ * typing in would take their cursor with it, so it is held back until they are
+ * out — which means a test that leaves the caret inside the container it then
+ * asserts on would be testing that policy rather than the live stream.
+ */
+test('an edit crosses to the other browser with nobody reloading', async ({ page, browser }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  const elsewhere = await browser.newContext({ baseURL: API_URL, serviceWorkers: 'block' });
+  const other = await elsewhere.newPage();
+  try {
+    await openSharedPlanner(other);
+    await gotoTab(other, 'budget');
+    await expect(other.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(0);
+
+    // One person books the venue.
+    await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+
+    // The other sees it appear. Not a figure they had to ask for, not after a
+    // reload: the row, the money on it, and the headline totals it moves.
+    await expect(budgetRow(other, 0).item).toHaveValue('Venue deposit', { timeout: 15_000 });
+    await expect(budgetRow(other, 0).paid).toHaveValue('500');
+    await expectFigures(other, { committed: 2500, paid: 500, outstanding: 2000, forecast: 2500 });
+
+    // And it travels the other way, on a row that already exists. The caret
+    // goes somewhere harmless first, for the reason in the comment above.
+    await page.locator('#ceilingInput').click();
+    await budgetRow(other, 0).unit.fill('2600');
+    await expect(budgetRow(page, 0).unit).toHaveValue('2600', { timeout: 15_000 });
+    await expectFigures(page, { committed: 2600, paid: 500, outstanding: 2100, forecast: 2600 });
+
+    // Including the removal. A line that is gone has to *go*: a delete
+    // announces the revision the row already had, so a client that compared
+    // revisions the way it does for an edit would throw this one away and keep
+    // showing a cost nobody is paying.
+    await other.locator('#ceilingInput').click();
+    await budgetRow(page, 0).remove.click();
+    await expect(other.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(0, { timeout: 15_000 });
+    await expectFigures(other, { committed: 0, paid: 0, outstanding: 0, forecast: 0 });
+  } finally {
+    await elsewhere.close();
+  }
+});
+
 test('money crosses the wire as a decimal string in major units', async ({ page, request }) => {
   await openSharedPlanner(page);
   await gotoTab(page, 'budget');
