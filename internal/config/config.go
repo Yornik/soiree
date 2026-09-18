@@ -93,6 +93,44 @@ type Config struct {
 	BootstrapPassword string
 
 	SMTP SMTPConfig
+
+	// VAPID is the Web Push signing identity. The zero value means no push
+	// notifications, which is a supported deployment rather than a broken one.
+	VAPID VAPIDConfig
+}
+
+// VAPIDConfig identifies this deployment to the browsers' push services.
+//
+// Web Push has no API key and no account: the server proves who it is by
+// signing each request with a P-256 key pair it generated itself, and the
+// browser pins the public half at subscribe time. That is why the public key
+// has to reach the page — a subscription made against one key cannot be sent
+// to with another.
+//
+// This is the environment surface. The transport that uses it is
+// internal/push, and cmd/soiree maps one onto the other, exactly as
+// config.SMTPConfig maps onto mailer.Config.
+type VAPIDConfig struct {
+	// PublicKey and PrivateKey are the base64url halves of one P-256 pair,
+	// generated once per deployment (webpush.GenerateVAPIDKeys produces both).
+	// Rotating them invalidates every existing subscription.
+	PublicKey string
+	// PrivateKey is a signing key. It must never leave the server, which is
+	// what ClientConfig below is careful about.
+	PrivateKey string
+	// Subject is the contact a push service can reach the operator at when
+	// this deployment misbehaves — an address or an https URL. Written bare
+	// ("ada@example.test") or as a "mailto:" URL; internal/push normalises it.
+	Subject string
+}
+
+// Enabled reports whether push notifications can be sent.
+//
+// All three parts, not just the pair: a push service is entitled to refuse a
+// request whose JWT has no `sub`, and finding that out one notification at a
+// time is worse than not offering the feature.
+func (v VAPIDConfig) Enabled() bool {
+	return v.PublicKey != "" && v.PrivateKey != "" && v.Subject != ""
 }
 
 // SMTPConfig is the outgoing mail relay. The zero value means no mail, which
@@ -135,6 +173,15 @@ type ClientConfig struct {
 	SecondaryLocale   string `json:"secondaryLocale"`
 	Ceiling           int64  `json:"ceiling"`
 	DemoData          bool   `json:"demoData"`
+
+	// VAPIDPublicKey is the browser's half of the Web Push identity, and is
+	// public by design — a subscription is made against it, and a browser that
+	// has not seen it cannot subscribe at all. The private half is the secret,
+	// and it is deliberately absent from this struct.
+	//
+	// Omitted entirely when push is off, so that "is there a key here?" is the
+	// single question the client asks before offering to turn notifications on.
+	VAPIDPublicKey string `json:"vapidPublicKey,omitempty"`
 }
 
 // Client returns the browser-facing view of the configuration.
@@ -149,7 +196,22 @@ func (c Config) Client() ClientConfig {
 		SecondaryLocale:   c.SecondaryLocale,
 		Ceiling:           c.Ceiling,
 		DemoData:          c.DemoData,
+		VAPIDPublicKey:    c.publishablePushKey(),
 	}
+}
+
+// publishablePushKey is the public key, and only when the server could
+// actually send with it.
+//
+// Publishing the public half of a pair whose private half is missing is worse
+// than publishing nothing: the browser subscribes, the permission prompt is
+// spent, the UI reports success, and not one notification ever arrives. An
+// absent key is a feature that is visibly off.
+func (c Config) publishablePushKey() string {
+	if !c.VAPID.Enabled() {
+		return ""
+	}
+	return c.VAPID.PublicKey
 }
 
 // ClientJSON returns the configuration as compact JSON for embedding.
@@ -238,8 +300,31 @@ func Load() (Config, error) {
 	if err := c.loadAccounts(); err != nil {
 		return Config{}, err
 	}
+	c.loadPush()
 
 	return c, nil
+}
+
+// loadPush reads the Web Push identity.
+//
+// It returns nothing, because none of this can fail. Unset means push is off,
+// exactly as an unset SOIREE_SMTP_HOST means mail is off, and the binary has to
+// start with neither — that is what a bare `docker run` and the image smoke
+// test do.
+//
+// A half-configured pair is not refused, which is the opposite of the rule
+// SMTP follows two functions down. The reason the two differ: a sender with no
+// relay *looks* configured and silently sends nothing, whereas Enabled() is
+// false unless all three of these are present, so a half-configured pair never
+// reaches the browser and never has anything subscribed against it. The
+// operator hears about it from the startup log instead of from a refusal to
+// boot — see reminders.Start.
+func (c *Config) loadPush() {
+	c.VAPID = VAPIDConfig{
+		PublicKey:  strings.TrimSpace(os.Getenv("SOIREE_VAPID_PUBLIC_KEY")),
+		PrivateKey: strings.TrimSpace(os.Getenv("SOIREE_VAPID_PRIVATE_KEY")),
+		Subject:    strings.TrimSpace(os.Getenv("SOIREE_VAPID_SUBJECT")),
+	}
 }
 
 // loadAccounts reads everything the accounts milestone added and rejects the

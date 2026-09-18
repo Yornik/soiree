@@ -67,14 +67,25 @@ import (
 	"time"
 
 	"github.com/Yornik/soiree/internal/mailer"
+	"github.com/Yornik/soiree/internal/push"
 	"github.com/Yornik/soiree/internal/store"
 )
 
-// runTimeout bounds one digest: reading the plan, composing, and the whole
-// SMTP conversation. Without it a mail server that accepts a connection and
-// then says nothing holds the advisory lock until the process is restarted,
-// and nobody gets a digest until it is.
-const runTimeout = 2 * time.Minute
+// Budgets for one digest. runTimeout bounds the whole of it — reading the
+// plan, composing, the SMTP conversation and the notifications — because
+// without it a mail server that accepts a connection and then says nothing
+// holds the advisory lock until the process is restarted, and nobody gets a
+// digest until it is.
+//
+// The two channels then get separate sub-budgets that add up to it. That split
+// is not tidiness: with one shared deadline, a relay that stalls spends the
+// entire run before push is reached, and a broken relay would switch off
+// notifications too. Neither channel is allowed to do that to the other.
+const (
+	runTimeout  = 2 * time.Minute
+	mailTimeout = 90 * time.Second
+	pushTimeout = 30 * time.Second
+)
 
 // Service is the scheduler.
 type Service struct {
@@ -83,17 +94,34 @@ type Service struct {
 	cfg    Config
 	log    *slog.Logger
 
+	// pusher is the notification channel, nil when this deployment has no
+	// VAPID keys. Nil rather than a flag, so that "there is no push here" is a
+	// state the type system carries rather than one every call site checks.
+	pusher *push.Sender
+
 	// now is the clock, injected so the window boundaries and the period key
 	// are testable without waiting a week.
 	now func() time.Time
 }
 
-// New builds a service. A nil logger discards.
+// New builds a service. A nil logger discards, and a nil sender means this
+// deployment has no relay — legal, and the digest then goes out over push
+// alone or not at all.
 func New(st *store.Store, sender mailer.Sender, cfg Config, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Service{store: st, sender: sender, cfg: cfg, log: log, now: time.Now}
+}
+
+// WithPush attaches the notification channel.
+//
+// Separate from New because it is optional, exactly as httpd.WithAuth is: a
+// deployment with no VAPID keys sends the digest by mail alone, which is how
+// every deployment worked before this existed.
+func (s *Service) WithPush(p *push.Sender) *Service {
+	s.pusher = p
+	return s
 }
 
 // Start runs the digest now and then once per schedule, and returns a function
@@ -236,6 +264,14 @@ func (s *Service) RunOnce(ctx context.Context) error {
 	if len(to) == 0 {
 		// Every admin could have been disabled since startup. Nothing to do,
 		// and no claim, so the digest resumes when somebody can receive it.
+		//
+		// Still the right place to stop now that push exists, and the reason is
+		// an invariant rather than an oversight: a notifiable subscription
+		// belongs to an active admin, and every active admin is in `to`. No
+		// recipients here therefore means no devices either, so this cannot
+		// silently suppress the other channel. If that ever stops being true —
+		// if subscriptions are opened to editors, say — this check has to move
+		// below the push.
 		s.log.Warn("deadline digest has nothing due to nobody: no active admin and no configured recipient")
 		return nil
 	}
@@ -257,18 +293,37 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.sender.Send(ctx, msg); err != nil {
-		if mailer.Ambiguous(err) {
+	// Both channels are attempted, and neither is allowed to decide the
+	// other's fate. Mail goes first and its error is carried rather than
+	// returned, so that no failure in the notification path — an error, a
+	// timeout, a push service having a bad minute — can happen before the mail
+	// has been handed over.
+	mailErr := s.sendMail(ctx, msg)
+	delivered := s.pushDigest(ctx, digest)
+
+	if mailErr != nil {
+		if mailer.Ambiguous(mailErr) {
 			// The server may or may not have taken it. The claim stays, so
 			// this period is never sent twice; it is reported here and visible
 			// in the ledger as a row with no sent_at.
-			s.log.Error("reminder digest delivery uncertain; not retrying this period", "period", key, "err", err)
-			return err
+			s.log.Error("reminder digest delivery uncertain; not retrying this period", "period", key, "err", mailErr)
+			return mailErr
 		}
-		if rerr := releaseClaim(ctx, conn, key); rerr != nil {
-			return errors.Join(err, rerr)
+		// The mail definitely did not go out, so the period may be tried
+		// again — but only if nothing else went out either. Releasing the
+		// claim asserts that this period reached nobody, and that stops being
+		// true the moment a notification lands on somebody's phone: a retry
+		// would then push the same digest at them a second time, which is
+		// precisely what the ledger exists to prevent.
+		if delivered == 0 {
+			if rerr := releaseClaim(ctx, conn, key); rerr != nil {
+				return errors.Join(mailErr, rerr)
+			}
+			return fmt.Errorf("send digest: %w", mailErr)
 		}
-		return fmt.Errorf("send digest: %w", err)
+		s.log.Error("reminder digest could not be mailed, but reached some devices; the period stays claimed and will not be retried",
+			"period", key, "devicesReached", delivered, "err", mailErr)
+		return fmt.Errorf("send digest: %w", mailErr)
 	}
 
 	if err := confirmSent(ctx, conn, key, s.now()); err != nil {
@@ -279,8 +334,111 @@ func (s *Service) RunOnce(ctx context.Context) error {
 	}
 
 	s.log.Info("reminder digest sent",
-		"period", key, "recipients", len(to), "items", digest.Count(), "overdue", digest.Overdue())
+		"period", key, "recipients", len(to), "devicesReached", delivered,
+		"items", digest.Count(), "overdue", digest.Overdue())
 	return nil
+}
+
+// sendMail hands the digest to the relay, within a budget of its own.
+//
+// A nil sender is a deployment with no SMTP at all, which since push arrived is
+// a supported way to run this rather than a reason to have the scheduler switch
+// itself off. It reports success because the mail channel did everything it
+// could: there was none.
+func (s *Service) sendMail(ctx context.Context, msg mailer.Message) error {
+	if s.sender == nil {
+		return nil
+	}
+	// Bounded below the run, so that a relay which accepts a connection and
+	// then says nothing leaves time for the notifications. Without this the
+	// two channels share one deadline and the slower one eats it.
+	mailCtx, cancel := context.WithTimeout(ctx, mailTimeout)
+	defer cancel()
+	return s.sender.Send(mailCtx, msg)
+}
+
+// pushDigest notifies every subscribed device and returns how many took it.
+//
+// It never returns an error and never propagates one. Push is the second
+// channel for something that has already been mailed; a push service being
+// unreachable is worth a log line and nothing more, and must not turn a digest
+// that went out perfectly well into a failed run.
+//
+// Pruning is the part worth reading. A push service answers 404 or 410 when a
+// subscription no longer exists — cleared storage, revoked permission, a
+// retired endpoint — and that answer is final. Those rows are deleted here.
+// Everything else (a 500, a timeout, a refused connection) is the service
+// having a bad minute and says nothing about the subscription, so those rows
+// stay. Get that backwards in the lenient direction and the table fills with
+// endpoints that will never accept another notification, each costing a round
+// trip on every digest for the life of the deployment; get it backwards in the
+// strict direction and one bad minute unsubscribes everybody.
+func (s *Service) pushDigest(ctx context.Context, d Digest) int {
+	if s.pusher == nil {
+		return 0
+	}
+
+	// A budget of its own, and a cancelled context is replaced rather than
+	// obeyed. The period is already claimed by the time this runs, so giving
+	// up here does not defer the notification — it loses it, and the ledger
+	// will not offer this digest again. The window is short enough to sit
+	// inside a termination grace period.
+	base := ctx
+	if base.Err() != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	pushCtx, cancel := context.WithTimeout(base, pushTimeout)
+	defer cancel()
+
+	subs, err := s.store.NotifiablePushSubscriptions(pushCtx)
+	if err != nil {
+		s.log.Error("could not read push subscriptions; the digest goes out by mail only", "err", err)
+		return 0
+	}
+	if len(subs) == 0 {
+		return 0
+	}
+
+	n := RenderPush(d, s.cfg.BaseURL)
+
+	var gone []string
+	delivered := 0
+	for _, sub := range subs {
+		err := s.pusher.Send(pushCtx, push.Subscription{
+			Endpoint: sub.Endpoint,
+			P256dh:   sub.P256dh,
+			Auth:     sub.Auth,
+		}, n)
+		switch {
+		case err == nil:
+			delivered++
+		case errors.Is(err, push.ErrGone):
+			gone = append(gone, sub.Endpoint)
+		default:
+			// The account id, never the endpoint: an endpoint is the
+			// capability to notify that device, and a log file is read by more
+			// people than a database is.
+			s.log.Warn("could not notify a device; keeping the subscription", "user", sub.UserID, "err", err)
+		}
+	}
+
+	if len(gone) > 0 {
+		// Detached, because this is the cleanup for what just happened and a
+		// budget that has run out is the likeliest reason to be here with rows
+		// to delete. Leaving them costs every future digest.
+		delCtx, delCancel := context.WithTimeout(context.WithoutCancel(ctx), pushTimeout)
+		defer delCancel()
+		removed, err := s.store.DeletePushSubscriptionsByEndpoint(delCtx, gone)
+		if err != nil {
+			s.log.Error("could not remove push subscriptions the push service says are gone", "count", len(gone), "err", err)
+		} else {
+			s.log.Info("push subscriptions removed: the push service says they no longer exist", "count", removed)
+		}
+	}
+
+	s.log.Info("deadline digest pushed",
+		"devices", len(subs), "delivered", delivered, "gone", len(gone))
+	return delivered
 }
 
 // Start loads the configuration from the environment and starts the scheduler
@@ -313,22 +471,56 @@ func Start(ctx context.Context, st *store.Store, log *slog.Logger) (func(), erro
 	if err != nil {
 		return noop, err
 	}
+	// Read here rather than taken from internal/config, following the mailer:
+	// the scheduler is handed a store and a logger and nothing else, and
+	// threading a configuration struct through it to carry three strings would
+	// be a worse trade than reading the same three variables twice.
+	vapid := push.LoadConfig()
 
 	switch {
 	case !cfg.Enabled:
 		log.Info("deadline reminders are off (SOIREE_REMINDER_ENABLED is not true)")
 		return noop, nil
-	case !smtp.Configured():
-		log.Warn("deadline reminders are on but SMTP is not configured; no digest will be sent",
-			"missing", "SOIREE_SMTP_HOST and SOIREE_SMTP_FROM")
+	case !smtp.Configured() && !vapid.Configured():
+		// Neither channel, so there is nothing to schedule. One of the two is
+		// enough: a deployment that notifies and does not mail is as complete
+		// a deployment as the other way round, and refusing to run because the
+		// *other* channel is missing would be one channel suppressing the one
+		// that works.
+		log.Warn("deadline reminders are on but neither mail nor push is configured; no digest will be sent",
+			"missing", "SOIREE_SMTP_HOST and SOIREE_SMTP_FROM, or the three SOIREE_VAPID_* keys")
 		return noop, nil
+	}
+
+	// Never a startup failure — but an operator who set one VAPID variable and
+	// stopped believes they have notifications and does not. From the outside
+	// that is indistinguishable from having configured nothing.
+	if vapid.Partial() {
+		log.Warn("Web Push is half-configured, so notifications are off",
+			"need", "SOIREE_VAPID_PUBLIC_KEY, SOIREE_VAPID_PRIVATE_KEY and SOIREE_VAPID_SUBJECT")
+	}
+	if !smtp.Configured() {
+		log.Warn("SMTP is not configured; the deadline digest goes out as a notification only")
 	}
 
 	log.Info("deadline reminders on",
 		"schedule", cfg.Schedule.String(), "windowDays", cfg.WindowDays,
-		"recipients", len(cfg.To), "timezone", cfg.Zone)
+		"recipients", len(cfg.To), "timezone", cfg.Zone,
+		"mail", smtp.Configured(), "push", vapid.Configured())
 
-	return New(st, mailer.New(smtp), cfg, log).Start(ctx), nil
+	// A nil sender rather than a mailer built from nothing: the send path
+	// reads nil as "this deployment has no relay", where a configured-looking
+	// mailer with no host would fail once per period forever.
+	var sender mailer.Sender
+	if smtp.Configured() {
+		sender = mailer.New(smtp)
+	}
+
+	svc := New(st, sender, cfg, log)
+	if vapid.Configured() {
+		svc = svc.WithPush(push.New(vapid))
+	}
+	return svc.Start(ctx), nil
 }
 
 // recipients is every active admin, plus anything SOIREE_REMINDER_TO names.

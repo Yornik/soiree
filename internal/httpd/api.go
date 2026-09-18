@@ -88,6 +88,7 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	register(api, noteEntity(s.store, currency))
 	register(api, phaseEntity(s.store, currency))
 	register(api, programmeEntity(s.store, currency))
+	s.routePush(api)
 
 	mux.Handle(apiPrefix, noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), api)))
 }

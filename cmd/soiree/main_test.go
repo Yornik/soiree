@@ -9,6 +9,7 @@ import (
 	"github.com/Yornik/soiree/internal/config"
 	"github.com/Yornik/soiree/internal/httpd"
 	"github.com/Yornik/soiree/internal/mailer"
+	"github.com/Yornik/soiree/internal/push"
 )
 
 // These cover the seam between the accounts surface and the SMTP client, which
@@ -108,6 +109,60 @@ func TestSMTPConfigMapsOntoTheTransport(t *testing.T) {
 	if config.DefaultSMTPPort != mailer.DefaultPort {
 		t.Errorf("config.DefaultSMTPPort = %d but mailer.DefaultPort = %d; the default relay port drifted",
 			config.DefaultSMTPPort, mailer.DefaultPort)
+	}
+}
+
+// internal/config and internal/push read the same three SOIREE_VAPID_*
+// variables independently: one publishes the public half to the browser, the
+// other signs with the private half. That is the same split internal/config and
+// internal/mailer already have for SMTP, and it carries the same risk — two
+// readers of one setting are two chances to disagree, and this particular
+// disagreement is silent. A page that offers to subscribe against a key the
+// sender does not have, and a sender holding keys the page never publishes,
+// both present as notifications that simply never arrive.
+func TestBothReadersOfTheVAPIDKeysAgree(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"nothing set": {},
+		"complete": {
+			"SOIREE_VAPID_PUBLIC_KEY":  "BPublicHalf",
+			"SOIREE_VAPID_PRIVATE_KEY": "the-private-half",
+			"SOIREE_VAPID_SUBJECT":     "mailto:ada@example.test",
+		},
+		"a public key alone": {
+			"SOIREE_VAPID_PUBLIC_KEY": "BPublicHalf",
+		},
+		"a pair with no subject": {
+			"SOIREE_VAPID_PUBLIC_KEY":  "BPublicHalf",
+			"SOIREE_VAPID_PRIVATE_KEY": "the-private-half",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Every variable is set explicitly, including to "": the developer
+			// running this may have a real pair in their shell, and a test that
+			// passes only on a clean environment is not a test.
+			for _, key := range []string{"SOIREE_VAPID_PUBLIC_KEY", "SOIREE_VAPID_PRIVATE_KEY", "SOIREE_VAPID_SUBJECT"} {
+				t.Setenv(key, env[key])
+			}
+
+			c, err := config.Load()
+			if err != nil {
+				t.Fatalf("config.Load() refused to start on %s: %v", name, err)
+			}
+			p := push.LoadConfig()
+
+			if c.VAPID.Enabled() != p.Configured() {
+				t.Fatalf("%s: config says enabled=%v, push says configured=%v",
+					name, c.VAPID.Enabled(), p.Configured())
+			}
+			if c.VAPID.PublicKey != p.PublicKey || c.VAPID.PrivateKey != p.PrivateKey || c.VAPID.Subject != p.Subject {
+				t.Errorf("%s: the two readers disagree: config=%+v push=%+v", name, c.VAPID, p)
+			}
+			// Whatever the state, the public half reaches the browser exactly
+			// when the sender can actually use it.
+			if got := c.Client().VAPIDPublicKey; (got != "") != p.Configured() {
+				t.Errorf("%s: published key = %q with a sender that is configured=%v", name, got, p.Configured())
+			}
+		})
 	}
 }
 
