@@ -199,21 +199,41 @@ func (s *Store) SetPasswordHash(ctx context.Context, id uuid.UUID, hash string) 
 // EnsureBootstrapAdmin creates the first admin if the deployment has none, and
 // reports whether it created one.
 //
-// No password and no link: the account lands in `invited` exactly like every
-// other, and the person named picks their own password through the normal
-// flow. This exists only to break the circularity of "accounts are created by
-// an admin" in a database where no admin exists yet.
+// passwordHash is optional. Empty leaves the account `invited` with no
+// password, so the person named picks their own through the normal
+// set-password link and no credential is ever written down. That is the better
+// shape whenever mail works.
+//
+// Supplying one creates the account `active`, able to log in immediately. It
+// exists because the mail path is a dead end for the *first* account
+// specifically: password-reset mints a link and hands it straight to the
+// mailer, and every route that would return the link instead is admin-only —
+// which is the session you are trying to obtain. Without this, a deployment
+// whose SMTP is misconfigured has no way into its own instance short of
+// editing password_hash by hand in psql.
+//
+// Either way the `WHERE NOT EXISTS` is what makes the variable safe to leave
+// set forever: once any admin exists this inserts nothing. It cannot resurrect
+// an account somebody disabled on purpose, and cannot reset a password that
+// has since been changed.
 //
 // The whole decision is one statement, so two replicas starting together
 // cannot both create one. ON CONFLICT covers the other order of events — the
 // address already exists as a viewer — where the right answer is to leave the
 // existing account alone rather than to fail startup.
-func (s *Store) EnsureBootstrapAdmin(ctx context.Context, email string) (bool, error) {
+func (s *Store) EnsureBootstrapAdmin(ctx context.Context, email, passwordHash string) (bool, error) {
+	status := "invited"
+	var hash any // NULL unless a password was supplied
+	if passwordHash != "" {
+		status = "active"
+		hash = passwordHash
+	}
+
 	n, err := s.exec(ctx, "users",
-		`INSERT INTO users (email, role, status)
-		 SELECT $1, 'admin', 'invited'
+		`INSERT INTO users (email, role, status, password_hash)
+		 SELECT $1, 'admin', $2, $3
 		  WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')
-		 ON CONFLICT DO NOTHING`, email)
+		 ON CONFLICT DO NOTHING`, email, status, hash)
 	if err != nil {
 		return false, err
 	}

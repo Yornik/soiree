@@ -356,7 +356,7 @@ func TestBootstrapAdminRunsOnce(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
 
-	created, err := s.EnsureBootstrapAdmin(ctx, "ada@example.test")
+	created, err := s.EnsureBootstrapAdmin(ctx, "ada@example.test", "")
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestBootstrapAdminRunsOnce(t *testing.T) {
 	// Restarting the process must not create a second one, and must not
 	// resurrect the flow after somebody has changed the address.
 	for _, email := range []string{"ada@example.test", "grace@example.test"} {
-		created, err := s.EnsureBootstrapAdmin(ctx, email)
+		created, err := s.EnsureBootstrapAdmin(ctx, email, "")
 		if err != nil {
 			t.Fatalf("second bootstrap: %v", err)
 		}
@@ -396,5 +396,100 @@ func TestBootstrapAdminRunsOnce(t *testing.T) {
 	}
 	if len(users) != 1 {
 		t.Fatalf("%d accounts exist, want 1", len(users))
+	}
+}
+
+// A bootstrap password is the way in when mail is not available. Without it
+// the first account is reachable only through a mailed link, and for the first
+// account specifically that is a dead end: password-reset hands the link to
+// the mailer and discards it, and every route that returns one instead needs
+// the admin session being sought.
+func TestBootstrapAdminWithAPasswordCanLogIn(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	hash, err := auth.Hash("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Hash(): %v", err)
+	}
+
+	created, err := s.EnsureBootstrapAdmin(ctx, "ada@example.test", hash)
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin(): %v", err)
+	}
+	if !created {
+		t.Fatal("no admin was created on an empty database")
+	}
+
+	user, err := s.UserByEmail(ctx, "ada@example.test")
+	if err != nil {
+		t.Fatalf("UserByEmail(): %v", err)
+	}
+	if user.Status != store.StatusActive {
+		t.Errorf("status = %q, want %q: an account that cannot log in is the bug this closes", user.Status, store.StatusActive)
+	}
+	if user.Role != store.RoleAdmin {
+		t.Errorf("role = %q, want admin", user.Role)
+	}
+	if user.PasswordHash == nil || *user.PasswordHash != hash {
+		t.Error("the password hash was not stored")
+	}
+}
+
+// Safe to leave set forever: it must never resurrect an account somebody
+// disabled on purpose, nor reset a password that has since been changed.
+func TestBootstrapPasswordDoesNothingOnceAnAdminExists(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	first, err := auth.Hash("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Hash(): %v", err)
+	}
+	if _, err := s.EnsureBootstrapAdmin(ctx, "ada@example.test", first); err != nil {
+		t.Fatalf("EnsureBootstrapAdmin(): %v", err)
+	}
+
+	second, err := auth.Hash("a completely different password")
+	if err != nil {
+		t.Fatalf("Hash(): %v", err)
+	}
+	created, err := s.EnsureBootstrapAdmin(ctx, "grace@example.test", second)
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin(): %v", err)
+	}
+	if created {
+		t.Fatal("a second admin was created")
+	}
+	if _, err := s.UserByEmail(ctx, "grace@example.test"); !errors.Is(err, store.ErrNotFound) {
+		t.Error("the second address got an account")
+	}
+
+	user, err := s.UserByEmail(ctx, "ada@example.test")
+	if err != nil {
+		t.Fatalf("UserByEmail(): %v", err)
+	}
+	if user.PasswordHash == nil || *user.PasswordHash != first {
+		t.Error("the existing admin's password was overwritten by a later start-up")
+	}
+}
+
+// With no password the behaviour is unchanged: invited, no way in but a link.
+func TestBootstrapAdminWithoutAPasswordStaysInvited(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	if _, err := s.EnsureBootstrapAdmin(ctx, "ada@example.test", ""); err != nil {
+		t.Fatalf("EnsureBootstrapAdmin(): %v", err)
+	}
+	user, err := s.UserByEmail(ctx, "ada@example.test")
+	if err != nil {
+		t.Fatalf("UserByEmail(): %v", err)
+	}
+	if user.Status != store.StatusInvited {
+		t.Errorf("status = %q, want %q", user.Status, store.StatusInvited)
+	}
+	if user.PasswordHash != nil {
+		t.Error("a password was set when none was supplied")
 	}
 }

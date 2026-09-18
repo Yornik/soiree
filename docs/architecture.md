@@ -529,6 +529,18 @@ Mail goes out over SMTP (`SOIREE_SMTP_*`). If SMTP is not configured, account
 creation still succeeds and the admin is shown the set-password link to pass on
 directly — so a deployment without mail is degraded, not broken.
 
+**The first account is the exception, and needs its own way in.** Every route
+that hands back a set-password link is admin-only, and `password-reset` gives
+its link to the mailer and discards it — so on an empty database with no
+working SMTP there is no path to the first admin at all. `SOIREE_BOOTSTRAP_ADMIN`
+creates that account; `SOIREE_BOOTSTRAP_PASSWORD` optionally gives it a
+password, hashed with the same Argon2id parameters as any other, so it can log
+in immediately. Both are consumed only while no admin exists, which is what
+makes them safe to leave set: neither can resurrect a disabled account nor
+overwrite a password that has since been changed. Without the password the
+account stays `invited` and the mailed link is the only way in — the better
+shape when mail works, since no credential is written down.
+
 ### Password storage
 
 Hashed with **Argon2id**, the current password-hashing standard and the winner

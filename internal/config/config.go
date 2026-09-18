@@ -73,6 +73,18 @@ type Config struct {
 	// created by an admin" on an empty database and does nothing thereafter.
 	BootstrapAdmin string
 
+	// BootstrapPassword, when set, gives that first admin a password so they
+	// can log in straight away.
+	//
+	// Without it the first account is reachable only through a mailed
+	// set-password link, and for the *first* account that is a dead end when
+	// SMTP is wrong: password-reset hands the link to the mailer and discards
+	// it, and every route that returns the link instead is admin-only. This is
+	// the way in that does not depend on mail working.
+	//
+	// It is consumed only while no admin exists, so it is safe to leave set.
+	BootstrapPassword string
+
 	SMTP SMTPConfig
 }
 
@@ -90,6 +102,11 @@ type SMTPConfig struct {
 	Password string
 	From     string
 }
+
+// MinPasswordLen is the floor for any password this deployment accepts,
+// including the bootstrap one. Kept here so the environment and the HTTP
+// surface cannot drift into disagreeing about what is acceptable.
+const MinPasswordLen = 12
 
 // DefaultSMTPPort is implicit TLS. It matches mailer.DefaultPort, which is the
 // value that actually decides how the connection is made; cmd/soiree's tests
@@ -222,6 +239,10 @@ func (c *Config) loadAccounts() error {
 	// reads.
 	c.DatabaseURL = strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	c.BootstrapAdmin = strings.TrimSpace(os.Getenv("SOIREE_BOOTSTRAP_ADMIN"))
+	// Deliberately not trimmed: a password's leading or trailing space is part
+	// of it, and silently removing one would lock the operator out of the
+	// account this variable exists to let them into.
+	c.BootstrapPassword = os.Getenv("SOIREE_BOOTSTRAP_PASSWORD")
 
 	if v := strings.TrimSpace(os.Getenv("SOIREE_TRUST_PROXY_HEADERS")); v != "" {
 		b, err := strconv.ParseBool(v)
@@ -237,6 +258,21 @@ func (c *Config) loadAccounts() error {
 			return fmt.Errorf("SOIREE_BOOTSTRAP_ADMIN must be an email address, got %q", c.BootstrapAdmin)
 		}
 		c.BootstrapAdmin = addr.Address
+	}
+
+	if c.BootstrapPassword != "" {
+		// A password with nobody to be the password of is a mistake worth
+		// naming, not something to ignore: the operator believes they have
+		// configured a way in and they have not.
+		if c.BootstrapAdmin == "" {
+			return fmt.Errorf("SOIREE_BOOTSTRAP_PASSWORD is set but SOIREE_BOOTSTRAP_ADMIN is not, so there is no account for it to belong to")
+		}
+		// The same floor the set-password endpoint enforces. An initial
+		// password that the app would refuse from a form has no business being
+		// accepted from the environment.
+		if len([]rune(c.BootstrapPassword)) < MinPasswordLen {
+			return fmt.Errorf("SOIREE_BOOTSTRAP_PASSWORD must be at least %d characters", MinPasswordLen)
+		}
 	}
 
 	if raw := strings.TrimSpace(os.Getenv("SOIREE_BASE_URL")); raw != "" {

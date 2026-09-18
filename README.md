@@ -47,6 +47,8 @@ Then open <http://localhost:8080>.
 | `SOIREE_SECONDARY_LOCALE` | *primary locale* | Formatting for the second currency |
 | `SOIREE_BUDGET_CEILING` | `0` | Starting spending ceiling |
 | `SOIREE_DEMO_DATA` | `false` | Seed obviously-fake sample data |
+| `SOIREE_BOOTSTRAP_ADMIN` | *(unset)* | Email address that becomes the first admin on an empty database. Ignored once any admin exists. |
+| `SOIREE_BOOTSTRAP_PASSWORD` | *(unset)* | Gives that first admin a password so they can log in without waiting for mail. At least 12 characters. Also ignored once an admin exists — safe to leave set. |
 | `SOIREE_LISTEN_ADDR` | `:8080` | Bind address for the site |
 | `SOIREE_METRICS_ADDR` | `:9090` | Bind address for the Prometheus exposition. A separate listener on purpose — a reverse proxy in front of the site usually has no path constraint, so `/metrics` on the main port would be world-readable. Must differ from the above. |
 

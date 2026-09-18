@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/Yornik/soiree/internal/auth"
 	"github.com/Yornik/soiree/internal/config"
 	"github.com/Yornik/soiree/internal/httpd"
 	"github.com/Yornik/soiree/internal/mailer"
@@ -282,14 +283,34 @@ func openDatabase(ctx context.Context, cfg config.Config, log *slog.Logger) (*pg
 		// named picks their own password through the normal flow. It exists
 		// only so that "every account is created by an admin" has somewhere to
 		// start on an empty database.
-		created, err := store.New(pool).EnsureBootstrapAdmin(ctx, cfg.BootstrapAdmin)
+		//
+		// Hashing here rather than in the store keeps the Argon2id policy in
+		// one place: an initial password gets exactly the parameters every
+		// other password gets, and is upgraded on login by the same code when
+		// those parameters are raised.
+		var hash string
+		if cfg.BootstrapPassword != "" {
+			h, err := auth.Hash(cfg.BootstrapPassword)
+			if err != nil {
+				pool.Close()
+				return nil, fmt.Errorf("hash the bootstrap password: %w", err)
+			}
+			hash = h
+		}
+
+		created, err := store.New(pool).EnsureBootstrapAdmin(ctx, cfg.BootstrapAdmin, hash)
 		if err != nil {
 			pool.Close()
 			return nil, fmt.Errorf("bootstrap admin: %w", err)
 		}
 		if created {
-			log.Info("bootstrap admin created", "email", cfg.BootstrapAdmin,
-				"next", "request a set-password link from POST /api/v1/auth/password-reset")
+			// Never the password, and never the link. Which path was taken is
+			// operationally useful; the credential itself is not.
+			next := "request a set-password link from POST /api/v1/auth/password-reset"
+			if hash != "" {
+				next = "log in with SOIREE_BOOTSTRAP_PASSWORD, then change it"
+			}
+			log.Info("bootstrap admin created", "email", cfg.BootstrapAdmin, "next", next)
 		}
 	}
 

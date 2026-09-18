@@ -313,3 +313,62 @@ func TestAccountsConfigRejectsHalfConfigurations(t *testing.T) {
 		})
 	}
 }
+
+// A bootstrap password with no bootstrap admin is a misconfiguration worth
+// naming: the operator believes they have configured a way in, and they have
+// not.
+func TestBootstrapPasswordNeedsAnAdmin(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "correct horse battery")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an error when a bootstrap password names no account")
+	}
+}
+
+// The environment must not be a way around the password floor the HTTP
+// surface enforces.
+func TestBootstrapPasswordHasAFloor(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_ADMIN", "ada@example.test")
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "short")
+	if _, err := Load(); err == nil {
+		t.Fatalf("a %d-character password was accepted", len("short"))
+	}
+}
+
+func TestBootstrapPasswordAccepted(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_ADMIN", "Ada <ada@example.test>")
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "correct horse battery staple")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.BootstrapAdmin != "ada@example.test" {
+		t.Errorf("BootstrapAdmin = %q, want the bare address", c.BootstrapAdmin)
+	}
+	if c.BootstrapPassword != "correct horse battery staple" {
+		t.Error("BootstrapPassword did not survive Load")
+	}
+	// It is a credential; the page must never carry it.
+	raw, err := c.ClientJSON()
+	if err != nil {
+		t.Fatalf("ClientJSON(): %v", err)
+	}
+	if strings.Contains(raw, "correct horse") || strings.Contains(raw, "ada@example.test") {
+		t.Fatalf("the client config leaks the bootstrap credentials: %s", raw)
+	}
+}
+
+// Surrounding whitespace is part of a password. Trimming it would lock the
+// operator out of the account the variable exists to let them into.
+func TestBootstrapPasswordKeepsItsSpaces(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_ADMIN", "ada@example.test")
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "  padded password  ")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.BootstrapPassword != "  padded password  " {
+		t.Errorf("BootstrapPassword = %q, want the spaces kept", c.BootstrapPassword)
+	}
+}
