@@ -12,7 +12,7 @@ import (
 	"github.com/Yornik/soiree/web"
 )
 
-func newTestServer(t *testing.T, cfg config.Config) http.Handler {
+func newServer(t *testing.T, cfg config.Config) *Server {
 	t.Helper()
 	if cfg.Currency == "" {
 		cfg.Currency = "EUR"
@@ -24,7 +24,12 @@ func newTestServer(t *testing.T, cfg config.Config) http.Handler {
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	return s.Handler()
+	return s
+}
+
+func newTestServer(t *testing.T, cfg config.Config) http.Handler {
+	t.Helper()
+	return newServer(t, cfg).Handler()
 }
 
 func get(t *testing.T, h http.Handler, path string, headers map[string]string) *http.Response {
@@ -271,8 +276,12 @@ func TestHealthzAndNotFound(t *testing.T) {
 	}
 }
 
+// Readiness stays on the main listener, because that is the port kubelet
+// reaches. The metrics exposition does not, and is asserted through the
+// handler the private listener is built from.
 func TestReadyzAndMetrics(t *testing.T) {
-	h := newTestServer(t, config.Config{EventName: "X"})
+	s := newServer(t, config.Config{EventName: "X"})
+	h, mh := s.Handler(), s.MetricsHandler()
 
 	ready := get(t, h, "/readyz", nil)
 	_ = ready.Body.Close()
@@ -284,7 +293,7 @@ func TestReadyzAndMetrics(t *testing.T) {
 	warm := get(t, h, "/", nil)
 	_ = warm.Body.Close()
 
-	res := get(t, h, "/metrics", nil)
+	res := get(t, mh, "/metrics", nil)
 	body, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -305,10 +314,67 @@ func TestReadyzAndMetrics(t *testing.T) {
 	}
 }
 
+// The public ingress route has no path constraint, so anything on the main
+// handler is world-readable — and soiree_build_info names the running version
+// and commit. This is the assertion that keeps it off.
+func TestMetricsIsNotOnThePublicHandler(t *testing.T) {
+	s := newServer(t, config.Config{EventName: "X"})
+
+	res := get(t, s.Handler(), "/metrics", nil)
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("/metrics on the public handler -> %d, want 404", res.StatusCode)
+	}
+	if strings.Contains(string(body), "soiree_build_info") {
+		t.Error("the public handler served the metrics exposition")
+	}
+
+	// The private handler carries that path and nothing else: an operator who
+	// pointed a probe at the metrics port would otherwise get a 200 from it and
+	// never learn the port was wrong.
+	for _, p := range []string{"/", "/healthz", "/readyz"} {
+		r := get(t, s.MetricsHandler(), p, nil)
+		_ = r.Body.Close()
+		if r.StatusCode != http.StatusNotFound {
+			t.Errorf("%s on the metrics handler -> %d, want 404", p, r.StatusCode)
+		}
+	}
+}
+
+// A probe of the public /metrics is a 404, but it must still be counted under
+// route="metrics" rather than lumped into "other": that counter is how a stale
+// ServiceMonitor, or a scanner walking the well-known paths, becomes visible.
+func TestPublicMetricsProbesAreStillCounted(t *testing.T) {
+	s := newServer(t, config.Config{EventName: "X"})
+
+	probe := get(t, s.Handler(), "/metrics", nil)
+	_ = probe.Body.Close()
+
+	m := get(t, s.MetricsHandler(), "/metrics", nil)
+	mb, _ := io.ReadAll(m.Body)
+	_ = m.Body.Close()
+
+	// Label order in the exposition is the client library's business, so match
+	// the line rather than a fixed rendering of it.
+	var counted bool
+	for _, line := range strings.Split(string(mb), "\n") {
+		if strings.HasPrefix(line, "soiree_http_requests_total{") &&
+			strings.Contains(line, `route="metrics"`) &&
+			strings.Contains(line, `status="404"`) {
+			counted = true
+		}
+	}
+	if !counted {
+		t.Errorf("a probe of the public /metrics was not counted as a 404 under route=metrics:\n%s", mb)
+	}
+}
+
 // Asset URLs carry a content hash. Labelling metrics by raw path would create
 // a new time series on every deploy, so the route label must stay bounded.
 func TestMetricsRouteLabelIsBounded(t *testing.T) {
-	h := newTestServer(t, config.Config{EventName: "X"})
+	s := newServer(t, config.Config{EventName: "X"})
+	h := s.Handler()
 
 	res := get(t, h, "/", nil)
 	body, _ := io.ReadAll(res.Body)
@@ -318,7 +384,7 @@ func TestMetricsRouteLabelIsBounded(t *testing.T) {
 		_ = r.Body.Close()
 	}
 
-	m := get(t, h, "/metrics", nil)
+	m := get(t, s.MetricsHandler(), "/metrics", nil)
 	mb, _ := io.ReadAll(m.Body)
 	_ = m.Body.Close()
 

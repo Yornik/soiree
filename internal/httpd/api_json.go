@@ -19,11 +19,38 @@ import (
 // and a `date` column read into a time.Time marshals as a full RFC3339
 // timestamp, which is not the same value everywhere on earth.
 //
-// Money crosses this boundary as an integer in minor units, exactly as stored.
-// A JSON number in major units is a float in every parser the browser has, and
-// a budget that loses a cent per line is worse than one that asks the client to
-// know the currency's exponent — which it already does, from the config block
-// in the page.
+// Money crosses this boundary in **major units, as a decimal string** —
+// "250.50" for EUR, "750000" for IDR — and the store keeps minor units on the
+// other side of it. The conversion is `store.FormatMajor` outward and
+// `store.ParseMajor` inward, both of which are integer arithmetic on the
+// digits, and the exponent comes from the ISO 4217 code rather than from a
+// per-deployment setting.
+//
+// Why a string and not a JSON number, which is the other option:
+//
+//   - A JSON number is an IEEE-754 double in every parser the browser has, and
+//     most major-unit amounts have no exact binary form. 250.07 is not
+//     representable; what a client gets back is the nearest double to it. One
+//     value survives the round trip — Go writes the shortest decimal that reads
+//     back as the same double — but the client's own arithmetic does not: add
+//     two such lines, or run one through toFixed, and the answer is a cent out.
+//     A cent per line is precisely what a budget exists to not do, and the
+//     deployment currency (IDR, zero-decimal) is the one where it never shows
+//     up in testing.
+//   - The string costs nothing. The digits are already known exactly — they
+//     came from a bigint — and JSON.parse hands the client the characters the
+//     server meant rather than a value it has to trust a float with.
+//
+// Input is decimal strings only. A JSON number is refused rather than accepted
+// and reparsed from its literal text: leniency there means a client that
+// computed a figure sends 0.30000000000000004 and gets told "EUR has 2 decimal
+// place(s), got 17", which is a worse failure than a flat type error and one
+// nobody diagnoses. One wire type for money, one rule for the client.
+//
+// `qty` stays a JSON number, deliberately. It is not money — nothing is paid in
+// it and it is never summed — and its column, numeric(12,3), converts to a
+// float64 and back exactly at every value it can hold. See the note on
+// store.BudgetItem.
 
 // civilDate is a calendar date with no time and no zone, which is what a
 // `date` column holds. Left as a time.Time it would marshal as
@@ -47,6 +74,25 @@ func (d *civilDate) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("must be a date like 2026-10-31, got %q", s)
 	}
 	*d = civilDate(t)
+	return nil
+}
+
+// moneyText is a money field as it arrives: the client's digits, kept as text.
+//
+// Which currency they are digits of is not knowable here — an UnmarshalJSON
+// sees only its own bytes — so the conversion to minor units happens in
+// `apply`, where the currency is in hand. The type exists for its error
+// message: without it, `{"unit": 25050}` comes back as encoding/json's "cannot
+// unmarshal number into Go struct field", which does not tell a client what to
+// send instead.
+type moneyText string
+
+func (m *moneyText) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return errors.New(`must be an amount in major units as a decimal string, like "250.50" — not a JSON number, which is a float in the browser's parser`)
+	}
+	*m = moneyText(s)
 	return nil
 }
 
@@ -114,6 +160,30 @@ func setValue[T any](f *fieldErrs, field string, o optional[T], dst *T) {
 	*dst = *o.value
 }
 
+// setMoney applies a money field, converting the major units on the wire to the
+// minor units the column holds.
+//
+// Exact by construction: ParseMajor shifts the decimal point by padding digits
+// and reads the result as an integer, so no float stands between what the
+// client typed and what is stored. More decimal places than the currency has is
+// refused rather than rounded — cents against a zero-decimal currency means the
+// client has the wrong idea about the amount, not that it needs help.
+func setMoney(f *fieldErrs, field, currency string, o optional[moneyText], dst *int64) {
+	if !o.set {
+		return
+	}
+	if o.value == nil {
+		f.fail(field, "must not be null")
+		return
+	}
+	minor, err := store.ParseMajor(currency, string(*o.value))
+	if err != nil {
+		f.fail(field, fmt.Sprintf("must be an amount in %s major units as a decimal string (%v)", currency, err))
+		return
+	}
+	*dst = minor
+}
+
 // setPtr applies a nullable field, where null means "clear it".
 func setPtr[T any](o optional[T], dst **T) {
 	if !o.set {
@@ -160,7 +230,10 @@ type echoed struct {
 // --- responses ---------------------------------------------------------
 
 type settingsJSON struct {
-	Ceiling      int64     `json:"ceiling"`
+	// Major units as a decimal string; see the note at the top of this file.
+	Ceiling string `json:"ceiling"`
+	// Not money: percentages and rates are never paid and never summed, and
+	// their column precisions stay well inside what a float64 holds exactly.
 	InflationPct float64   `json:"inflationPct"`
 	FxRate       float64   `json:"fxRate"`
 	SplitEvenly  bool      `json:"splitEvenly"`
@@ -168,9 +241,9 @@ type settingsJSON struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
-func encodeSettings(s store.Settings) settingsJSON {
+func encodeSettings(currency string, s store.Settings) settingsJSON {
 	return settingsJSON{
-		Ceiling:      s.Ceiling,
+		Ceiling:      store.FormatMajor(currency, s.Ceiling),
 		InflationPct: s.InflationPct,
 		FxRate:       s.FxRate,
 		SplitEvenly:  s.SplitEvenly,
@@ -180,13 +253,19 @@ func encodeSettings(s store.Settings) settingsJSON {
 }
 
 type phaseJSON struct {
-	ID       uuid.UUID `json:"id"`
-	Name     string    `json:"name"`
-	Position int32     `json:"position"`
+	ID        uuid.UUID  `json:"id"`
+	Name      string     `json:"name"`
+	Position  int32      `json:"position"`
+	Revision  int64      `json:"revision"`
+	UpdatedAt time.Time  `json:"updatedAt"`
+	UpdatedBy *uuid.UUID `json:"updatedBy"`
 }
 
 func encodePhase(p store.Phase) phaseJSON {
-	return phaseJSON{ID: p.ID, Name: p.Name, Position: p.Position}
+	return phaseJSON{
+		ID: p.ID, Name: p.Name, Position: p.Position,
+		Revision: p.Revision, UpdatedAt: p.UpdatedAt, UpdatedBy: p.UpdatedBy,
+	}
 }
 
 type sponsorJSON struct {
@@ -212,10 +291,11 @@ type budgetItemJSON struct {
 	ParentID *uuid.UUID `json:"parentId"`
 	Item     string     `json:"item"`
 	Vendor   string     `json:"vendor"`
-	// Minor units. See the note at the top of this file.
-	Unit      int64       `json:"unit"`
+	// Major units as a decimal string. See the note at the top of this file —
+	// including why Qty, which is not money, stays a number.
+	Unit      string      `json:"unit"`
 	Qty       float64     `json:"qty"`
-	Paid      int64       `json:"paid"`
+	Paid      string      `json:"paid"`
 	LockBy    *civilDate  `json:"lockBy"`
 	Note      string      `json:"note"`
 	Position  int32       `json:"position"`
@@ -225,11 +305,13 @@ type budgetItemJSON struct {
 	UpdatedBy *uuid.UUID  `json:"updatedBy"`
 }
 
-func encodeBudgetItem(b store.BudgetItem) budgetItemJSON {
+func encodeBudgetItem(currency string, b store.BudgetItem) budgetItemJSON {
 	return budgetItemJSON{
 		ID: b.ID, PhaseID: b.PhaseID, ParentID: b.ParentID,
 		Item: b.Item, Vendor: b.Vendor,
-		Unit: b.Unit, Qty: b.Qty, Paid: b.Paid,
+		Unit:   store.FormatMajor(currency, b.Unit),
+		Qty:    b.Qty,
+		Paid:   store.FormatMajor(currency, b.Paid),
 		LockBy: dateOrNil(b.LockBy), Note: b.Note, Position: b.Position,
 		Sponsors: idsOrEmpty(b.SponsorIDs),
 		Revision: b.Revision, UpdatedAt: b.UpdatedAt, UpdatedBy: b.UpdatedBy,
@@ -300,9 +382,9 @@ type planJSON struct {
 	Notes       []noteJSON       `json:"notes"`
 }
 
-func encodePlan(p store.Plan) planJSON {
+func encodePlan(currency string, p store.Plan) planJSON {
 	out := planJSON{
-		Settings:    encodeSettings(p.Settings),
+		Settings:    encodeSettings(currency, p.Settings),
 		Phases:      make([]phaseJSON, 0, len(p.Phases)),
 		Sponsors:    make([]sponsorJSON, 0, len(p.Sponsors)),
 		BudgetItems: make([]budgetItemJSON, 0, len(p.BudgetItems)),
@@ -317,7 +399,7 @@ func encodePlan(p store.Plan) planJSON {
 		out.Sponsors = append(out.Sponsors, encodeSponsor(v))
 	}
 	for _, v := range p.BudgetItems {
-		out.BudgetItems = append(out.BudgetItems, encodeBudgetItem(v))
+		out.BudgetItems = append(out.BudgetItems, encodeBudgetItem(currency, v))
 	}
 	for _, v := range p.Programme {
 		out.Programme = append(out.Programme, encodeProgrammeEntry(v))

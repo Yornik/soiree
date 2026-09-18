@@ -70,7 +70,17 @@ type SMTP struct {
 }
 
 // New builds a sender for cfg.
+//
+// A zero Port means the caller did not set one, and is filled in with
+// DefaultPort rather than dialled. LoadConfig already defaults it; this covers
+// a Config assembled by hand, where the alternative is a dial to port 0 and an
+// error that says nothing about the missing setting. It also keeps the default
+// on the implicit-TLS side: falling back to a STARTTLS port would mean a relay
+// that declines the upgrade gets the conversation in the clear.
 func New(cfg Config) *SMTP {
+	if cfg.Port == 0 {
+		cfg.Port = DefaultPort
+	}
 	return &SMTP{cfg: cfg}
 }
 

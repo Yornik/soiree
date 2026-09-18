@@ -23,6 +23,41 @@ func TestLoadDefaults(t *testing.T) {
 	if c.DemoData {
 		t.Error("DemoData should be off unless explicitly enabled")
 	}
+	if c.ListenAddr != ":8080" {
+		t.Errorf("ListenAddr = %q, want :8080", c.ListenAddr)
+	}
+	// The exposition has to land somewhere other than the public port without
+	// anyone configuring it, or the default deployment is the leaky one.
+	if c.MetricsAddr != ":9090" {
+		t.Errorf("MetricsAddr = %q, want :9090", c.MetricsAddr)
+	}
+}
+
+func TestMetricsAddrIsSeparateFromTheListenAddr(t *testing.T) {
+	t.Setenv("SOIREE_METRICS_ADDR", "127.0.0.1:9999")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.MetricsAddr != "127.0.0.1:9999" {
+		t.Errorf("MetricsAddr = %q", c.MetricsAddr)
+	}
+
+	// Serving both on one socket puts /metrics back on the public route, which
+	// is the thing the second listener exists to prevent. It would also simply
+	// fail to bind, naming a port without saying why.
+	t.Setenv("SOIREE_LISTEN_ADDR", ":9999")
+	t.Setenv("SOIREE_METRICS_ADDR", ":9999")
+	_, err = Load()
+	if err == nil {
+		t.Fatal("Load() accepted the metrics listener on the public port")
+	}
+	// Load has a dozen error paths and this test leaves several variables set.
+	// Naming the one that failed is what stops a reordering from turning this
+	// into a test that passes for an unrelated reason.
+	if !strings.Contains(err.Error(), "SOIREE_METRICS_ADDR") {
+		t.Errorf("Load() failed for some other reason: %v", err)
+	}
 }
 
 func TestLoadReadsEnv(t *testing.T) {
@@ -207,7 +242,7 @@ func TestAccountsConfigReadsEnv(t *testing.T) {
 	if !c.TrustProxyHeaders {
 		t.Error("SOIREE_TRUST_PROXY_HEADERS=true was not read")
 	}
-	if !c.SMTP.Enabled() || c.SMTP.Port != "465" {
+	if !c.SMTP.Enabled() || c.SMTP.Port != DefaultSMTPPort {
 		t.Errorf("SMTP = %+v, want enabled on the default implicit-TLS port", c.SMTP)
 	}
 
@@ -276,5 +311,64 @@ func TestAccountsConfigRejectsHalfConfigurations(t *testing.T) {
 				t.Errorf("Load() accepted %s", name)
 			}
 		})
+	}
+}
+
+// A bootstrap password with no bootstrap admin is a misconfiguration worth
+// naming: the operator believes they have configured a way in, and they have
+// not.
+func TestBootstrapPasswordNeedsAnAdmin(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "correct horse battery")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an error when a bootstrap password names no account")
+	}
+}
+
+// The environment must not be a way around the password floor the HTTP
+// surface enforces.
+func TestBootstrapPasswordHasAFloor(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_ADMIN", "ada@example.test")
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "short")
+	if _, err := Load(); err == nil {
+		t.Fatalf("a %d-character password was accepted", len("short"))
+	}
+}
+
+func TestBootstrapPasswordAccepted(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_ADMIN", "Ada <ada@example.test>")
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "correct horse battery staple")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.BootstrapAdmin != "ada@example.test" {
+		t.Errorf("BootstrapAdmin = %q, want the bare address", c.BootstrapAdmin)
+	}
+	if c.BootstrapPassword != "correct horse battery staple" {
+		t.Error("BootstrapPassword did not survive Load")
+	}
+	// It is a credential; the page must never carry it.
+	raw, err := c.ClientJSON()
+	if err != nil {
+		t.Fatalf("ClientJSON(): %v", err)
+	}
+	if strings.Contains(raw, "correct horse") || strings.Contains(raw, "ada@example.test") {
+		t.Fatalf("the client config leaks the bootstrap credentials: %s", raw)
+	}
+}
+
+// Surrounding whitespace is part of a password. Trimming it would lock the
+// operator out of the account the variable exists to let them into.
+func TestBootstrapPasswordKeepsItsSpaces(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_ADMIN", "ada@example.test")
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "  padded password  ")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.BootstrapPassword != "  padded password  " {
+		t.Errorf("BootstrapPassword = %q, want the spaces kept", c.BootstrapPassword)
 	}
 }

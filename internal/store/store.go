@@ -2,9 +2,10 @@
 //
 // Two rules shape the whole package.
 //
-// Money is a bigint in minor units, never a float. The browser works in whole
-// units today, which is lossless for a zero-decimal currency and silently
-// drops cents for a two-decimal one. See money.go for the conversions.
+// Money is a bigint in minor units, never a float. The browser works in major
+// units, so the API converts at its own boundary using the currency's ISO 4217
+// exponent; nothing below that boundary ever sees anything but the integer. See
+// money.go for the conversions.
 //
 // Every shared row carries a `revision`, and every update names the revision
 // the caller last saw. A write against a stale revision affects no rows and is

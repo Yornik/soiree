@@ -191,7 +191,13 @@ func (s *Server) Handler() http.Handler {
 	// configured means the database is reachable.
 	mux.HandleFunc("/readyz", s.serveReadyz)
 
-	mux.Handle("/metrics", s.metrics.Handler())
+	// /metrics is deliberately absent: it lives on MetricsHandler, behind its
+	// own listener. The ingress route in front of this handler has no path
+	// constraint, so anything registered here is world-readable, and
+	// soiree_build_info would hand out the running version and commit. A
+	// request for it lands on the 404 below — and is still counted under
+	// route="metrics", which is what makes a stale ServiceMonitor or a scanner
+	// probing the public path visible rather than silent.
 
 	// The API exists only when there is something behind it. With no DSN these
 	// paths are never registered, so /api/v1/... falls through to the 404 below
@@ -209,6 +215,24 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.serveIndex)
 
 	return securityHeaders(s.metrics.instrument(mux))
+}
+
+// MetricsHandler returns the handler for the private metrics listener.
+//
+// Separate from Handler so the exposition is reachable only on the port
+// cfg.MetricsAddr binds, which the public ingress does not route to. The path
+// stays inside this package rather than becoming main's business: a
+// ServiceMonitor scrapes /metrics, and it should not be possible to move it by
+// editing the wrong file.
+//
+// Not instrumented and not wrapped in securityHeaders. Counting scrapes would
+// have the exposition report on the act of reading it, and a scraper is not a
+// browser — there is no framing or sniffing to defend against on a port nothing
+// else can reach.
+func (s *Server) MetricsHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", s.metrics.Handler())
+	return mux
 }
 
 // serveReadyz reports whether this instance can serve traffic.

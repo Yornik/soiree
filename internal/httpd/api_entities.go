@@ -16,6 +16,12 @@ import (
 // actor is nil throughout. There is no session until the accounts milestone, and
 // inventing a user id to fill the column would put a lie in the audit fields
 // rather than an absence.
+//
+// Every constructor takes the deployment's currency, including the four whose
+// tables hold no money. Decoding money needs it — major units on the wire,
+// minor in the column, and the exponent comes from the code — and a decoder
+// that takes it only where it is needed today is a decoder that grows a second
+// signature the first time a money column lands on another table.
 
 // entity wires one table's three write verbs onto the generic handlers.
 type entity[T any] struct {
@@ -29,8 +35,11 @@ type entity[T any] struct {
 	// a zero — and a line priced at zero quantity totals nothing.
 	blank T
 
-	// revisioned is false only for phases, whose table carries no revision
-	// column. Their writes are last-write-wins and can never conflict.
+	// revisioned says the table carries a revision, so its writes name the one
+	// the caller last saw and can be refused with a 409. Every collection is,
+	// since migration 0009 closed the gap phases used to sit in; the field
+	// stays because a collection that is not would be a silent last-write-wins
+	// surface, and that should have to be written down.
 	revisioned bool
 
 	// decode merges a request body onto a row: blank for a create, the stored
@@ -59,24 +68,24 @@ type budgetItemBody struct {
 	ParentID optional[uuid.UUID]   `json:"parentId"`
 	Item     optional[string]      `json:"item"`
 	Vendor   optional[string]      `json:"vendor"`
-	Unit     optional[int64]       `json:"unit"`
+	Unit     optional[moneyText]   `json:"unit"`
 	Qty      optional[float64]     `json:"qty"`
-	Paid     optional[int64]       `json:"paid"`
+	Paid     optional[moneyText]   `json:"paid"`
 	LockBy   optional[civilDate]   `json:"lockBy"`
 	Note     optional[string]      `json:"note"`
 	Position optional[int32]       `json:"position"`
 	Sponsors optional[[]uuid.UUID] `json:"sponsors"`
 }
 
-func (b budgetItemBody) apply(row store.BudgetItem) (store.BudgetItem, error) {
+func (b budgetItemBody) apply(currency string, row store.BudgetItem) (store.BudgetItem, error) {
 	var f fieldErrs
 	setPtr(b.PhaseID, &row.PhaseID)
 	setPtr(b.ParentID, &row.ParentID)
 	setValue(&f, "item", b.Item, &row.Item)
 	setValue(&f, "vendor", b.Vendor, &row.Vendor)
-	setValue(&f, "unit", b.Unit, &row.Unit)
+	setMoney(&f, "unit", currency, b.Unit, &row.Unit)
 	setValue(&f, "qty", b.Qty, &row.Qty)
-	setValue(&f, "paid", b.Paid, &row.Paid)
+	setMoney(&f, "paid", currency, b.Paid, &row.Paid)
 	setDate(b.LockBy, &row.LockBy)
 	setValue(&f, "note", b.Note, &row.Note)
 	setValue(&f, "position", b.Position, &row.Position)
@@ -92,7 +101,7 @@ func (b budgetItemBody) apply(row store.BudgetItem) (store.BudgetItem, error) {
 	return row, f.err
 }
 
-func budgetItemEntity(s *store.Store) entity[store.BudgetItem] {
+func budgetItemEntity(s *store.Store, currency string) entity[store.BudgetItem] {
 	return entity[store.BudgetItem]{
 		collection: "budget-items",
 		// See entity.blank: the column defaults to 1 but the store always
@@ -100,7 +109,7 @@ func budgetItemEntity(s *store.Store) entity[store.BudgetItem] {
 		blank:      store.BudgetItem{Qty: 1},
 		revisioned: true,
 		decode: func(base store.BudgetItem, body []byte) (store.BudgetItem, error) {
-			return decodeBody[budgetItemBody, store.BudgetItem](body, base)
+			return decodeBody[budgetItemBody, store.BudgetItem](body, currency, base)
 		},
 		key: func(row *store.BudgetItem, id uuid.UUID, revision int64) {
 			row.ID, row.Revision = id, revision
@@ -118,7 +127,7 @@ func budgetItemEntity(s *store.Store) entity[store.BudgetItem] {
 			return s.UpdateBudgetItem(ctx, in, nil)
 		},
 		remove: s.DeleteBudgetItem,
-		encode: asAny(encodeBudgetItem),
+		encode: func(b store.BudgetItem) any { return encodeBudgetItem(currency, b) },
 	}
 }
 
@@ -132,7 +141,7 @@ type sponsorBody struct {
 	Position optional[int32]  `json:"position"`
 }
 
-func (b sponsorBody) apply(row store.Sponsor) (store.Sponsor, error) {
+func (b sponsorBody) apply(_ string, row store.Sponsor) (store.Sponsor, error) {
 	var f fieldErrs
 	setValue(&f, "code", b.Code, &row.Code)
 	setValue(&f, "name", b.Name, &row.Name)
@@ -140,12 +149,12 @@ func (b sponsorBody) apply(row store.Sponsor) (store.Sponsor, error) {
 	return row, f.err
 }
 
-func sponsorEntity(s *store.Store) entity[store.Sponsor] {
+func sponsorEntity(s *store.Store, currency string) entity[store.Sponsor] {
 	return entity[store.Sponsor]{
 		collection: "sponsors",
 		revisioned: true,
 		decode: func(base store.Sponsor, body []byte) (store.Sponsor, error) {
-			return decodeBody[sponsorBody, store.Sponsor](body, base)
+			return decodeBody[sponsorBody, store.Sponsor](body, currency, base)
 		},
 		key: func(row *store.Sponsor, id uuid.UUID, revision int64) {
 			row.ID, row.Revision = id, revision
@@ -174,7 +183,7 @@ type taskBody struct {
 	Position optional[int32]     `json:"position"`
 }
 
-func (b taskBody) apply(row store.Task) (store.Task, error) {
+func (b taskBody) apply(_ string, row store.Task) (store.Task, error) {
 	var f fieldErrs
 	setValue(&f, "name", b.Name, &row.Name)
 	setValue(&f, "owner", b.Owner, &row.Owner)
@@ -199,12 +208,12 @@ func (b taskBody) apply(row store.Task) (store.Task, error) {
 	return row, f.err
 }
 
-func taskEntity(s *store.Store) entity[store.Task] {
+func taskEntity(s *store.Store, currency string) entity[store.Task] {
 	return entity[store.Task]{
 		collection: "tasks",
 		revisioned: true,
 		decode: func(base store.Task, body []byte) (store.Task, error) {
-			return decodeBody[taskBody, store.Task](body, base)
+			return decodeBody[taskBody, store.Task](body, currency, base)
 		},
 		key: func(row *store.Task, id uuid.UUID, revision int64) {
 			row.ID, row.Revision = id, revision
@@ -226,19 +235,19 @@ type noteBody struct {
 	Position optional[int32]  `json:"position"`
 }
 
-func (b noteBody) apply(row store.Note) (store.Note, error) {
+func (b noteBody) apply(_ string, row store.Note) (store.Note, error) {
 	var f fieldErrs
 	setValue(&f, "text", b.Text, &row.Text)
 	setValue(&f, "position", b.Position, &row.Position)
 	return row, f.err
 }
 
-func noteEntity(s *store.Store) entity[store.Note] {
+func noteEntity(s *store.Store, currency string) entity[store.Note] {
 	return entity[store.Note]{
 		collection: "notes",
 		revisioned: true,
 		decode: func(base store.Note, body []byte) (store.Note, error) {
-			return decodeBody[noteBody, store.Note](body, base)
+			return decodeBody[noteBody, store.Note](body, currency, base)
 		},
 		key: func(row *store.Note, id uuid.UUID, revision int64) {
 			row.ID, row.Revision = id, revision
@@ -260,32 +269,36 @@ type phaseBody struct {
 	Position optional[int32]  `json:"position"`
 }
 
-func (b phaseBody) apply(row store.Phase) (store.Phase, error) {
+func (b phaseBody) apply(_ string, row store.Phase) (store.Phase, error) {
 	var f fieldErrs
 	setValue(&f, "name", b.Name, &row.Name)
 	setValue(&f, "position", b.Position, &row.Position)
 	return row, f.err
 }
 
-// phaseEntity is the one table with no revision column, so its writes are
-// last-write-wins and carry no conflict check. A revision in the body or the
-// query string is accepted and ignored rather than refused, so a client can
-// treat all six collections the same way. See the report accompanying this
-// milestone: fixing it is a schema change, not an API change.
-func phaseEntity(s *store.Store) entity[store.Phase] {
+// phaseEntity used to be the exception here: `phases` carried no revision, so
+// its writes were last-write-wins and could never come back as a 409. Migration
+// 0009 gave it the same three columns as every other shared table, and this
+// descriptor is now the same shape as the rest — a patch names the revision it
+// is editing, a delete carries it as ?revision=N.
+func phaseEntity(s *store.Store, currency string) entity[store.Phase] {
 	return entity[store.Phase]{
 		collection: "phases",
-		revisioned: false,
+		revisioned: true,
 		decode: func(base store.Phase, body []byte) (store.Phase, error) {
-			return decodeBody[phaseBody, store.Phase](body, base)
+			return decodeBody[phaseBody, store.Phase](body, currency, base)
 		},
-		key: func(row *store.Phase, id uuid.UUID, _ int64) {
-			row.ID = id
+		key: func(row *store.Phase, id uuid.UUID, revision int64) {
+			row.ID, row.Revision = id, revision
 		},
-		load:   s.Phase,
-		create: s.CreatePhase,
-		update: s.UpdatePhase,
-		remove: func(ctx context.Context, id uuid.UUID, _ int64) error { return s.DeletePhase(ctx, id) },
+		load: s.Phase,
+		create: func(ctx context.Context, in store.Phase) (store.Phase, error) {
+			return s.CreatePhase(ctx, in, nil)
+		},
+		update: func(ctx context.Context, in store.Phase) (store.Phase, error) {
+			return s.UpdatePhase(ctx, in, nil)
+		},
+		remove: s.DeletePhase,
 		encode: asAny(encodePhase),
 	}
 }
@@ -301,7 +314,7 @@ type programmeBody struct {
 	BudgetItemID optional[uuid.UUID] `json:"budgetItemId"`
 }
 
-func (b programmeBody) apply(row store.ProgrammeEntry) (store.ProgrammeEntry, error) {
+func (b programmeBody) apply(_ string, row store.ProgrammeEntry) (store.ProgrammeEntry, error) {
 	var f fieldErrs
 	setValue(&f, "title", b.Title, &row.Title)
 	setValue(&f, "note", b.Note, &row.Note)
@@ -310,12 +323,12 @@ func (b programmeBody) apply(row store.ProgrammeEntry) (store.ProgrammeEntry, er
 	return row, f.err
 }
 
-func programmeEntity(s *store.Store) entity[store.ProgrammeEntry] {
+func programmeEntity(s *store.Store, currency string) entity[store.ProgrammeEntry] {
 	return entity[store.ProgrammeEntry]{
 		collection: "programme-entries",
 		revisioned: true,
 		decode: func(base store.ProgrammeEntry, body []byte) (store.ProgrammeEntry, error) {
-			return decodeBody[programmeBody, store.ProgrammeEntry](body, base)
+			return decodeBody[programmeBody, store.ProgrammeEntry](body, currency, base)
 		},
 		key: func(row *store.ProgrammeEntry, id uuid.UUID, revision int64) {
 			row.ID, row.Revision = id, revision

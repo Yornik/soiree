@@ -35,8 +35,25 @@ const { defineConfig, devices } = require('@playwright/test');
 const PORT = Number(process.env.SOIREE_E2E_PORT || 8099);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
+// A second instance, configured differently: no event date, and a Dutch
+// locale. Two of the three things added here are branches on configuration
+// rather than on anything a test can do from inside the page — "with no event
+// date there is no after" and "the interface language follows the configured
+// locale" — and the only honest way to test a configuration branch is to
+// configure it.
+const ALT_PORT = PORT + 1;
+// Metrics listeners, one per server. Derived from the site ports rather than
+// fixed, so overriding SOIREE_E2E_PORT moves all four together.
+const METRICS_PORT = PORT + 1000;
+const ALT_METRICS_PORT = ALT_PORT + 1000;
+const ALT_URL = `http://127.0.0.1:${ALT_PORT}`;
+
 const repoRoot = path.resolve(__dirname, '..');
 const binary = path.join(__dirname, '.tmp', 'soiree');
+// Its own output path: Playwright starts the two servers in parallel, and two
+// `go build -o` racing for the same file is a truncated binary waiting to
+// happen.
+const altBinary = path.join(__dirname, '.tmp', 'soiree-alt');
 
 module.exports = defineConfig({
   testDir: './tests',
@@ -57,6 +74,9 @@ module.exports = defineConfig({
     ? [['github'], ['html', { open: 'never' }], ['list']]
     : [['list']],
 
+  // Reachable from a test as `altBaseURL` without hardcoding a port twice.
+  metadata: { altBaseURL: ALT_URL },
+
   use: {
     baseURL: BASE_URL,
     // The service worker is a cache in front of the app. Its contents are
@@ -71,7 +91,7 @@ module.exports = defineConfig({
 
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
-  webServer: {
+  webServer: [{
     // The real binary, built from source. Doing it inside the webServer
     // command rather than in a globalSetup keeps the ordering unambiguous:
     // Playwright will not start the tests until /healthz answers.
@@ -87,10 +107,19 @@ module.exports = defineConfig({
     env: {
       ...process.env,
       SOIREE_LISTEN_ADDR: `127.0.0.1:${PORT}`,
+      // Each server needs its own metrics port. The exposition moved to a
+      // listener of its own, and it defaults to :9090 — so two servers left on
+      // the default fight over it and the second exits before a single test
+      // runs. Bound to loopback because nothing scrapes these.
+      SOIREE_METRICS_ADDR: `127.0.0.1:${METRICS_PORT}`,
       // Synthetic throughout. No real event, no real people.
       SOIREE_EVENT_NAME: 'Rehearsal Dinner (e2e)',
       SOIREE_EVENT_TAGLINE: 'Synthetic fixture data',
-      SOIREE_EVENT_DATE: '2030-06-12T00:00:00Z',
+      // Carries a time of day, which is how a real evening is configured and
+      // the case that catches a countdown rounding hours instead of comparing
+      // calendar dates. Formatted with timeZone: 'UTC' in the page, so the
+      // date shown beside it is still June 12.
+      SOIREE_EVENT_DATE: '2030-06-12T19:00:00Z',
       SOIREE_CURRENCY: 'EUR',
       SOIREE_LOCALE: 'en-US',
       SOIREE_BUDGET_CEILING: '0',
@@ -99,5 +128,28 @@ module.exports = defineConfig({
       // seed values it did not write.
       SOIREE_DEMO_DATA: 'false',
     },
-  },
+  }, {
+    // Same source, different environment. Built to its own path so the two
+    // `go build`s above and here cannot collide.
+    command: `go build -o ${JSON.stringify(altBinary)} ./cmd/soiree && exec ${JSON.stringify(altBinary)}`,
+    cwd: repoRoot,
+    url: `${ALT_URL}/healthz`,
+    reuseExistingServer: false,
+    timeout: 120_000,
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: {
+      ...process.env,
+      SOIREE_LISTEN_ADDR: `127.0.0.1:${ALT_PORT}`,
+      SOIREE_METRICS_ADDR: `127.0.0.1:${ALT_METRICS_PORT}`,
+      SOIREE_EVENT_NAME: 'Ongedateerd Feest (e2e)',
+      SOIREE_EVENT_TAGLINE: '',
+      // Deliberately unset: this is the "no date configured" deployment.
+      SOIREE_EVENT_DATE: '',
+      SOIREE_CURRENCY: 'EUR',
+      SOIREE_LOCALE: 'nl-NL',
+      SOIREE_BUDGET_CEILING: '0',
+      SOIREE_DEMO_DATA: 'false',
+    },
+  }],
 });

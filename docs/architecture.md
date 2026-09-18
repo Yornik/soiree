@@ -24,7 +24,7 @@ web/src/                index.html, styles.css, app.js, sw.js, fonts/
 | `/sw.js` | `no-cache` + ETag | Rendered with the precache list. Never cached hard, or a broken worker would pin itself. |
 | `/healthz` | `no-store` | Liveness. |
 | `/readyz` | `no-store` | Readiness. |
-| `/metrics` | `no-store` | Prometheus exposition. |
+| `/metrics` | — | **Not on this listener.** Served on `SOIREE_METRICS_ADDR` instead; a request here is a 404, still counted under `route="metrics"` so a stale scrape target or a path scanner is visible rather than silent. |
 
 ## Startup pipeline
 
@@ -157,7 +157,7 @@ The application is built to be operated, not just run.
 |---|---|
 | `/healthz` | Liveness. Checks nothing downstream on purpose — a liveness probe that fails when the database is down converts an outage into a restart loop. |
 | `/readyz` | Readiness. Identical to liveness while everything is in memory; this is where the database check goes once it lands. |
-| `/metrics` | Prometheus exposition, on a private registry. |
+| `/metrics` | Prometheus exposition, on a private registry — and on a **separate listener** (`SOIREE_METRICS_ADDR`, default `:9090`). The ingress route in front of the site carries no path constraint, so anything on the main listener is world-readable, and `soiree_build_info` would name the running version and commit to anyone who asked. A second port is also the shape a ServiceMonitor expects. The probes stay on the main port, because that is the one kubelet reaches. |
 
 Exported series:
 
@@ -279,9 +279,12 @@ CREATE TABLE sponsors (
 -- "dinner", "speeches"). Real planning spreadsheets organise costs by the
 -- run of the evening, not as a flat list.
 CREATE TABLE phases (
-  id       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name     text NOT NULL,
-  position integer NOT NULL
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        text NOT NULL,
+  position    integer NOT NULL,
+  revision    bigint NOT NULL DEFAULT 1,
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  updated_by  uuid REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE budget_items (
@@ -354,11 +357,20 @@ CREATE TABLE user_ui_prefs (
 
 Three decisions worth stating explicitly:
 
-- **Money is `bigint` in minor units.** The browser currently works in whole
-  units, which is lossless for IDR (zero-decimal) but silently drops cents for
-  EUR. Storing minor units and converting at the API boundary fixes that. The
-  exponent is derived from the ISO 4217 code, so the conversion is not a
-  per-deployment setting.
+- **Money is `bigint` in minor units in the database, and a decimal string in
+  major units over the API** (`"250.50"`, `"750000"`). Not a JSON number: every
+  browser parses those as IEEE-754 doubles, and while a single value survives
+  the round trip, the client's own arithmetic does not — `45.33 × 40` is
+  `1813.1999999999998`. A cent per line is exactly what a budget must not do.
+  The string costs nothing, since the digits came from an integer and go back
+  to one. Input must be a string too: accepting numbers would mean a client
+  that computed a figure sends `0.30000000000000004` and is told it has 17
+  decimal places, which is a worse error than a flat type mismatch.
+
+  The exponent comes from the code, but note it is **this project's table, not
+  ISO 4217's** — IDR is treated as zero-decimal, where ISO says 2 and `Intl`
+  agrees with ISO. A client must not derive the exponent from `Intl`, or it
+  will disagree with the server on precisely the deployment currency.
 - **`position` replaces array order.** Order is meaningful in the UI and JSON
   array order does not survive a relational round trip.
 - **`revision` is per row**, bumped on every write. That is what makes step 4's
@@ -441,14 +453,14 @@ GET /api/v1/plan
 
 ```json
 {
-  "settings": { "ceiling": 7000000, "inflationPct": 4, "revision": 3 },
-  "phases":   [ { "id": "3f1c…", "name": "Arrival", "position": 0 } ],
+  "settings": { "ceiling": "70000.00", "inflationPct": 4, "revision": 3 },
+  "phases":   [ { "id": "3f1c…", "name": "Arrival", "position": 0, "revision": 1 } ],
   "sponsors": [ { "id": "9a2e…", "code": "Rose", "name": "Ada", "revision": 1 } ],
   "budgetItems": [
     {
       "id": "7b4d…", "phaseId": "3f1c…", "parentId": null,
       "item": "Welcome signage", "vendor": "Local print shop",
-      "unit": 500, "qty": 3, "paid": 0,
+      "unit": "5.00", "qty": 3, "paid": "0.00",
       "lockBy": "2026-10-31", "note": "A4, mounted",
       "sponsors": ["9a2e…"], "revision": 2
     }
@@ -461,11 +473,11 @@ Writes are per field and carry the revision the client last saw:
 
 ```http
 PATCH /api/v1/budget-items/7b4d…
-{ "revision": 2, "unit": 550 }
+{ "revision": 2, "unit": "5.50" }
 ```
 
 ```json
-{ "id": "7b4d…", "unit": 550, "revision": 3 }
+{ "id": "7b4d…", "unit": "5.50", "revision": 3 }
 ```
 
 If someone else changed that row first, the write is refused rather than
@@ -473,7 +485,7 @@ silently clobbering them:
 
 ```http
 HTTP/1.1 409 Conflict
-{ "error": "stale_revision", "current": { "id": "7b4d…", "unit": 600, "revision": 3 } }
+{ "error": "stale_revision", "current": { "id": "7b4d…", "unit": "6.00", "revision": 3 } }
 ```
 
 The client reconciles against `current` instead of refetching the whole plan.
@@ -516,6 +528,18 @@ so the endpoint cannot be used to enumerate accounts.
 Mail goes out over SMTP (`SOIREE_SMTP_*`). If SMTP is not configured, account
 creation still succeeds and the admin is shown the set-password link to pass on
 directly — so a deployment without mail is degraded, not broken.
+
+**The first account is the exception, and needs its own way in.** Every route
+that hands back a set-password link is admin-only, and `password-reset` gives
+its link to the mailer and discards it — so on an empty database with no
+working SMTP there is no path to the first admin at all. `SOIREE_BOOTSTRAP_ADMIN`
+creates that account; `SOIREE_BOOTSTRAP_PASSWORD` optionally gives it a
+password, hashed with the same Argon2id parameters as any other, so it can log
+in immediately. Both are consumed only while no admin exists, which is what
+makes them safe to leave set: neither can resurrect a disabled account nor
+overwrite a password that has since been changed. Without the password the
+account stays `invited` and the mailed link is the only way in — the better
+shape when mail works, since no credential is written down.
 
 ### Password storage
 

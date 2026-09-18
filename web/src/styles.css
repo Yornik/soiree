@@ -614,6 +614,63 @@ table.budget thead th:first-child { background: var(--tint); z-index: 3; }
 }
 .data-msg { font-size: 13px; color: var(--ink-2); }
 
+/* --- After the event ---
+   The day after, the page stops being a plan. The countdown has nothing left
+   to count, so the numeral goes and the date takes its place, closed by the
+   same double rule the totals row already uses to mean "this is final". No new
+   colour, no stamp: the notation the ledger already has is enough. */
+.archive-note { display: none; }
+body.is-archived .archive-note,
+body.is-reopened .archive-note {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px 24px;
+  flex-wrap: wrap;
+  margin-bottom: 26px;
+  padding: 14px 0 16px;
+  border-top: 2px solid var(--rule-ink);
+  border-bottom: 3px double var(--ink);
+}
+.archive-line { margin: 0; max-width: 62ch; }
+.archive-note .ghost-btn { margin-top: 0; flex: none; }
+
+body.is-archived .countdown-num,
+body.is-reopened .countdown-num { display: none; }
+body.is-archived .countdown-date,
+body.is-reopened .countdown-date {
+  font-family: var(--font-display);
+  font-size: 21px;
+  line-height: 1.2;
+  color: var(--ink);
+  margin-top: 1px;
+}
+
+/* A closed ledger has nothing to add to and nothing to remove from. Editing
+   controls that survive are readonly rather than disabled, so the figures stay
+   selectable and copyable — but they stop looking like somewhere to type. */
+body.is-archived .add-row-btn,
+body.is-archived .del-btn,
+body.is-archived .size-tools,
+body.is-archived .col-grip,
+body.is-archived .row-grip { display: none; }
+body.is-archived input:hover,
+body.is-archived select:hover,
+body.is-archived textarea:hover { border-color: transparent; }
+body.is-archived input, body.is-archived textarea, body.is-archived select { color: var(--ink-2); }
+body.is-archived .by-btn { color: var(--ink-2); cursor: default; }
+body.is-archived .flag textarea { border-color: transparent; resize: none; }
+body.is-archived .ghost-btn:disabled { opacity: 0.45; cursor: default; }
+body.is-archived .ghost-btn:disabled:hover { color: var(--ink-2); border-color: var(--rule-mid); }
+
+/* Three steps nobody can act on is worse than none: under archive the start
+   screen stands down and the reckoning is shown whether or not it has figures
+   in it. Placed after the first-run rules, which it has to outrank. */
+.settlement { display: none; }
+body.is-archived .settlement { display: block; }
+body.is-archived .first-run { display: none; }
+body.is-archived .when-data { display: block; }
+
 /* --- Narrow -------------------------------------------------------------- */
 @media (max-width: 720px) {
   .wrap { padding: 26px 16px 64px; }
@@ -624,21 +681,115 @@ table.budget thead th:first-child { background: var(--tint); z-index: 3; }
   .fig:nth-child(-n+2) { border-bottom: 1px solid var(--rule); }
   .fig-num { font-size: 24px; }
   .reckoning.compact .fig-num { font-size: 19px; }
+  .reckoning.compact .fig:nth-child(-n+2) { display: none; }
   .countdown { flex-direction: row; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .countdown-unit, .countdown-date { margin-top: 0; }
   .start-steps li { grid-template-columns: auto 1fr; row-gap: 4px; }
   .start-steps button { grid-column: 2; grid-row: auto; margin-top: 8px; }
+
+  /* --- The budget grid, unwound ---
+     Nine columns and a drag handle are a desk interaction. Below this width
+     each line becomes one entry in a statement: the item at the head, then
+     label on the left and figure on the right, so every number in the panel —
+     each line, the totals row, and the repeat below it — sits in one right
+     aligned column that reconciles down the page. Entries are separated by a
+     rule rather than boxed into cards, which is the same device the start
+     steps and the reckoning already use.
+
+     The two !important declarations override inline styles written by the
+     resize handles, which only mean anything in the table layout. */
+  table.budget { display: block; width: auto !important; min-width: 0; table-layout: auto; }
+  table.budget colgroup, table.budget thead { display: none; }
+  table.budget tbody, table.budget tfoot { display: block; }
+  /* The grips themselves are hidden by the touch-target block below, which
+     covers this width too. Resetting sizes that no longer apply is noise. */
+  #resetSizes { display: none; }
+
+  table.budget tbody tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 16px;
+    height: auto !important;
+    padding: 6px 0 14px;
+    border-top: 1px solid var(--rule-ink);
+  }
+  table.budget tbody tr:first-child { border-top: 0; }
+
+  table.budget tbody td, table.budget tfoot td, table.budget tfoot th {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    grid-column: 1 / -1;
+    position: static;
+    overflow: visible;
+    box-shadow: none;
+    border: 0;
+    padding: 2px 0;
+    min-height: 44px;
+  }
+  /* Unit and quantity are one thought and two small numbers, so they share a
+     line instead of taking two. */
+  table.budget tbody td:nth-child(2) { grid-column: 1; }
+  table.budget tbody td:nth-child(3) { grid-column: 2; }
+
+  table.budget td[data-label]::before, table.budget tfoot td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--ink-2);
+  }
+  table.budget td input, table.budget td textarea, table.budget td .by-btn { min-width: 0; }
+  table.budget td .by-btn { text-align: right; }
+
+  /* The item names the entry, so it leads it and needs no label. */
+  /* Specific enough to outrank the frozen-column rule, which is what this is
+     unwinding: a sticky offset and an edge shadow inside a stacked entry put a
+     stray hairline through the middle of it. */
+  table.budget tbody td.item-cell {
+    position: static;
+    box-shadow: none;
+    padding-bottom: 4px;
+  }
+  table.budget td.item-cell textarea { font-size: 16px; font-weight: 600; }
+  table.budget textarea { height: auto; min-height: 44px; }
+  table.budget tbody td.calc { padding: 2px 0; }
+  table.budget td.empty-cell { display: block; min-height: 0; padding: 18px 0; }
+
+  /* Removing a line is deliberate: it sits at the foot of the entry, named,
+     behind its own rule and well clear of the fields above it. */
+  table.budget td.del-cell {
+    width: auto;
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px solid var(--rule);
+  }
+
+  /* The totals close the statement the way they close the table: labelled,
+     in the same money column, under the same double rule. */
+  table.budget tfoot tr {
+    display: block;
+    padding: 8px 0 4px;
+    border-top: 2px solid var(--rule-ink);
+    border-bottom: 3px double var(--ink);
+  }
+  table.budget tfoot th { display: block; min-height: 0; padding: 0 0 4px; }
+  table.budget tfoot td:not([data-label]) { display: none; }
 }
 
-/* Touch: a 24px delete button is not usable with a thumb. */
-@media (pointer: coarse) {
-  input[type="text"], input[type="number"], input[type="date"], select, textarea { min-height: 42px; }
+/* Touch, and anything narrow enough to be held: a 24px delete button is not
+   usable with a thumb, and a narrow viewport is a phone whatever the pointer
+   emulation claims. */
+@media (pointer: coarse), (max-width: 720px) {
+  input[type="text"], input[type="number"], input[type="date"], select, textarea { min-height: 44px; }
   .toggle-line input, .sp-pop input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; }
   .del-btn { min-width: 44px; min-height: 44px; }
   .tab-btn { padding: 14px 2px; }
   .pill, .add-row-btn, .ghost-btn { padding: 13px 16px; }
-  .by-btn { min-height: 42px; }
+  .by-btn { min-height: 44px; }
   .sp-pop label { padding: 11px 8px; }
+  .col-grip, .row-grip { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
