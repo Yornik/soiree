@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/andybalholm/brotli"
 )
@@ -183,7 +184,58 @@ func BuildAssets(srcFS fs.FS) (*Assets, error) {
 	return a, nil
 }
 
+// compressed remembers what each distinct input compressed to, for the life of
+// the process.
+//
+// A running server builds its assets once, so in production this saves nothing
+// and costs a few hundred kilobytes. It is here for the tests. Brotli at its
+// highest setting takes about 0.8 s for the whole shell - and 8.4 s under the
+// race detector, measured - and nearly every test in this package builds a
+// server of its own, some sixty-five of them. That, not the database and not
+// the hashing, is why `go test -race` on this package took ten minutes and then
+// hit Go's ten-minute limit.
+//
+// Keyed by the content and nothing else, so it cannot serve one file's bytes
+// for another's, and the output is exactly what compressing again would give:
+// both encoders are deterministic, which the reproducible-build check in CI
+// depends on already.
+var compressed = struct {
+	sync.Mutex
+	gzip, brotli map[[sha256.Size]byte][]byte
+}{
+	gzip:   map[[sha256.Size]byte][]byte{},
+	brotli: map[[sha256.Size]byte][]byte{},
+}
+
 func gzipBytes(b []byte) []byte {
+	key := sha256.Sum256(b)
+	compressed.Lock()
+	defer compressed.Unlock()
+	if out, ok := compressed.gzip[key]; ok {
+		return out
+	}
+	out := gzipOnce(b)
+	if out != nil {
+		compressed.gzip[key] = out
+	}
+	return out
+}
+
+func brotliBytes(b []byte) []byte {
+	key := sha256.Sum256(b)
+	compressed.Lock()
+	defer compressed.Unlock()
+	if out, ok := compressed.brotli[key]; ok {
+		return out
+	}
+	out := brotliOnce(b)
+	if out != nil {
+		compressed.brotli[key] = out
+	}
+	return out
+}
+
+func gzipOnce(b []byte) []byte {
 	var buf bytes.Buffer
 	w, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {
@@ -198,7 +250,7 @@ func gzipBytes(b []byte) []byte {
 	return buf.Bytes()
 }
 
-func brotliBytes(b []byte) []byte {
+func brotliOnce(b []byte) []byte {
 	var buf bytes.Buffer
 	w := brotli.NewWriterLevel(&buf, brotli.BestCompression)
 	if _, err := w.Write(b); err != nil {
