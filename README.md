@@ -142,6 +142,37 @@ service is entitled to refuse a request whose signature carries no subject, and
 finding that out one notification at a time is worse than the feature being
 visibly off. A partial set is a warning in the log, never a refusal to boot.
 
+### Attachments
+
+Files on budget lines and tasks: a quote, a receipt, a floor plan. They live in
+an S3 bucket, and **the browser talks to the bucket directly** — soiree signs a
+short-lived address, the file goes from the phone to the bucket and back, and
+no file ever passes through this server. That is a decision about where the
+origin is likely to be: a small machine on a home connection serves a relative
+on the far side of the world badly if every photograph crosses its uplink
+twice.
+
+It has two consequences an operator has to act on, both in
+[docs/operating.md](docs/operating.md): the bucket needs a CORS rule that lets
+this site's pages `PUT` to it, and a deployment behind a Content-Security-Policy
+has to allow the bucket's origin in `connect-src`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SOIREE_S3_ENDPOINT` | *(unset)* | The S3 service, e.g. `https://nbg1.your-objectstorage.com`. Browsers connect to it, so it has to be reachable from wherever the people are. |
+| `SOIREE_S3_REGION` | *(unset)* | Part of the signature. A provider with no regions still documents a value to put here. |
+| `SOIREE_S3_BUCKET` | *(unset)* | The bucket. Private: nothing in it is ever public. |
+| `SOIREE_S3_ACCESS_KEY_ID` | *(unset)* | |
+| `SOIREE_S3_SECRET_ACCESS_KEY` | *(unset)* | Signs every address handed to a browser. Never leaves the server. |
+| `SOIREE_ATTACHMENT_MAX_MB` | `25` | The most one file may be. Signed into the upload address, so the bucket itself refuses anything else. |
+| `SOIREE_ATTACHMENTS_TOTAL_MB` | `2048` | The most all files may be together, uploads in progress included. |
+
+All five `SOIREE_S3_*` or none. Unlike push, a partial set **refuses to
+start**: a bucket with no secret would start cleanly, draw the upload control,
+and fail every upload in somebody's hand. Attachments also need the database,
+where a file's record lives; with a bucket and no `DATABASE_URL` the feature is
+simply off.
+
 A date without a timezone is rejected at startup rather than accepted. It is a
 real bug, not pedantry: `2027-06-12T00:00:00` is interpreted in the *viewer's*
 timezone, so the countdown silently reads a day differently depending on where
@@ -202,11 +233,11 @@ Measured transfer at 1.0.0, brotli:
 | | |
 |---|---|
 | HTML shell | 4.3 kB (the three flags are inline SVG, so they cost no request) |
-| Stylesheet | 8.8 kB |
-| Planner script | 39 kB (`defer`, does not block paint) |
+| Stylesheet | 9.4 kB |
+| Planner script | 44 kB (`defer`, does not block paint) |
 | Accounts script | 22 kB (`defer`, does not block paint; three languages) |
 | Display font | 33 kB (`font-display: swap`, does not block paint) |
-| **First paint** | **~13 kB** |
+| **First paint** | **~14 kB** |
 
 **Writes are debounced.** Edits apply to local state instantly and persist
 500 ms later, flushed on page hide. That keeps typing smooth, and it is what
@@ -260,6 +291,14 @@ What works end to end:
 - **Deadline reminders** by mail and by web push, to admins. The page offers
   push once, at the moment an admin first sets a due date, and the account
   screen has the switch that is still there afterwards — on, off, per device.
+- **Attachments**, where a bucket is configured: files on budget lines and
+  tasks, uploaded from and downloaded to the browser directly, arriving live
+  for everybody else. A viewer can open them and nothing more. What a download
+  is served as is decided by the server from a short allow-list — images and
+  PDF may open in the browser, everything else is saved — never by the type a
+  file claims.
+- **The release, very small,** at the foot of the screens a signed-in person
+  can open. The public page still does not name its build.
 - **The API is described** in [`api/openapi.yaml`](api/openapi.yaml), and the
   description is tested against the running server.
 
@@ -274,6 +313,12 @@ What is not there, stated rather than left to be discovered:
   plan and in `/api/v1`; the page draws neither. For the same reason a budget
   row with a `parentId`, which only a client writing to the API directly can
   create, is drawn as an ordinary line and counted alongside its parent.
+- **Attachments are not in the export, and not in the database backup.**
+  "Export data" writes the plan; the files stay in the bucket. A restored
+  database knows about files by name and size only — see Backup and restore in
+  the operating guide.
+- **Nothing scans an uploaded file.** Only people an admin invited can upload,
+  and what they upload is served from the bucket's origin, never this one.
 - **Subject export, erasure and the retention purge** are implemented and
   tested in `internal/store/privacy.go`, but nothing calls them: there is no
   route and no subcommand, so honouring a request today means writing Go or

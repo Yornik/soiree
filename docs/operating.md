@@ -283,6 +283,8 @@ than being absent.
 | `SOIREE_BOOTSTRAP_PASSWORD` without `SOIREE_BOOTSTRAP_ADMIN`, or shorter than 12 characters | There is no account for it to belong to, or the app would refuse the same password from a form. |
 | Malformed `SOIREE_EVENT_DATE`, `SOIREE_CURRENCY`, `SOIREE_BASE_URL`, `SOIREE_BUDGET_CEILING`, `SOIREE_ALLOW_INDEXING`, `SOIREE_DEMO_DATA` or `SOIREE_TRUST_PROXY_HEADERS` | A value nobody can parse is a typo, and every one of these fails quietly at runtime instead. `SOIREE_PASSKEYS_ENABLED` is the deliberate exception: a value it cannot parse reads as off, because off loses nothing and refusing to start would turn a declined convenience into an outage. |
 | Any malformed `SOIREE_REMINDER_*` | A digest that silently never arrives is the same outcome as having no reminders at all, which is the thing the feature exists to prevent. |
+| Some but not all of the five `SOIREE_S3_*` variables | A bucket with no secret starts cleanly, draws the upload control, and fails every upload in somebody's hand. The error names what is set and what is missing. |
+| `SOIREE_ATTACHMENT_MAX_MB` or `SOIREE_ATTACHMENTS_TOTAL_MB` not a whole number above zero, or the first larger than the second | No file could ever be that large; it is a typo. |
 | The database is unreachable, or a migration fails | There is nothing to serve the API from. |
 | Either listener cannot bind | A pod that looks healthy while every scrape fails is the failure nobody notices until they need the graph. |
 
@@ -294,6 +296,7 @@ than being absent.
 | `SOIREE_BASE_URL` | Passkeys are off — the Relying Party ID cannot be derived from anything else, and a request's `Host` header is not an alternative. Mailed links would be relative, which is why SMTP refuses to start without it. | `accounts enabled … passkeys=false baseURL=`. |
 | `SOIREE_SMTP_*` | No mail anywhere. Account creation still succeeds and hands the set-password link back to the admin instead. The deadline digest goes out over push alone. | `accounts enabled … mail=false`; `SMTP is not configured; the deadline digest goes out as a notification only`. |
 | `SOIREE_VAPID_*` | No push. The public key is omitted from the page entirely, so the client never offers to turn notifications on. The digest goes out by mail alone. | The config block in the page has no `vapidPublicKey`; `deadline reminders on … push=false`. |
+| `SOIREE_S3_*` (all five) | No attachments. The four routes are not mounted and answer the API's ordinary 404; the page's config block has no `attachments`, so no paperclip is drawn; `GET /plan` still carries an empty `attachments` list. The same happens with a bucket and no `DATABASE_URL`. | No `attachments enabled` line at startup. |
 | `SOIREE_REMINDER_ENABLED` | No scheduler at all. | `deadline reminders are off (SOIREE_REMINDER_ENABLED is not true)`. |
 | Reminders on, but neither mail nor push | Nothing is scheduled. One channel is enough; refusing to run because the *other* is missing would be one channel suppressing the one that works. | `deadline reminders are on but neither mail nor push is configured; no digest will be sent`. |
 | Passkeys asked for but unusable | Password login is untouched; the routes are not mounted and the browser is told not to offer the button. Never fatal: an account reachable by a passkey is always also reachable by its password, so refusing to start would turn a missing convenience into an outage. | `passkeys unavailable, leaving them off`. |
@@ -301,6 +304,78 @@ than being absent.
 A bare IP in `SOIREE_BASE_URL` also turns passkeys off, without complaint: a
 credential is scoped to a domain and an address is not one, so a deployment
 reached by address gets password login and nothing else.
+
+## Attachments: setting up the bucket
+
+The browser uploads to the bucket and downloads from it directly. soiree only
+signs the addresses. Four things follow, and the first three are yours to do.
+
+**1. A private bucket, and preferably a key of its own.** Nothing in the bucket
+is ever public; every read goes through an address that lives for a minute.
+The secret signs addresses that are handed to browsers, so if your provider
+allows it, give this bucket its own credential rather than reusing the one
+that writes your database backups.
+
+**2. A CORS rule that lets your pages `PUT`.** An upload is a cross-origin
+request from your site to the bucket, carrying a `Content-Type`, so the browser
+asks permission first and the bucket has to grant it. Downloads are ordinary
+links and need no rule.
+
+```json
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["https://soiree.example.test"],
+      "AllowedMethods": ["PUT"],
+      "AllowedHeaders": ["Content-Type"],
+      "MaxAgeSeconds": 3000
+    }
+  ]
+}
+```
+
+```bash
+aws s3api put-bucket-cors --endpoint-url "$SOIREE_S3_ENDPOINT" \
+  --bucket "$SOIREE_S3_BUCKET" --cors-configuration file://cors.json
+```
+
+Without it every upload fails in the browser with a network error, and nothing
+appears in soiree's log, because the request never reaches soiree.
+
+**3. If a proxy sets a Content-Security-Policy, allow the bucket in
+`connect-src`.** soiree sends no CSP of its own. One that says
+`connect-src 'self'` blocks the upload exactly as a missing CORS rule does, and
+as silently. The startup log names the origin to allow:
+
+```
+attachments enabled  browsers_connect_to=https://nbg1.your-objectstorage.com max_file_mb=25 total_mb=2048
+```
+
+**4. Check that your provider behaves.** "S3-compatible" is a claim, and the
+design leans on three behaviours a provider is free to get wrong: refusing an
+upload whose length differs from the one signed into its address (this is what
+makes the quota real), honouring a signed `Content-Disposition` and
+`Content-Type` on download (this is what stops an uploaded web page being served
+as one), and refusing an address after it expires. The same tests the project
+runs against a throwaway bucket run against yours:
+
+```bash
+SOIREE_TEST_S3_ENDPOINT=https://nbg1.your-objectstorage.com \
+SOIREE_TEST_S3_REGION=nbg1 SOIREE_TEST_S3_BUCKET=your-bucket \
+SOIREE_TEST_S3_ACCESS_KEY_ID=… SOIREE_TEST_S3_SECRET_ACCESS_KEY=… \
+  go test ./internal/objstore -run Bucket -v
+```
+
+They write only under `attachments/`, with random names, and delete what they
+wrote. If `TestBucketRefusesAnotherLength` fails, do not enable attachments on
+that provider: the per-file and total limits would be advice rather than limits.
+
+What soiree does by itself: an upload that is started and never confirmed is
+removed after an hour, and its reserved space given back. When a budget line or
+a task is deleted its files' records go with it inside the database, which also
+writes each object's key into a queue; soiree works through that queue at start
+and then hourly, and a key leaves the queue only once its object is confirmed
+gone. A bucket that is unreachable for a day loses nothing but time.
 
 ## Confirming each subsystem works
 
@@ -417,6 +492,21 @@ package's own reading is that sends keep being accepted and nothing arrives, so
 `delivered` stays healthy and `gone` stays at zero. There is no log line for
 that failure, which is the whole reason the key is worth keeping.
 
+### Attachments
+
+On a budget line that has been saved, press the paperclip beside its name, add
+a small file, and watch it appear. Then open the planner in a second browser:
+the count beside the paperclip is there without a reload, and the file
+downloads under its own name.
+
+| Symptom | Cause |
+|---|---|
+| No paperclip anywhere | Attachments are off: look for `attachments enabled` in the startup log. Also absent for a row that has not reached the server yet, and on a deployment with no database. |
+| "The upload did not get through", instantly, and nothing in soiree's log | The browser was not allowed to reach the bucket: the CORS rule or `connect-src`. The browser's console says which. |
+| "The upload failed" after the bar reaches 100% | The bucket refused the body, or the server could not confirm it. `could not check an uploaded file` in the log is the bucket not answering; the page retries that by itself. |
+| `an uploaded file is not the size that was declared` in the log | Your provider stored a body of a length other than the one signed. Run the provider check above. |
+| `could not delete a file yet; it stays queued` | The bucket was unreachable. It will be retried within the hour. |
+
 ### Reminders
 
 The scheduler runs once at startup and then once per schedule, which is
@@ -471,8 +561,20 @@ session. There is no admin view of anybody else's, by design.
 
 ## Backup and restore
 
-State is entirely in PostgreSQL; the container holds nothing. Back up the
-database the way the rest of your platform does.
+The container holds nothing. State is in PostgreSQL — and, if attachments are
+on, in the bucket. Back up the database the way the rest of your platform does.
+
+**The database backup does not contain the files.** It contains their records:
+which row each belongs to, its name, its size. The bytes are in the bucket, and
+nothing here copies them anywhere. If losing them matters, turn on versioning
+or replication at your storage provider; that is the bucket's backup, and it is
+separate from the database's.
+
+Restoring the two to different moments is safe but not seamless. A database
+older than a deletion lists a file whose object is gone: its download answers
+404 and everything else works. A database older than an upload does not know
+the object exists: it stays in the bucket, unreferenced, until somebody removes
+it by hand — soiree only deletes objects it has a record of deleting.
 
 Two things are worth knowing when restoring. The migration runner is
 idempotent and advisory-locked, so bringing replicas up against a restored
