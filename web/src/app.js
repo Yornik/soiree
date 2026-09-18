@@ -754,6 +754,13 @@
     state.notes.forEach(function (n) { if (!n.id) n.id = uid('n'); });
   })();
 
+  // The planner exactly as this page found it, before anybody touched it. When
+  // the plan arrives late — after a sign-in, on a tab reopened a week on — this
+  // is the only record of what the copy on screen looked like before the edits
+  // made to it, which is what tells an edit apart from a copy that is merely
+  // old. See adopt().
+  var loaded = JSON.parse(JSON.stringify(state));
+
   /* ==================================================================
    * THE SHARED BACKEND
    * ==================================================================
@@ -995,6 +1002,24 @@
       (plan[c.key] || []).forEach(function (w) {
         if (!w || !w.id) return;
         byId[w.id] = { row: rowFromWire(c, w), revision: Number(w.revision) || 0 };
+      });
+      sh[c.key] = byId;
+    });
+    return sh;
+  }
+
+  // A server id is a uuid; one minted here is a letter and seven characters of
+  // base 36 (see uid), until adoptServerId() renames it on the 201.
+  var SERVER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  // The stand-in shadow adopt() merges against. The revisions are never read:
+  // applyPlan() replaces every entry with the plan's own before it returns.
+  function shadowFromLoaded() {
+    var sh = { settings: { row: loaded, revision: 0 } };
+    COLLECTIONS.forEach(function (c) {
+      var byId = {};
+      (loaded[c.key] || []).forEach(function (r) {
+        if (r && r.id && SERVER_ID.test(r.id)) byId[r.id] = { row: cloneRow(c, r), revision: 0 };
       });
       sh[c.key] = byId;
     });
@@ -1555,6 +1580,31 @@
     var holdingRows = COLLECTIONS.some(function (c) {
       return (state[c.key] || []).length > 0;
     });
+
+    // Edited here, and the server has a plan of its own. "Something was typed
+    // between the cached copy painting and the plan arriving" was written for
+    // a gap of a few hundred milliseconds. Behind a sign-in it is as long as
+    // somebody takes to notice they are signed out — on a tab reopened after a
+    // week, showing a week-old copy, with nothing stopping them editing it.
+    // Letting this browser's copy win then does not keep a keystroke; it
+    // PATCHes every stale field over a week of other people's work, at the
+    // current revision and so with no 409, and POSTs back every row they
+    // deleted.
+    //
+    // So this is a merge as well, and the copy as it was loaded stands in for
+    // the shadow that was lost with the last page: a field that differs from
+    // it was edited here and is ours; everything else is theirs. Only rows the
+    // server once knew go into it — a row under an id this browser minted has
+    // never been sent, and applyPlan() must read its absence from the plan as
+    // "not created yet", not as "somebody deleted it".
+    if (dirty && !planIsEmpty) {
+      shadow = shadowFromLoaded();
+      applyPlan(plan);
+      renderAll();
+      openLive();
+      pushRefresh();
+      return;
+    }
 
     if (dirty || (hadSavedCopy && holdingRows && planIsEmpty)) {
       // The rows the server has that this browser has not are taken rather

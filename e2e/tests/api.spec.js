@@ -51,9 +51,8 @@ const {
   apiAuth,
   adoptSession,
   awaitPlan,
+  ensureEditor,
   freshSession,
-  ADMIN_EMAIL,
-  ADMIN_PASSWORD,
 } = require('./helpers');
 
 test.use({ baseURL: API_URL });
@@ -546,10 +545,19 @@ test('a planner built before the database existed is carried up, not wiped', asy
  * not the thing it asked for works.
  */
 async function openWithOwnSession(page, request) {
-  const cookie = await freshSession(request);
+  const who = await ensureEditor(request);
+  const cookie = await freshSession(request, API_URL, who);
   await adoptSession(page, cookie);
   await awaitPlan(page, () => page.goto('/'));
   return cookie;
+}
+
+async function signInThroughTheForm(page, request) {
+  const who = await ensureEditor(request);
+  await page.fill('#loginEmail', who.email);
+  await page.fill('#loginPassword', who.password);
+  await page.click('#loginSubmit');
+  await expect(page.locator('#authScreen')).toBeHidden();
 }
 
 async function endSession(request, cookie) {
@@ -579,10 +587,7 @@ test('a session that ends mid-edit asks for a sign-in, and the edit goes up afte
   // left it in for good.
   expect((await apiPlan(request)).budgetItems.map((i) => i.paid)).toEqual(['500.00']);
 
-  await page.fill('#loginEmail', ADMIN_EMAIL);
-  await page.fill('#loginPassword', ADMIN_PASSWORD);
-  await page.click('#loginSubmit');
-  await expect(page.locator('#authScreen')).toBeHidden();
+  await signInThroughTheForm(page, request);
 
   // The claim. Nobody touches the row again: signing in is what sends it.
   await expect
@@ -621,10 +626,7 @@ test('signing back in merges, and does not write a stale copy over everyone else
     `${API_URL}/api/v1/budget-items/${flowers.id}?revision=${flowers.revision}`, { headers });
   expect(removed.status()).toBe(204);
 
-  await page.fill('#loginEmail', ADMIN_EMAIL);
-  await page.fill('#loginPassword', ADMIN_PASSWORD);
-  await page.click('#loginSubmit');
-  await expect(page.locator('#authScreen')).toBeHidden();
+  await signInThroughTheForm(page, request);
 
   // Ours where we edited, theirs where we did not, and their delete stands.
   // A browser that let its own copy win would put `vendor` back to empty —
@@ -662,4 +664,67 @@ test('once the session has ended the page stops asking', async ({ page, request 
   page.off('request', note);
 
   expect(asked, 'a signed-out page should not keep asking the API').toEqual([]);
+});
+
+/*
+ * The same ending, met the ordinary way: not with the page open, but with the
+ * tab closed for a week. The page comes back, paints the copy of the plan this
+ * browser kept — that is what the cache is for — and is signed out, and
+ * nothing stops somebody editing what they see before they notice. Then they
+ * sign in.
+ *
+ * There is no shadow to merge against this time; it lived in the page that was
+ * closed. What there is instead is the copy as it was loaded, before anybody
+ * touched it, and that does the same job: a field that differs from it was
+ * edited here, and everything else is the server's.
+ */
+test('a reopened tab that was edited while signed out does not overwrite a week of other people', async ({ page, request }) => {
+  const cookie = await openWithOwnSession(page, request);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 2, paid: 0 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item).sort())
+    .toEqual(['Flowers', 'Venue deposit']);
+
+  // The tab is closed. Literally: a page left open would hear about the edits
+  // below over its event stream, find its session gone and take itself to the
+  // sign-in screen — which is the other spec, and whether it got there before
+  // the reload would be a race. Leaving the origin is what closing a tab is;
+  // the cookie jar and localStorage stay, as they would.
+  await page.goto('about:blank');
+
+  // The week goes by: the session ends, and other people carry on.
+  await endSession(request, cookie);
+  const headers = await apiAuth(request);
+  const before = await apiPlan(request);
+  const venue = before.budgetItems.find((i) => i.item === 'Venue deposit');
+  const flowers = before.budgetItems.find((i) => i.item === 'Flowers');
+  // `unit` is a field the page draws and `vendor` is one it does not, and a
+  // stale copy damages them differently: the first is PATCHed back to what it
+  // was a week ago, the second is left alone. Both have to survive.
+  expect((await request.patch(`${API_URL}/api/v1/budget-items/${venue.id}`, {
+    headers, data: { revision: venue.revision, vendor: 'The Orangery', unit: '2600.00' },
+  })).status()).toBe(200);
+  expect((await request.delete(
+    `${API_URL}/api/v1/budget-items/${flowers.id}?revision=${flowers.revision}`, { headers })).status()).toBe(204);
+
+  // The tab is reopened. Signed out, and showing the copy it kept.
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).item).toHaveValue('Venue deposit');
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+
+  await page.goto('/#/login');
+  await signInThroughTheForm(page, request);
+
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.paid, i.vendor, i.unit]), {
+      message: 'only what was edited here should go up; the rest is a week out of date',
+    })
+    .toEqual([['Venue deposit', '750.00', 'The Orangery', '2600.00']]);
+  await expect(budgetRow(page, 0).unit).toHaveValue('2600');
 });

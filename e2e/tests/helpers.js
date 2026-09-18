@@ -258,9 +258,9 @@ async function apiSignIn(request, base = API_URL) {
  * quarter hour), so this is for the two or three specs that need it and not a
  * replacement for apiSignIn.
  */
-async function freshSession(request, base = API_URL) {
+async function freshSession(request, base = API_URL, who = { email: ADMIN_EMAIL, password: ADMIN_PASSWORD }) {
   const res = await request.post(`${base}/api/v1/auth/login`, {
-    data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
+    data: { email: who.email, password: who.password },
   });
   if (res.status() === 404) return null;
   expect(res.status(), 'POST /api/v1/auth/login').toBe(200);
@@ -273,6 +273,44 @@ async function freshSession(request, base = API_URL) {
   expect(setCookie, 'login set no session cookie').toBeTruthy();
 
   return setCookie.split(';')[0];
+}
+
+/**
+ * A second account, for the specs that sign in more than once.
+ *
+ * The login limiter counts per account as well as per address — ten in a
+ * quarter of an hour — and the whole run otherwise shares the admin. A spec
+ * that ends its own session and signs in again through the form spends two
+ * logins a time; charging those to the admin's bucket would make the LAST spec
+ * in the file fail with a 429 the day somebody adds an eleventh, a long way
+ * from the cause.
+ *
+ * Made the way a real one is: an admin creates it, this deployment has no SMTP
+ * so the link comes back in the response, and the token in it sets the
+ * password. An editor, because that is the least privilege that can write.
+ */
+const EDITOR = { email: 'grace-e2e@example.test', password: 'a-second-long-password' };
+const editors = new Set();
+
+async function ensureEditor(request, base = API_URL) {
+  if (editors.has(base)) return EDITOR;
+
+  const headers = await apiAuth(request, base);
+  const made = await request.post(`${base}/api/v1/users`, {
+    headers, data: { email: EDITOR.email, role: 'editor' },
+  });
+  // 409: a server left running from an earlier run already has it.
+  if (made.status() !== 409) {
+    expect(made.status(), 'POST /api/v1/users').toBe(201);
+    const link = (await made.json()).setPasswordUrl;
+    expect(link, 'with no SMTP the set-password link comes back in the response').toBeTruthy();
+    const set = await request.post(`${base}/api/v1/auth/set-password`, {
+      data: { token: link.split('token=')[1], password: EDITOR.password },
+    });
+    expect(set.status(), 'POST /api/v1/auth/set-password').toBe(204);
+  }
+  editors.add(base);
+  return EDITOR;
 }
 
 /** Headers carrying the session, for a raw request context. */
@@ -430,6 +468,7 @@ module.exports = {
   ADMIN_PASSWORD,
   adoptSession,
   apiSignIn,
+  ensureEditor,
   freshSession,
   signInPage,
   apiAuth,
