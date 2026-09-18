@@ -118,15 +118,19 @@ The variable can stay set afterwards — it is consumed only while no admin
 exists, so it cannot put the old password back.
 
 Creating everybody else is the same screen: an address, a role (`admin`,
-`editor` or `viewer`) and a language. There is no self-service sign-up and no
-open invitation link; an admin creates each account.
+`editor` or `viewer`) and the language of the invitation. There is no
+self-service sign-up and no open invitation link; an admin creates each
+account.
 
-The language is what that person is written to in. *Same as the planner* means
-`SOIREE_LOCALE`, and is resolved each time a mail is written, so changing the
-locale later takes those accounts with it. Choosing one — for the Dutch half of
-a family on a deployment set to `id-ID`, say — puts the invitation in it, makes
-the link open in it, and turns the planner to it once they sign in. It can be
-changed afterwards from the same list, for anybody including yourself.
+The language is a choice about that one mail. *Same as the planner* means
+`SOIREE_LOCALE`. Choosing one — for the Dutch half of a family on a deployment
+set to `id-ID`, say — writes the invitation in it and makes the link open in
+it. It is not stored. After that first screen the planner follows the reader's
+own browser, and there are three flags at the top of every screen for anybody
+it guessed wrong about; their choice is remembered on their device. Sending a
+link again offers the same choice beside the button, and a reset somebody asks
+for themselves is written in the language they were reading the sign-in screen
+in.
 
 With SMTP configured the link goes to the person it belongs to and nowhere else
 — an admin who never sees it cannot use it. Without SMTP the screen shows the

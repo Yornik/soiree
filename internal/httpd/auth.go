@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -129,8 +130,8 @@ type AuthOptions struct {
 	TrustProxyHeaders bool
 
 	// Locale is the deployment's SOIREE_LOCALE. Only its language is used
-	// here: it is what an account with no language of its own is written to
-	// in, which keeps the mail in step with the page that account opens.
+	// here: it is what a mail is written in when whoever asked for it did not
+	// say, which keeps the mail in step with the page its link opens.
 	Locale string
 }
 
@@ -143,7 +144,7 @@ type Auth struct {
 	trustProxy bool
 
 	// defaultLanguage is the deployment's language, resolved once. See
-	// languageFor.
+	// mailLanguage.
 	defaultLanguage string
 
 	loginIP   *limiter
@@ -275,11 +276,6 @@ type userDTO struct {
 	CreatedAt time.Time  `json:"createdAt"`
 	Revision  int64      `json:"revision"`
 	UpdatedAt time.Time  `json:"updatedAt"`
-	// Language is the language this person is written to in, or null for
-	// "whatever the deployment speaks". Null is published as null rather than
-	// resolved here: the page has to be able to show that nothing was chosen,
-	// and to offer that again as a choice.
-	Language *string `json:"language"`
 }
 
 func toDTO(u store.User) userDTO {
@@ -292,7 +288,6 @@ func toDTO(u store.User) userDTO {
 		CreatedAt: u.CreatedAt,
 		Revision:  u.Revision,
 		UpdatedAt: u.UpdatedAt,
-		Language:  u.Language,
 	}
 }
 
@@ -449,6 +444,8 @@ func (a *Auth) handleSession(w http.ResponseWriter, r *http.Request) {
 
 type passwordResetRequest struct {
 	Email string `json:"email"`
+	// Language is the language the sign-in screen is being read in. Optional.
+	Language *string `json:"language"`
 }
 
 // handlePasswordReset mails a set-password link, if there is anybody to mail
@@ -466,6 +463,18 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := normaliseEmail(req.Email)
+
+	// The sign-in screen sends the language it is being read in, which is the
+	// best evidence there is of what this person reads: nobody else is
+	// involved in a reset, and the server has never seen their browser. One it
+	// has no translation for is ignored rather than refused — this endpoint
+	// answers 202 to everything, and a language is not worth an exception.
+	var language *string
+	if req.Language != nil {
+		if l, ok := parseLanguage(*req.Language); ok {
+			language = &l
+		}
+	}
 
 	a.background(func(ctx context.Context) {
 		if email == "" {
@@ -487,7 +496,7 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		if user.Status == store.StatusInvited {
 			purpose = store.PurposeInvite
 		}
-		if _, err := a.issueToken(ctx, user, purpose); err != nil {
+		if _, err := a.issueToken(ctx, user, purpose, language); err != nil {
 			a.log.Error("could not issue a reset link", "user", user.ID, "err", err)
 		}
 	})
@@ -604,9 +613,13 @@ func (a *Auth) handleGetUser(w http.ResponseWriter, r *http.Request) {
 type createUserRequest struct {
 	Email string `json:"email"`
 	Role  string `json:"role"`
-	// Language is optional. Omitted or null, the account follows the
-	// deployment; the admin creating it is the one person who knows whether
-	// that is the right language for who they are inviting.
+	// Language is the language of the invitation, and of nothing else: it is
+	// used to write this one mail and the link inside it, and is not stored.
+	// The admin creating the account is the one person who knows what the
+	// person they are inviting reads; after that first mail, the page follows
+	// the reader's own browser, which is better evidence than anything an
+	// admin typed once. Omitted or null, the mail is in the deployment's
+	// language.
 	Language *string `json:"language"`
 }
 
@@ -647,14 +660,9 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var language *string
-	if req.Language != nil {
-		l, ok := parseLanguage(*req.Language)
-		if !ok {
-			writeError(w, http.StatusBadRequest, "invalid_language", "language must be one of "+strings.Join(languages, ", "))
-			return
-		}
-		language = &l
+	language, ok := a.chosenLanguage(w, req.Language)
+	if !ok {
+		return
 	}
 
 	user, err := a.store.CreateUser(r.Context(), store.User{
@@ -662,7 +670,6 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Role:      role,
 		Status:    store.StatusInvited,
 		CreatedBy: &actor.ID,
-		Language:  language,
 	})
 	if err != nil {
 		if store.IsUniqueViolation(err) {
@@ -675,7 +682,7 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	a.log.Info("account created", "user", user.ID, "role", user.Role, "by", actor.ID)
 
-	a.respondWithInvite(w, r, user, store.PurposeInvite, http.StatusCreated)
+	a.respondWithInvite(w, r, user, store.PurposeInvite, language, http.StatusCreated)
 }
 
 // handleInvite issues a fresh link for an existing account: the first one
@@ -699,12 +706,47 @@ func (a *Auth) handleInvite(w http.ResponseWriter, r *http.Request) {
 	if user.Status == store.StatusInvited {
 		purpose = store.PurposeInvite
 	}
-	a.respondWithInvite(w, r, user, purpose, http.StatusOK)
+
+	// The body is optional, and so is everything in it. This route took no
+	// body at all before a mail had a language, and `curl -X POST` with
+	// nothing attached must go on meaning "send it, in the usual language".
+	var req inviteRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json", "")
+		return
+	}
+	language, ok := a.chosenLanguage(w, req.Language)
+	if !ok {
+		return
+	}
+	a.respondWithInvite(w, r, user, purpose, language, http.StatusOK)
+}
+
+type inviteRequest struct {
+	// Language is the language of this one mail. See createUserRequest.
+	Language *string `json:"language"`
+}
+
+// chosenLanguage reads the language an admin picked for a mail. Nil and true
+// means nothing was picked. A language there is no translation for is refused
+// rather than quietly answered in another one: an admin who asked for Dutch
+// and sent English would not find out.
+func (a *Auth) chosenLanguage(w http.ResponseWriter, asked *string) (*string, bool) {
+	if asked == nil {
+		return nil, true
+	}
+	l, ok := parseLanguage(*asked)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_language", "language must be one of "+strings.Join(languages, ", "))
+		return nil, false
+	}
+	return &l, true
 }
 
 // respondWithInvite mints the link and decides who gets to see it.
-func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user store.User, purpose store.TokenPurpose, status int) {
-	link, err := a.issueToken(r.Context(), user, purpose)
+func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user store.User, purpose store.TokenPurpose, language *string, status int) {
+	link, err := a.issueToken(r.Context(), user, purpose, language)
 	if err != nil {
 		a.log.Error("could not issue a set-password link", "user", user.ID, "err", err)
 		// The account exists; only the link failed. Say so rather than
@@ -727,7 +769,10 @@ func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user st
 //
 // The return value is a credential. It goes into a response only on the
 // no-SMTP path, and it is never logged anywhere.
-func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.TokenPurpose) (string, error) {
+//
+// language is whatever whoever asked for the mail said it should be in, or nil.
+// It shapes this mail and this link and is kept nowhere.
+func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.TokenPurpose, language *string) (string, error) {
 	token, err := auth.NewToken()
 	if err != nil {
 		return "", err
@@ -741,9 +786,9 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 		return "", err
 	}
 
-	link := a.setPasswordURL(token, user.Language)
+	link := a.setPasswordURL(token, language)
 	if a.mailer != nil {
-		subject, body := inviteMessage(purpose, link, a.languageFor(user))
+		subject, body := inviteMessage(purpose, link, a.mailLanguage(language))
 		a.background(func(ctx context.Context) {
 			if err := a.mailer.Send(ctx, user.Email, subject, body); err != nil {
 				// The error, never the message. The body is the link.
@@ -763,11 +808,11 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 // from configuration and never from the request's Host header, which the
 // client controls.
 //
-// An account with a language of its own gets it as ?lang=, so the screen the
+// A mail somebody chose a language for carries it as ?lang=, so the screen the
 // link opens is in the language the mail was. That part is a query string and
 // is sent to the server, which is fine: it is a language tag, and the secret
-// is still behind the #. An account with no language gets the bare link, and
-// the page opens in the deployment's language — the same one the mail used.
+// is still behind the #. With no language chosen the link is bare, and the
+// page decides for itself — from the reader's browser, then the deployment.
 func (a *Auth) setPasswordURL(token string, language *string) string {
 	query := ""
 	if language != nil {
@@ -824,11 +869,6 @@ type updateUserRequest struct {
 	Role     *string `json:"role"`
 	Status   *string `json:"status"`
 	Email    *string `json:"email"`
-	// Language has three states, which is why it is not a pointer like the
-	// rest: omitted leaves it alone, a tag sets it, and an explicit null puts
-	// the account back to following the deployment. A pointer cannot tell the
-	// first from the last.
-	Language optional[string] `json:"language"`
 }
 
 // handleUpdateUser changes a role, a status or an address.
@@ -902,22 +942,6 @@ func (a *Auth) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		next.Email = email
 	}
-	// Not covered by the self-change rule above, on purpose. That rule exists
-	// because demoting yourself can leave no way back in; the language you are
-	// written to in cannot lock anybody out of anything.
-	if req.Language.set {
-		if req.Language.value == nil {
-			next.Language = nil
-		} else {
-			l, ok := parseLanguage(*req.Language.value)
-			if !ok {
-				writeError(w, http.StatusBadRequest, "invalid_language", "language must be one of "+strings.Join(languages, ", "))
-				return
-			}
-			next.Language = &l
-		}
-	}
-
 	updated, err := a.store.UpdateUser(r.Context(), next)
 	if err != nil {
 		var stale *store.StaleRevisionError

@@ -80,6 +80,46 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
+/* --- Language switcher ---
+   One quiet row above everything, because it belongs to the planner and to
+   the accounts screens alike. The flags are small on purpose: this is a
+   control most people use once, and it should not compete with the event's
+   name underneath it. The target is larger than the picture — 24 by 16 is a
+   flag, and nobody's thumb. */
+.lang-switch {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 10px 14px 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.lang-switch + .wrap { padding-top: 12px; }
+.flag-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 6px;
+  line-height: 0;
+  cursor: pointer;
+  /* Quieter than the one in use, and no quieter: at half strength a red and
+     white flag on a dark page is a grey smudge, and the underline below is
+     what marks the current one in any case. */
+  opacity: 0.8;
+}
+.flag-btn svg {
+  display: block;
+  border-radius: 2px;
+  /* A white stripe on a white page has no edge of its own. */
+  box-shadow: 0 0 0 1px var(--rule-mid);
+}
+.flag-btn:hover, .flag-btn:focus-visible { opacity: 1; }
+.flag-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+/* The language the page is in. Full strength and underlined, so that it does
+   not rest on telling two red-and-white flags apart by their blue. */
+.flag-btn[aria-pressed="true"] { opacity: 1; box-shadow: inset 0 -2px 0 var(--ink); }
+
 .wrap {
   max-width: 1000px;
   margin: 0 auto;
@@ -831,6 +871,7 @@ body.is-archived .when-data { display: block; }
   margin: 0 auto;
   padding: 34px 20px 80px;
 }
+.lang-switch ~ .auth-wrap { padding-top: 12px; }
 body.showing-auth #plannerWrap { display: none; }
 
 /* An archived ledger greys its own fields and hides its own add buttons. The

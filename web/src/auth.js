@@ -65,8 +65,9 @@
    * Interface language
    * ------------------------------------------------------------------
    * The same three languages as the planner, and the same choice of which.
-   * app.js resolves it — ?lang= in the URL, then the deployment's locale, then
-   * English — and writes the answer to <html lang>. It is a deferred script
+   * app.js resolves it — ?lang= in the URL, then the reader's own browser, then
+   * the deployment's locale, then English — and writes the answer to
+   * <html lang>. It is a deferred script
    * ahead of this one in the document, so by the time this line runs the
    * answer is there; reading it, rather than resolving it a second time, is
    * what keeps the sign-in screen from ever disagreeing with the page behind
@@ -132,9 +133,9 @@
       'people.roles': 'A viewer reads the ledger. An editor changes it. An admin also decides who has an account.',
       'people.needemail': 'Enter the address the invitation should go to.',
       'people.language': 'Language',
-      'people.language.hint': 'The invitation, and the screens it opens, are written in this language.',
+      'people.language.hint': 'The language of the invitation, and of the screen it opens. It is not kept: after that, the planner follows their own browser.',
       'lang.default': 'Same as the planner ({name})',
-      'person.language.aria': 'Language for {email}',
+      'person.language.aria': 'Language of the next mail to {email}',
       'e.invalid_language': 'That language has no translation here.',
       'opt.viewer': 'Viewer',
       'opt.editor': 'Editor',
@@ -254,9 +255,9 @@
       'people.roles': 'Een lezer bekijkt het kasboek. Een bewerker past het aan. Een beheerder bepaalt ook wie een account heeft.',
       'people.needemail': 'Vul het adres in waar de uitnodiging naartoe moet.',
       'people.language': 'Taal',
-      'people.language.hint': 'De uitnodiging, en de schermen die ze opent, zijn in deze taal.',
+      'people.language.hint': 'De taal van de uitnodiging, en van het scherm dat ze opent. Ze wordt niet bewaard: daarna volgt de planner hun eigen browser.',
       'lang.default': 'Zelfde als de planner ({name})',
-      'person.language.aria': 'Taal van {email}',
+      'person.language.aria': 'Taal van de volgende mail aan {email}',
       'e.invalid_language': 'Voor die taal is hier geen vertaling.',
       'opt.viewer': 'Lezer',
       'opt.editor': 'Bewerker',
@@ -376,9 +377,9 @@
       'people.roles': 'Pembaca melihat buku kas. Penyunting mengubahnya. Admin juga menentukan siapa yang punya akun.',
       'people.needemail': 'Isi alamat tujuan undangan.',
       'people.language': 'Bahasa',
-      'people.language.hint': 'Undangan, dan layar yang dibukanya, ditulis dalam bahasa ini.',
+      'people.language.hint': 'Bahasa undangan, dan bahasa layar yang dibukanya. Pilihan ini tidak disimpan: setelah itu perencana mengikuti browser mereka sendiri.',
       'lang.default': 'Sama dengan perencana ({name})',
-      'person.language.aria': 'Bahasa untuk {email}',
+      'person.language.aria': 'Bahasa email berikutnya untuk {email}',
       'e.invalid_language': 'Bahasa itu belum ada terjemahannya di sini.',
       'opt.viewer': 'Pembaca',
       'opt.editor': 'Penyunting',
@@ -461,8 +462,8 @@
 
   var LANG = knownLanguage(document.documentElement.lang) || 'en';
 
-  // What the deployment speaks: what an account with no language of its own
-  // is written to in. The same rule the server applies to the same value.
+  // What the deployment speaks: what a mail is written in when nobody chose.
+  // The same rule the server applies to the same value.
   var DEPLOYMENT_LANGUAGE = knownLanguage(CONFIG.language) || knownLanguage(CONFIG.locale) || 'en';
 
   // Each in its own language, and so not in the table: somebody looking for
@@ -759,7 +760,7 @@
     // than none. Announced from here because this is the one place the session
     // changes, so a sign-out reaches it too.
     document.dispatchEvent(new CustomEvent('soiree:session', {
-      detail: { signedIn: next === 'in', role: user && user.role, language: user && user.language }
+      detail: { signedIn: next === 'in', role: user && user.role }
     }));
   }
 
@@ -817,10 +818,10 @@
     });
   }
 
-  /* The planner changed language — because whoever just signed in has one of
-   * their own. It owns that decision (see followAccount in app.js); this only
-   * has to say again, in the new language, whatever it has on screen. Every
-   * render here is idempotent, which is what makes that a short list. */
+  /* Somebody picked another language from the switcher. app.js owns that
+   * decision and has already re-said everything of its own; this has to say
+   * again, in the new language, whatever it has on screen. Every render here
+   * is idempotent, which is what keeps that a short list. */
   document.addEventListener('soiree:language', function (ev) {
     var tag = knownLanguage(ev && ev.detail && ev.detail.language);
     if (!tag || tag === LANG) return;
@@ -1153,7 +1154,9 @@
           return;
         }
         forgot.disabled = true;
-        request('POST', '/auth/password-reset', { email: email }).then(function (res) {
+        // With the language this screen is being read in. Nobody else is
+        // involved in a reset, and the server has never seen this browser.
+        request('POST', '/auth/password-reset', { email: email, language: LANG }).then(function (res) {
           forgot.disabled = false;
           if (res.status === 202) {
             // Deliberately the same sentence whether or not that address has
@@ -1298,13 +1301,16 @@
     drawPeople();
   }
 
-  /* The languages somebody can be written to in.
+  /* The languages a mail can be written in.
    *
    * The first choice is "nothing chosen", and it names the language that
    * means: an admin deciding whether to pick one needs to know what happens
-   * if they do not. It is sent as null rather than as that language's tag, so
-   * that an operator who later changes the deployment's locale takes every
-   * account that never chose along with it. */
+   * if they do not.
+   *
+   * The choice is about one mail and is kept nowhere — not on the account, and
+   * not here. What somebody reads is better learned from their own browser
+   * each time they arrive than fixed by whoever invited them, and their
+   * browser is theirs to change. */
   function fillLanguageChoice(select, current) {
     if (!select) return;
     var keep = current === undefined ? select.value : (current || '');
@@ -1367,26 +1373,21 @@
       acts.appendChild(sel);
     }
 
-    /* The language they are written to in. Offered on your own row as well:
-     * the server's self-change rule is about not locking yourself out, and
-     * this cannot. */
-    var lang = make('select', 'person-language');
-    lang.setAttribute('aria-label', t('person.language.aria', { email: p.email }));
-    fillLanguageChoice(lang, p.language || null);
-    lang.addEventListener('change', function () {
-      patchPerson(p, { language: lang.value || null }, lang);
-    });
-    acts.appendChild(lang);
-
     /* A fresh link. Issuing one supersedes whatever was outstanding, so this
      * is also how a link that went astray is revoked. Not offered for an
      * account with no access: the server refuses it, and telling somebody to
      * turn access back on first is more use than a refusal. */
     if (p.status !== 'disabled') {
+      // The language of that link's mail, chosen when it is sent. It changes
+      // nothing by itself and saves nothing.
+      var lang = make('select', 'person-language');
+      lang.setAttribute('aria-label', t('person.language.aria', { email: p.email }));
+      fillLanguageChoice(lang, null);
+      acts.appendChild(lang);
       acts.appendChild(actButton(
         t(p.status === 'invited' ? 'person.resend' : 'person.sendlink'),
         'link-btn',
-        function (btn) { invite(p, btn); }
+        function (btn) { invite(p, btn, lang.value); }
       ));
     }
 
@@ -1429,11 +1430,6 @@
       if (control) control.disabled = false;
       if (res.status === 200 && res.body) {
         adoptPerson(res.body);
-        // Your own language, changed from your own row: the page should turn
-        // to it now rather than at the next sign-in.
-        if (user && res.body.id === user.id && res.body.language !== user.language) {
-          setSession('in', res.body);
-        }
         return;
       }
       if (res.status === 409 && res.body && res.body.current) {
@@ -1466,10 +1462,10 @@
       });
   }
 
-  function invite(p, control) {
+  function invite(p, control, language) {
     if (control) control.disabled = true;
     adminSays('');
-    request('POST', '/users/' + p.id + '/invite', {}).then(function (res) {
+    request('POST', '/users/' + p.id + '/invite', language ? { language: language } : {}).then(function (res) {
       if (control) control.disabled = false;
       if (res.status === 200 && res.body) {
         if (res.body.user) adoptPerson(res.body.user);
@@ -1526,8 +1522,8 @@
       submit.disabled = true;
       adminSays('');
       var made = { email: email, role: role };
-      // Left out entirely when nothing was chosen, which is what "follow the
-      // deployment" is on the wire.
+      // Left out entirely when nothing was chosen, which is what "the
+      // deployment's language" is on the wire.
       if (language) made.language = language;
       request('POST', '/users', made).then(function (res) {
         submit.disabled = false;

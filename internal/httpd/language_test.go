@@ -63,9 +63,30 @@ func TestParseLanguage(t *testing.T) {
 	}
 }
 
-// The reason the feature exists. The deployment speaks one language and the
-// person being invited reads another; the admin says so, and everything that
-// person then receives — the mail, and the screen its link opens — follows.
+// linkIn finds the link in a mail body. It is on a line of its own; see
+// TestEveryLanguageHasItsOwnMails.
+func linkIn(t *testing.T, body string) *url.URL {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "https://") {
+			u, err := url.Parse(line)
+			if err != nil {
+				t.Fatalf("the link does not parse: %q: %v", line, err)
+			}
+			return u
+		}
+	}
+	t.Fatalf("no link in the body: %q", body)
+	return nil
+}
+
+// The reason a mail has a language at all. The deployment speaks one and the
+// person being invited reads another; the admin says so, for this mail, and
+// the mail and the screen its link opens follow.
+//
+// And nothing else does. The choice is not stored: what somebody reads is
+// better learned from their own browser each time they arrive than fixed in a
+// column by whoever invited them.
 func TestAnInvitationIsWrittenInTheLanguageTheAdminChose(t *testing.T) {
 	f := newFixtureIn(t, true, "id-ID")
 	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
@@ -76,9 +97,9 @@ func TestAnInvitationIsWrittenInTheLanguageTheAdminChose(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
 	}
-	created := decodeTestBody[createUserResponse](t, rec)
-	if created.User.Language == nil || *created.User.Language != "nl" {
-		t.Fatalf("language = %v, want nl (normalised from nl-NL)", created.User.Language)
+	// Not on the account, in any spelling. It was a fact about one mail.
+	if strings.Contains(rec.Body.String(), "language") || strings.Contains(rec.Body.String(), `"nl"`) {
+		t.Errorf("the account carries the language of its invitation: %s", rec.Body)
 	}
 
 	sent := f.mail.messages()
@@ -90,45 +111,25 @@ func TestAnInvitationIsWrittenInTheLanguageTheAdminChose(t *testing.T) {
 	}
 
 	// The link opens the page in the same language as the mail around it.
-	var link string
-	for _, line := range strings.Split(sent[0].body, "\n") {
-		if strings.HasPrefix(line, "https://") {
-			link = line
-		}
-	}
-	u, err := url.Parse(link)
-	if err != nil || link == "" {
-		t.Fatalf("no link in the body: %q (%v)", sent[0].body, err)
-	}
+	u := linkIn(t, sent[0].body)
 	if got := u.Query().Get("lang"); got != "nl" {
-		t.Errorf("the link asks for lang=%q, want nl: %s", got, link)
+		t.Errorf("the link asks for lang=%q, want nl: %s", got, u)
 	}
 	// And adding a query string did not move the secret into it. The query is
 	// sent to the server and lands in its logs; the fragment never is.
-	if u.Query().Get("token") != "" || strings.Contains(u.RawQuery, "token") {
-		t.Errorf("the token is in the query string: %s", link)
+	if strings.Contains(u.RawQuery, "token") {
+		t.Errorf("the token is in the query string: %s", u)
 	}
-	token := tokenFromLink(t, link)
-
 	rec = f.do(t, http.MethodPost, "/api/v1/auth/set-password",
-		map[string]string{"token": token, "password": goodPassword}, nil)
+		map[string]string{"token": tokenFromLink(t, u.String()), "password": goodPassword}, nil)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("set-password with the token from a ?lang= link: %d %s", rec.Code, rec.Body)
 	}
-
-	// A reset, later, is in their language too — it is the account's, not the
-	// invitation's.
-	f.do(t, http.MethodPost, "/api/v1/auth/password-reset", map[string]string{"email": "linus@example.test"}, nil)
-	sent = f.mail.messages()
-	if len(sent) != 2 || sent[1].subject != "Stel een nieuw wachtwoord in" {
-		t.Errorf("reset mail = %+v, want the Dutch reset", sent[len(sent)-1])
-	}
 }
 
-// Nothing chosen means the deployment's language, resolved when the mail is
-// written rather than frozen into the row — and a link with no ?lang=, because
-// the page it opens is already going to be in that language.
-func TestAnAccountWithNoLanguageFollowsTheDeployment(t *testing.T) {
+// Nobody chose: the deployment's language, and a bare link, so that the page
+// it opens decides for itself from the reader's browser.
+func TestAMailNobodyChoseALanguageForIsInTheDeployments(t *testing.T) {
 	f := newFixtureIn(t, true, "id-ID")
 	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
 	admin := f.login(t, "ada@example.test", goodPassword)
@@ -138,22 +139,55 @@ func TestAnAccountWithNoLanguageFollowsTheDeployment(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
 	}
-	if got := decodeTestBody[createUserResponse](t, rec).User.Language; got != nil {
-		t.Errorf("language = %q, want null: nothing was chosen, and the page has to be able to say so", *got)
-	}
-
 	sent := f.mail.messages()
 	if len(sent) != 1 || sent[0].subject != "Akunmu sudah siap" {
 		t.Fatalf("mail = %+v, want the Indonesian invitation", sent)
 	}
 	if strings.Contains(sent[0].body, "lang=") {
-		t.Errorf("a link for an account with no language carries one: %q", sent[0].body)
+		t.Errorf("a mail nobody chose a language for carries one in its link: %q", sent[0].body)
 	}
 }
 
-func TestLanguageIsValidatedAndPatchedInThreeStates(t *testing.T) {
-	f := newFixture(t, false)
-	ada := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+// A reset has no admin in it. The sign-in screen says which language it is
+// being read in, and that is the best evidence there is.
+func TestAResetIsWrittenInTheLanguageItWasAskedForIn(t *testing.T) {
+	f := newFixtureIn(t, true, "id-ID")
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+
+	ask := func(body map[string]string) sentMail {
+		t.Helper()
+		before := len(f.mail.messages())
+		rec := f.do(t, http.MethodPost, "/api/v1/auth/password-reset", body, nil)
+		// 202 whatever was sent, the language included: this endpoint does not
+		// make exceptions, because every exception is something to probe.
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("password-reset %v: %d %s", body, rec.Code, rec.Body)
+		}
+		sent := f.mail.messages()
+		if len(sent) != before+1 {
+			t.Fatalf("password-reset %v sent %d mails, want 1", body, len(sent)-before)
+		}
+		return sent[len(sent)-1]
+	}
+
+	if got := ask(map[string]string{"email": "ada@example.test", "language": "nl"}); got.subject != "Stel een nieuw wachtwoord in" {
+		t.Errorf("asked for in Dutch, written as %q", got.subject)
+	} else if linkIn(t, got.body).Query().Get("lang") != "nl" {
+		t.Errorf("the Dutch reset's link does not open in Dutch: %q", got.body)
+	}
+	if got := ask(map[string]string{"email": "ada@example.test"}); got.subject != "Buat kata sandi baru" {
+		t.Errorf("no language sent on an Indonesian deployment, written as %q", got.subject)
+	}
+	if got := ask(map[string]string{"email": "ada@example.test", "language": "tlh"}); got.subject != "Buat kata sandi baru" {
+		t.Errorf("a language with no translation should fall back to the deployment's, got %q", got.subject)
+	}
+}
+
+// Sending a link again is a new mail, and gets its own choice. It took no body
+// at all before a mail had a language, and that has to go on working.
+func TestReinvitingTakesALanguageAndStillNeedsNoBody(t *testing.T) {
+	f := newFixtureIn(t, true, "en-US")
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
 	admin := f.login(t, "ada@example.test", goodPassword)
 
 	rec := f.do(t, http.MethodPost, "/api/v1/users",
@@ -161,56 +195,32 @@ func TestLanguageIsValidatedAndPatchedInThreeStates(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_language") {
 		t.Fatalf("a language with no translation: %d %s, want 400 invalid_language", rec.Code, rec.Body)
 	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Fatalf("a refused invitation sent %d mails", n)
+	}
 
-	// With no SMTP the link comes back, and it carries the language as well.
 	rec = f.do(t, http.MethodPost, "/api/v1/users",
-		map[string]string{"email": "linus@example.test", "role": "viewer", "language": "id"}, admin)
-	created := decodeTestBody[createUserResponse](t, rec)
-	if !strings.Contains(created.SetPasswordURL, "/?lang=id#/set-password?token=") {
-		t.Errorf("setPasswordUrl = %q, want it to open in Indonesian", created.SetPasswordURL)
-	}
-	linus := created.User
+		map[string]string{"email": "linus@example.test", "role": "viewer"}, admin)
+	id := decodeTestBody[createUserResponse](t, rec).User.ID.String()
 
-	patch := func(id string, body map[string]any) userDTO {
-		t.Helper()
-		rec := f.do(t, http.MethodPatch, "/api/v1/users/"+id, body, admin)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("PATCH %v: %d %s", body, rec.Code, rec.Body)
-		}
-		return decodeTestBody[userDTO](t, rec)
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+id+"/invite", nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invite with no body at all: %d %s", rec.Code, rec.Body)
 	}
-
-	// Omitted: left alone. A role change must not quietly reset it.
-	got := patch(linus.ID.String(), map[string]any{"revision": linus.Revision, "role": "editor"})
-	if got.Language == nil || *got.Language != "id" {
-		t.Errorf("a patch that did not mention language changed it to %v", got.Language)
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+id+"/invite", map[string]string{"language": "id"}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invite in Indonesian: %d %s", rec.Code, rec.Body)
 	}
-	// A tag: set.
-	got = patch(linus.ID.String(), map[string]any{"revision": got.Revision, "language": "nl"})
-	if got.Language == nil || *got.Language != "nl" {
-		t.Errorf("language = %v, want nl", got.Language)
-	}
-	// Null: back to following the deployment.
-	got = patch(linus.ID.String(), map[string]any{"revision": got.Revision, "language": nil})
-	if got.Language != nil {
-		t.Errorf("an explicit null left language at %q", *got.Language)
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+id+"/invite", map[string]string{"language": "fr"}, admin)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_language") {
+		t.Fatalf("invite in a language with no translation: %d %s", rec.Code, rec.Body)
 	}
 
-	// An admin may change their own. The self-change rule is about not locking
-	// yourself out, and a language cannot do that.
-	me, err := f.store.User(t.Context(), ada.ID)
-	if err != nil {
-		t.Fatal(err)
+	sent := f.mail.messages()
+	if len(sent) != 3 {
+		t.Fatalf("mails = %d, want 3: the invitation and two re-sends", len(sent))
 	}
-	got = patch(ada.ID.String(), map[string]any{"revision": me.Revision, "language": "nl"})
-	if got.Language == nil || *got.Language != "nl" {
-		t.Errorf("an admin could not set their own language: %v", got.Language)
-	}
-
-	// And the session says so, which is how the page learns whose language to
-	// speak.
-	rec = f.do(t, http.MethodGet, "/api/v1/auth/session", nil, admin)
-	if who := decodeTestBody[userDTO](t, rec); who.Language == nil || *who.Language != "nl" {
-		t.Errorf("GET /auth/session reports language %v, want nl", who.Language)
+	if sent[1].subject != "Your account is ready" || sent[2].subject != "Akunmu sudah siap" {
+		t.Errorf("re-sends were %q then %q; want English, then Indonesian", sent[1].subject, sent[2].subject)
 	}
 }

@@ -103,7 +103,6 @@ async function mountAccounts(page, opts = {}) {
         role: body.role,
         status: 'invited',
         revision: 1,
-        language: body.language || null,
       };
       state.users.push(made);
       return json(route, 201, {
@@ -136,9 +135,6 @@ async function mountAccounts(page, opts = {}) {
         });
       }
       Object.assign(who, body.role ? { role: body.role } : {}, body.status ? { status: body.status } : {});
-      // Three states, as on the real server: absent leaves it, null clears it.
-      if ('language' in body) who.language = body.language;
-      if (state.session && state.session.id === who.id) state.session = who;
       who.revision += 1;
       return json(route, 200, who);
     }
@@ -705,16 +701,17 @@ test('a refusal the server words in English is reworded, not passed through', as
 
 /*
  * A deployment has one locale, and the people using it do not have one
- * language. The admin creating an account is the one person who knows which
- * language the person they are inviting reads, so that is where it is chosen —
- * and the mail, the screen its link opens and the planner after it all follow.
+ * language. The admin creating an account is the one person who knows what the
+ * person they are inviting reads, so the language of the invitation is chosen
+ * there — for that mail, and the screen its link opens. It is not stored: after
+ * that first mail the page follows the reader's own browser, which is better
+ * evidence than anything an admin typed once, and theirs to change.
  */
 test('the invite form sends the language the admin chose, and nothing when they chose nothing', async ({ page }) => {
   const server = await mountAccounts(page, { session: ADA, users: [ADA] });
   await open(page, '/#/admin');
 
   // The first choice says what "nothing chosen" means on this deployment.
-  await expect(page.locator('#newUserLanguage option').first()).toHaveText('Same as the planner (English)');
   await expect(page.locator('#newUserLanguage option')).toHaveText([
     'Same as the planner (English)', 'English', 'Nederlands', 'Bahasa Indonesia',
   ]);
@@ -726,8 +723,7 @@ test('the invite form sends the language the admin chose, and nothing when they 
   let made = server.calls.filter((c) => c.method === 'POST' && c.path === '/users').pop();
   expect(made.body).toEqual({ email: 'grace@example.test', role: 'editor', language: 'nl' });
 
-  // Left alone, the key is not sent at all: null on the server, and so a
-  // change of SOIREE_LOCALE later takes this account with it.
+  // Left alone, the key is not sent at all.
   await page.click('#adminLinkDismiss');
   await page.fill('#newUserEmail', 'linus@example.test');
   await page.selectOption('#newUserLanguage', '');
@@ -737,49 +733,51 @@ test('the invite form sends the language the admin chose, and nothing when they 
   expect(made.body).toEqual({ email: 'linus@example.test', role: 'editor' });
 });
 
-test('a person\'s language can be changed, and put back to following the planner', async ({ page }) => {
-  const server = await mountAccounts(page, { session: ADA, users: [ADA, { ...GRACE, language: 'nl' }] });
+test('sending a link again takes the language chosen beside it, and choosing saves nothing', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE] });
   await open(page, '/#/admin');
-
   const row = page.locator('.person', { hasText: GRACE.email });
-  await expect(row.locator('.person-language')).toHaveValue('nl');
+  const invites = () => server.calls.filter((c) => c.method === 'POST' && c.path === `/users/${GRACE.id}/invite`);
 
   await row.locator('.person-language').selectOption('id');
-  await expect.poll(() => server.calls.filter((c) => c.method === 'PATCH').length).toBe(1);
-  expect(server.calls.filter((c) => c.method === 'PATCH').pop().body).toEqual({ revision: GRACE.revision, language: 'id' });
+  await row.getByRole('button', { name: 'Send a password link' }).click();
+  await expect.poll(() => invites().length).toBe(1);
+  expect(invites()[0].body).toEqual({ language: 'id' });
 
-  // "Same as the planner" is an explicit null. An omitted key would leave the
-  // language where it was, which is the opposite of what was asked for.
-  await page.locator('.person', { hasText: GRACE.email }).locator('.person-language').selectOption('');
-  await expect.poll(() => server.calls.filter((c) => c.method === 'PATCH').length).toBe(2);
-  expect(server.calls.filter((c) => c.method === 'PATCH').pop().body).toEqual({ revision: GRACE.revision + 1, language: null });
+  // The choice was about that mail. It is not a setting on the account, so
+  // picking one writes nothing, and the list comes back with none picked.
+  expect(server.calls.filter((c) => c.method === 'PATCH')).toEqual([]);
+  await expect(page.locator('.person', { hasText: GRACE.email }).locator('.person-language')).toHaveValue('');
+
+  await page.click('#adminLinkDismiss');
+  await page.locator('.person', { hasText: GRACE.email }).getByRole('button', { name: 'Send a password link' }).click();
+  await expect.poll(() => invites().length).toBe(2);
+  expect(invites()[1].body).toEqual({});
 });
 
-test('signing in turns the page to the account\'s language, without a reload', async ({ page }) => {
-  await mountAccounts(page, { users: [{ ...ADA, language: 'nl' }] });
+test('asking for a reset link says which language the screen is being read in', async ({ page }) => {
+  // Nobody else is involved in a reset, and the server has never seen this
+  // browser: the page is the only one who can say.
+  const server = await mountAccounts(page, { users: [ADA] });
+  await open(page, '/?lang=nl#/login');
+  await page.fill('#loginEmail', ADA.email);
+  await page.click('#loginForgot');
+  await expect(page.locator('#loginMsg')).toContainText('Als er een account bij dat adres hoort');
+  const asked = server.calls.filter((c) => c.path === '/auth/password-reset').pop();
+  expect(asked.body).toEqual({ email: ADA.email, language: 'nl' });
+});
+
+test('the switcher is there on the sign-in screen, and turns it too', async ({ page }) => {
+  // Where it matters most: the first screen somebody invited here sees, and
+  // the one they cannot get past if they cannot read it.
+  await mountAccounts(page, { users: [ADA] });
   await open(page, '/#/login');
   await expect(page.locator('#authTitle')).toHaveText('Sign in');
+  await expect(page.locator('#langSwitch')).toBeVisible();
 
-  // Something only a page that was never reloaded still has.
-  await page.evaluate(() => { window.__neverReloaded = true; });
-
-  await page.fill('#loginEmail', ADA.email);
-  await page.fill('#loginPassword', PASSWORD);
-  await page.click('#loginSubmit');
-
-  await expect(page.locator('html')).toHaveAttribute('lang', 'nl');
-  await expect(page.locator('#tab-budget')).toHaveText('Budget');
-  await expect(page.locator('#tab-overview')).toHaveText('Overzicht');
-  await expect(page.locator('#accountActs')).toContainText('Afmelden');
-  expect(await page.evaluate(() => window.__neverReloaded)).toBe(true);
-
-  // And the next visit opens in it, rather than switching after it paints.
-  await open(page, '/');
-  await expect(page.locator('#tab-overview')).toHaveText('Overzicht');
-
-  // A language in the URL is somebody's explicit choice for this view, and an
-  // account does not override it.
-  await open(page, '/?lang=id');
-  await expect(page.locator('html')).toHaveAttribute('lang', 'id');
-  await expect(page.locator('#accountActs')).toContainText('Keluar');
+  await page.getByRole('button', { name: 'Bahasa Indonesia' }).click();
+  await expect(page.locator('#authTitle')).toHaveText('Masuk');
+  await expect(page.locator('label[for="loginPassword"]')).toHaveText('Kata sandi');
+  await expect(page.locator('#loginSubmit')).toHaveText('Masuk');
+  await expect(page.locator('#accountActs button')).toHaveText(['Masuk']);
 });

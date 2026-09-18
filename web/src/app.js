@@ -95,17 +95,26 @@
    *   1. ?lang= in the URL   — makes a link shareable in one language, and is
    *                            deliberately not persisted: it is a view of the
    *                            page, not a setting on the planner.
-   *   2. the account         — the language an admin chose for whoever is
-   *                            signed in. A deployment has one locale and the
-   *                            people using it do not have one language. It is
-   *                            not known until the session answers, which is
-   *                            after first paint, so the last answer is kept
-   *                            on this device (LANG_KEY) and the page opens in
-   *                            it; see followAccount() for when it changes.
-   *   3. config.language     — read if the server ever sends it.
-   *   4. config.locale       — what an operator already configures, and it
+   *   2. the flag they chose — the switcher at the top of the page. Somebody's
+   *                            own explicit choice, made on this device, so it
+   *                            is kept on this device (LANG_KEY) and outranks
+   *                            what their browser asks for: plenty of people
+   *                            read a language their phone was never set to.
+   *   3. the browser         — navigator.languages, in the person's own
+   *                            order, first one there is a translation for. A
+   *                            deployment has one locale and the people using
+   *                            it do not have one language, and the setting
+   *                            somebody made on their own device is the best
+   *                            evidence there is of which one they read. It is
+   *                            also theirs to change. Nothing about language
+   *                            is stored against an account, for that reason:
+   *                            an admin's guess made once, when inviting
+   *                            somebody, is right for the one mail it was made
+   *                            for and wrong to pin an interface to.
+   *   4. config.language     — read if the server ever sends it.
+   *   5. config.locale       — what an operator already configures, and it
    *                            carries the language tag: nl-NL -> nl.
-   *   5. 'en'
+   *   6. 'en'
    *
    * Currency and date formatting stay on config.locale throughout. Language is
    * what the interface is written in; locale is how numbers are spelled, and
@@ -478,11 +487,6 @@
     }
   };
 
-  // The third and last thing this page keeps in localStorage, beside the
-  // planner and the theme: the signed-in account's language, so that the next
-  // visit opens in it rather than switching to it a moment after it paints.
-  var LANG_KEY = 'soiree.lang';
-
   function pickLang(v) {
     var tag = String(v || '').toLowerCase().replace(/_/g, '-').split('-')[0];
     return LANGS.indexOf(tag) !== -1 ? tag : '';
@@ -502,9 +506,34 @@
     return pickLang(q);
   })();
 
+  // The first language the browser asks for that this page is written in.
+  // `languages` is the person's whole ordered list; `language` is only its
+  // head, and somebody whose list is German, then Dutch, should get Dutch.
+  var LANG_FROM_BROWSER = (function () {
+    var list = [];
+    try {
+      list = (navigator.languages && navigator.languages.length)
+        ? navigator.languages : [navigator.language];
+    } catch (e) { list = []; }
+    for (var i = 0; i < list.length; i += 1) {
+      var tag = pickLang(list[i]);
+      if (tag) return tag;
+    }
+    return '';
+  })();
+
+  // The third and last thing this page keeps in localStorage, beside the
+  // planner and the theme: the language somebody picked from the switcher.
+  // Theirs, on their device — nothing about language is stored on an account.
+  var LANG_KEY = 'soiree.lang';
+
   var LANG = LANG_FROM_URL || (function () {
     try { return pickLang(localStorage.getItem(LANG_KEY)); } catch (e) { return ''; }
-  })() || LANG_DEFAULT;
+  })() || LANG_FROM_BROWSER || LANG_DEFAULT;
+
+  // Things that say something once, when they are built, and have to be told
+  // to say it again: see chooseLanguage().
+  var languageHooks = [];
 
   // Drives screen-reader pronunciation and hyphenation, so it has to be the
   // language the page is actually written in rather than the one the server
@@ -1534,43 +1563,8 @@
     document.dispatchEvent(new CustomEvent('soiree:session-check'));
   }
 
-  /* Speak the language of whoever signed in.
-   *
-   * In place, never by reloading. A reload at the moment somebody signs in
-   * throws away what they typed while signed out — it is in `state` and on
-   * screen but `dirty` does not survive a reload, so the plan that arrives
-   * would simply replace it. Everything this page says comes from three calls,
-   * so saying it again in another language is those three calls.
-   *
-   * An account with no language of its own follows the deployment, and the
-   * remembered key is cleared rather than left: otherwise an admin putting
-   * somebody back to "same as the planner" would change nothing on the one
-   * device they use.
-   *
-   * auth.js is told on `soiree:language`, because its screens are open at
-   * exactly this moment and would otherwise stay in the language they were
-   * drawn in.
-   */
-  function followAccount(language) {
-    var theirs = pickLang(language);
-    try {
-      if (theirs) localStorage.setItem(LANG_KEY, theirs);
-      else localStorage.removeItem(LANG_KEY);
-    } catch (e) { /* storage unavailable: the next visit starts in the default */ }
-
-    var next = LANG_FROM_URL || theirs || LANG_DEFAULT;
-    if (next === LANG) return;
-    LANG = next;
-    document.documentElement.lang = LANG;
-    applyStrings();
-    renderCountdown();
-    renderAll();
-    document.dispatchEvent(new CustomEvent('soiree:language', { detail: { language: LANG } }));
-  }
-
   document.addEventListener('soiree:session', function (e) {
     var signedIn = !!(e && e.detail && e.detail.signedIn);
-    if (signedIn) followAccount(e.detail.language);
     if (!signedIn) {
       // Only once there is something to halt. Before the first plan arrives
       // this is the ordinary "nobody is signed in yet" and connect() is
@@ -3244,10 +3238,65 @@
     }
 
     mark(readTheme());
+    languageHooks.push(function () {
+      group.setAttribute('aria-label', t('th.title'));
+      THEMES.forEach(function (mode, i) { btns[i].textContent = t('th.' + mode); });
+    });
     // Before the status line, which is the last thing in the row and the one
     // that grows a sentence long.
     tools.insertBefore(group, document.getElementById('dataMsg'));
   })();
+
+  /* ---------- The language switcher ----------
+   * In place, never by reloading. A reload throws away whatever somebody typed
+   * while signed out — it is on screen and in `state`, but `dirty` does not
+   * survive a reload, so the plan that arrives afterwards simply replaces it.
+   * Everything this page says comes from three calls, so saying it again in
+   * another language is those three calls, plus the few things that bake a
+   * label when they are built.
+   *
+   * A click is remembered on this device. It also takes any ?lang= out of the
+   * address bar: that outranks a stored choice, so leaving it there would make
+   * the flag somebody just clicked stop working at the next reload.
+   *
+   * auth.js is told on `soiree:language`, because its screens may be the ones
+   * showing — the switcher sits above the sign-in screen precisely so that
+   * somebody who cannot read it can change it.
+   */
+  function chooseLanguage(tag) {
+    tag = pickLang(tag);
+    if (!tag) return;
+    try { localStorage.setItem(LANG_KEY, tag); } catch (e) { /* this visit only */ }
+
+    if (/[?&]lang=/.test(location.search) && window.history && history.replaceState) {
+      var rest = location.search.replace(/([?&])lang=[^&]*(&|$)/, function (m, lead, tail) {
+        return tail ? lead : '';
+      });
+      history.replaceState(null, '', location.pathname + rest + location.hash);
+    }
+
+    if (tag !== LANG) {
+      LANG = tag;
+      document.documentElement.lang = LANG;
+      applyStrings();
+      renderCountdown();
+      renderAll();
+      languageHooks.forEach(function (fn) { fn(); });
+      document.dispatchEvent(new CustomEvent('soiree:language', { detail: { language: LANG } }));
+    }
+    markFlags();
+  }
+
+  function markFlags() {
+    Array.prototype.forEach.call(document.querySelectorAll('#langSwitch [data-lang]'), function (b) {
+      b.setAttribute('aria-pressed', b.getAttribute('data-lang') === LANG ? 'true' : 'false');
+    });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('#langSwitch [data-lang]'), function (b) {
+    b.addEventListener('click', function () { chooseLanguage(b.getAttribute('data-lang')); });
+  });
+  markFlags();
 
   /* ---------- Deadline notifications ----------
    * Three conditions, all of them necessary:

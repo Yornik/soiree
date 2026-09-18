@@ -16,10 +16,10 @@ everyone at once.
 - **Tasks** — owner, due date, status, filtered to what is still open.
 - **Any currency** — primary currency plus an optional second readout, so people
   in different countries can each see a number that means something to them.
-- **Three interface languages** — English, Dutch and Indonesian. The deployment
-  has a default (`SOIREE_LOCALE`), each person can have their own, chosen by the
-  admin who invites them, and any visit can be overridden with `?lang=nl`. No
-  framework; the strings are a table in the page.
+- **Three interface languages** — English, Dutch and Indonesian. The page reads
+  the visitor's own browser, falls back on the deployment's `SOIREE_LOCALE`, and
+  has three flags at the top for anybody it guessed wrong about. A link can ask
+  for one with `?lang=nl`. No framework; the strings are a table in the page.
 
 Configured entirely by environment variables, and no third-party requests ever.
 Give it a PostgreSQL DSN and the planner is shared: the browser reads and
@@ -68,7 +68,7 @@ exists in the source, which is what lets one public image serve any event.
 | `SOIREE_EVENT_TAGLINE` | *(empty)* | Subtitle under the heading |
 | `SOIREE_EVENT_DATE` | *(empty)* | RFC3339 **with a timezone**, e.g. `2027-06-12T00:00:00Z`. Drives the countdown. Omit for no countdown. |
 | `SOIREE_CURRENCY` | `EUR` | Primary currency, ISO 4217. Decides the minor-unit exponent the API speaks in. |
-| `SOIREE_LOCALE` | `en-US` | Number and date formatting, and the *default* language — of the interface and of the mails — when its primary subtag is one of `en`, `nl` or `id`. An account can have a language of its own, chosen by the admin who creates it, which wins over this once that person is signed in. A visitor can override either for one visit with `?lang=nl`. |
+| `SOIREE_LOCALE` | `en-US` | Number and date formatting, and the *fallback* language when its primary subtag is one of `en`, `nl` or `id`: what the interface is in for a visitor whose browser asks for none of those, and what a mail is in when nobody chose. A visitor's own browser comes first, a flag they click comes before that, and `?lang=nl` on a link before everything. |
 | `SOIREE_SECONDARY_CURRENCY` | *(unset)* | Optional second readout. Unset hides the column and the rate field. |
 | `SOIREE_SECONDARY_LOCALE` | *primary locale* | Formatting for the second currency |
 | `SOIREE_BUDGET_CEILING` | `0` | The ceiling a *fresh* browser starts with, in whole major units. Once a database is in play the stored `settings.ceiling` is authoritative and replaces it as soon as the plan arrives. |
@@ -201,12 +201,12 @@ Measured transfer at 1.0.0, brotli:
 
 | | |
 |---|---|
-| HTML shell | 3.8 kB |
-| Stylesheet | 8.4 kB |
-| Planner script | 36 kB (`defer`, does not block paint) |
+| HTML shell | 4.2 kB (the three flags are inline SVG, so they cost no request) |
+| Stylesheet | 8.8 kB |
+| Planner script | 37 kB (`defer`, does not block paint) |
 | Accounts script | 20 kB (`defer`, does not block paint; three languages) |
 | Display font | 33 kB (`font-display: swap`, does not block paint) |
-| **First paint** | **~12 kB** |
+| **First paint** | **~13 kB** |
 
 **Writes are debounced.** Edits apply to local state instantly and persist
 500 ms later, flushed on page hide. That keeps typing smooth, and it is what
@@ -236,9 +236,10 @@ What works end to end:
   did.
 - **Signing in.** A sign-in screen, the set-password screen an invitation link
   lands on, an account screen for your own passkeys, and an accounts screen
-  where an admin creates people and chooses their role and their language —
-  the invitation, the screen its link opens and the planner after sign-in all
-  follow it. There is no self-service sign-up. **Passkeys** work alongside the password wherever
+  where an admin creates people and chooses their role, and the language of
+  the invitation: that mail and the screen its link opens are written in it.
+  It is a choice about one mail and is not stored. There is no self-service
+  sign-up. **Passkeys** work alongside the password wherever
   `SOIREE_BASE_URL` gives them a domain to belong to.
 - **Roles, enforced by the server.** Nobody reads the plan without a session; a
   viewer reads and writes nothing; an editor or an admin writes; only an admin
@@ -261,12 +262,10 @@ What works end to end:
 What is not there, stated rather than left to be discovered:
 
 - **The deadline digest is in English only.** Every screen is in three
-  languages, and so are the invitation and the password-reset mail, written in
-  the language the admin chose for that person. The digest is one body sent to
-  every admin at once, and is not.
-- **Only an admin can change somebody's language.** There is no "my language"
-  setting for a viewer or an editor to change their own; `?lang=` on a visit is
-  what they have.
+  languages, and so are the invitation and the password-reset mail — in the
+  language the admin chose for that mail, or the one the sign-in screen was
+  being read in. The digest is one body sent to every admin at once, and is
+  not.
 - **Phases and the programme have an API and no interface.** Both are in the
   plan and in `/api/v1`; the page draws neither. For the same reason a budget
   row with a `parentId`, which only a client writing to the API directly can

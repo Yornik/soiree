@@ -1,17 +1,12 @@
 package httpd
 
-import (
-	"strings"
-
-	"github.com/Yornik/soiree/internal/store"
-)
+import "strings"
 
 // The languages this binary can write to somebody in.
 //
 // The same three the interface ships, and the list is here rather than in the
 // database on purpose: which languages exist is a fact about the templates
-// compiled into this package, so this is the one place that can know. The
-// column only checks that a value is shaped like a tag.
+// compiled into this package, so this is the one place that can know.
 //
 // Adding one means adding it here, a case to inviteMessage, and a column to
 // the tables in web/src/app.js and web/src/auth.js. A test holds the first two
@@ -39,8 +34,8 @@ func parseLanguage(s string) (string, bool) {
 
 // languageOfLocale is the deployment's own language: the primary subtag of
 // SOIREE_LOCALE when there is a translation for it, and English otherwise.
-// This is the same rule the page applies to the same value, so an account with
-// no language of its own is written to in the language its planner opens in.
+// This is the same rule the page applies to the same value when the reader's
+// browser asks for nothing it is written in.
 func languageOfLocale(locale string) string {
 	if l, ok := parseLanguage(locale); ok {
 		return l
@@ -48,14 +43,13 @@ func languageOfLocale(locale string) string {
 	return fallbackLanguage
 }
 
-// languageFor is the language to write to this person in.
-//
-// Their own if they have one and this binary still speaks it — a value can
-// outlive its translation if one is ever withdrawn, and a mail in the
-// deployment's language is a better answer to that than no mail.
-func (a *Auth) languageFor(u store.User) string {
-	if u.Language != nil {
-		if l, ok := parseLanguage(*u.Language); ok {
+// mailLanguage is the language to write one mail in: the one whoever asked for
+// it chose, or the deployment's. Nothing is remembered from one mail to the
+// next, on purpose. What a person reads is better learned from their browser
+// each time they arrive than fixed in a column by somebody else.
+func (a *Auth) mailLanguage(chosen *string) string {
+	if chosen != nil {
+		if l, ok := parseLanguage(*chosen); ok {
 			return l
 		}
 	}

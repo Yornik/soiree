@@ -22,6 +22,48 @@
 <script type="application/json" id="soiree-config">{{ .ConfigJSON }}</script>
 </head>
 <body>
+
+<!-- The language switcher. Outside the planner and outside the accounts screen
+     because it belongs to both: the first screen somebody invited here sees is
+     the one for choosing a password, and that is exactly where being in the
+     wrong language matters most.
+
+     Flags, because that is what was asked for, and a flag is not a language —
+     so each one is a button named, to a screen reader and on hover, with the
+     language's own word for itself. English is the Union flag.
+
+     Inline SVG with presentation attributes only. The CSP here allows no
+     inline style, so there is no style="" anywhere in these; and they cost no
+     request, which an <img> each would. app.js binds them. -->
+<div class="lang-switch" id="langSwitch" role="group" aria-label="Language">
+  <button class="flag-btn" type="button" data-lang="en" lang="en" aria-label="English" title="English" aria-pressed="false">
+    <svg viewBox="0 0 60 40" width="24" height="16" aria-hidden="true" focusable="false">
+      <clipPath id="flag-en-box"><path d="M0,0 v40 h60 v-40 z"/></clipPath>
+      <clipPath id="flag-en-quarters"><path d="M30,20 h30 v20 z v20 h-30 z h-30 v-20 z v-20 h30 z"/></clipPath>
+      <g clip-path="url(#flag-en-box)">
+        <path d="M0,0 v40 h60 v-40 z" fill="#012169"/>
+        <path d="M0,0 L60,40 M60,0 L0,40" stroke="#fff" stroke-width="8"/>
+        <path d="M0,0 L60,40 M60,0 L0,40" clip-path="url(#flag-en-quarters)" stroke="#C8102E" stroke-width="5"/>
+        <path d="M30,0 v40 M0,20 h60" stroke="#fff" stroke-width="13"/>
+        <path d="M30,0 v40 M0,20 h60" stroke="#C8102E" stroke-width="8"/>
+      </g>
+    </svg>
+  </button>
+  <button class="flag-btn" type="button" data-lang="nl" lang="nl" aria-label="Nederlands" title="Nederlands" aria-pressed="false">
+    <svg viewBox="0 0 60 40" width="24" height="16" aria-hidden="true" focusable="false">
+      <path d="M0,0 h60 v40 h-60 z" fill="#fff"/>
+      <path d="M0,0 h60 v13.4 h-60 z" fill="#AE1C28"/>
+      <path d="M0,26.6 h60 v13.4 h-60 z" fill="#21468B"/>
+    </svg>
+  </button>
+  <button class="flag-btn" type="button" data-lang="id" lang="id" aria-label="Bahasa Indonesia" title="Bahasa Indonesia" aria-pressed="false">
+    <svg viewBox="0 0 60 40" width="24" height="16" aria-hidden="true" focusable="false">
+      <path d="M0,0 h60 v40 h-60 z" fill="#fff"/>
+      <path d="M0,0 h60 v20 h-60 z" fill="#CE1126"/>
+    </svg>
+  </button>
+</div>
+
 <div class="wrap" id="plannerWrap">
 
   <!-- Who is signed in, and the way in for everyone who is not.

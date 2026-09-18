@@ -272,6 +272,11 @@ paths:
         therefore tells an attacker nothing about who holds an account.
 
         A rate limit counts the requests from your address.
+
+        Send `language` with the language the person reads the page in. No
+        admin takes part in a reset, so the page is the one source of that
+        language. The server ignores a language with no translation. It does
+        not refuse it, because this path answers 202 to every request.
       security: []
       requestBody:
         required: true
@@ -284,6 +289,8 @@ paths:
                 email:
                   type: string
                   format: email
+                language:
+                  $ref: '#/components/schemas/Language'
       responses:
         '202':
           description: |
@@ -577,9 +584,12 @@ paths:
         person by another route. A deployment with mail omits the link, so it
         never reaches a log.
 
-        Send `language` to choose the language of the mail. The link then
-        carries `?lang=`, so the page it opens is in the same language. Omit
-        `language` to use the language of the deployment.
+        Send `language` to choose the language of the invitation. The link
+        then carries `?lang=`, so the page it opens is in the same language.
+        Omit `language` to use the language of the deployment.
+
+        The server does not store `language`. It is the language of this one
+        mail. After that, the page reads the language of the browser.
       requestBody:
         required: true
         content:
@@ -729,6 +739,19 @@ paths:
         A new token replaces the old one. The old token stops working.
 
         Read `mailSent`, as at `POST /users`.
+
+        The body is optional. Send `language` to choose the language of this
+        mail, as at `POST /users`. A request with no body uses the language of
+        the deployment.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                language:
+                  $ref: '#/components/schemas/Language'
       responses:
         '200':
           description: The invitation is on its way.
@@ -742,6 +765,14 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '400':
+          description: |
+            The body does not parse (`invalid_json`), or the language has no
+            translation (`invalid_language`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
         '409':
           description: The account is disabled (`account_disabled`). Enable it first.
           content:
@@ -1580,17 +1611,14 @@ components:
     Language:
       type: [string, 'null']
       description: |
-        The language the server writes to this person in: the invitation mail,
-        the password-reset mail, and the page that the link in them opens.
+        The language of one mail, and of the page that the link in it opens.
 
-        `null` means the language of the deployment. The server reads that
-        language when it writes the mail. It does not copy it into the account,
-        so a change of `SOIREE_LOCALE` reaches every account that chose
-        nothing.
+        It belongs to the request that sends the mail. The server does not
+        store it, and an account has no language. `null`, or no field, means
+        the language of the deployment.
 
         Send a bare tag. The server also accepts a locale, such as `nl-NL`,
-        and keeps the language part. A language with no translation gets
-        **400** with the code `invalid_language`.
+        and keeps the language part.
       enum: [en, nl, id, null]
       examples: [nl]
 
@@ -2115,13 +2143,12 @@ components:
     User:
       type: object
       description: One account.
-      required: [id, email, role, status, createdBy, createdAt, revision, updatedAt, language]
+      required: [id, email, role, status, createdBy, createdAt, revision, updatedAt]
       properties:
         id: { $ref: '#/components/schemas/Id' }
         email: { type: string, format: email }
         role: { $ref: '#/components/schemas/Role' }
         status: { $ref: '#/components/schemas/UserStatus' }
-        language: { $ref: '#/components/schemas/Language' }
         createdBy:
           type: [string, 'null']
           format: uuid
@@ -2137,19 +2164,13 @@ components:
       description: |
         A change to an account.
 
-        Omit a field to leave it as it is. `language` has three states: omit
-        it to leave it, send a tag to set it, and send `null` to use the
-        language of the deployment again.
-
-        An admin changes their own `language`. An admin does not change their
-        own `role` or `status`.
+        Omit a field to leave it as it is.
       required: [revision]
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
         email: { type: string, format: email }
         role: { $ref: '#/components/schemas/Role' }
         status: { $ref: '#/components/schemas/UserStatus' }
-        language: { $ref: '#/components/schemas/Language' }
 
     Invite:
       type: object
@@ -2173,7 +2194,8 @@ components:
             `false`, and absent otherwise.
 
             The link carries the token. It also carries `?lang=` when the
-            account has a language. Give it to the person by a private route. A deployment with mail omits it, so the token never reaches
+            request chose a language. Give it to the person by a private
+            route. A deployment with mail omits it, so the token never reaches
             a log.
 
     Passkey:

@@ -311,7 +311,8 @@ test('somebody invited in Dutch is met in Dutch, from the link onwards', async (
   // The language rides in the query string, which is sent to the server and is
   // only a language. The secret is still behind the #, which never is.
   expect(link).toContain(`${AUTH_URL}/?lang=nl#/set-password?token=`);
-  await expect(page.locator('.person', { hasText: invited }).locator('.person-language')).toHaveValue('nl');
+  // Chosen for that mail, and kept nowhere: the list has nothing picked.
+  await expect(page.locator('.person', { hasText: invited }).locator('.person-language')).toHaveValue('');
 
   const theirs = await browser.newContext({ baseURL: AUTH_URL, serviceWorkers: 'block' });
   await isolateFromPlan(theirs);
@@ -335,12 +336,13 @@ test('somebody invited in Dutch is met in Dutch, from the link onwards', async (
     await them.click('#loginSubmit');
     await expect(them.locator('.account-role')).toHaveText('bewerker');
 
-    // A later visit with no ?lang= at all — a bookmark, the address typed in —
-    // is still in Dutch: the account says so, and this device remembers.
+    // The link was in Dutch because the admin said so, and the link said so in
+    // its address — which beat this browser's own English. Nothing was pinned:
+    // a later visit with no ?lang= is back to what the browser asks for.
     await them.goto('/');
     await expect(them.locator('.account-email')).toHaveText(invited);
-    await expect(them.locator('html')).toHaveAttribute('lang', 'nl');
-    await expect(them.locator('#accountActs')).toContainText('Afmelden');
+    await expect(them.locator('html')).toHaveAttribute('lang', 'en');
+    await expect(them.locator('#accountActs')).toContainText('Sign out');
   } finally {
     await theirs.close();
   }
