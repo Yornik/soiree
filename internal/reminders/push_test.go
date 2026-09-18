@@ -145,7 +145,7 @@ func contains(haystack []string, needle string) bool {
 // the rest of the deployment's life pays a round trip for each of them.
 func TestAGoneSubscriptionIsPrunedAndATransientFailureIsNot(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 	ada := f.seedAdmin(t, "ada@example.test")
 
 	svc := newFakePushService(t)
@@ -196,7 +196,7 @@ func TestAGoneSubscriptionIsPrunedAndATransientFailureIsNot(t *testing.T) {
 // of something that already happened.
 func TestAFailingPushServiceDoesNotFailTheDigest(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 	ada := f.seedAdmin(t, "ada@example.test")
 
 	svc := newFakePushService(t)
@@ -223,7 +223,7 @@ func TestAFailingPushServiceDoesNotFailTheDigest(t *testing.T) {
 // stays claimed so a restart cannot notify the same devices twice.
 func TestABrokenRelayDoesNotSuppressThePush(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 	ada := f.seedAdmin(t, "ada@example.test")
 
 	svc := newFakePushService(t)
@@ -260,7 +260,7 @@ func TestABrokenRelayDoesNotSuppressThePush(t *testing.T) {
 // channel, so the digest is owed.
 func TestARefusedSendStillReleasesThePeriodWhenNothingWasPushed(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 	f.seedAdmin(t, "ada@example.test")
 
 	broken := &fakeSender{err: &mailer.SendError{Err: errors.New("connection refused")}}
@@ -285,7 +285,7 @@ func TestARefusedSendStillReleasesThePeriodWhenNothingWasPushed(t *testing.T) {
 // reports an error about a feature nobody asked for.
 func TestPushBeingUnconfiguredLeavesTheDigestAlone(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 	ada := f.seedAdmin(t, "ada@example.test")
 
 	// Subscriptions can exist — the keys could have been removed from the
@@ -314,7 +314,7 @@ func TestPushBeingUnconfiguredLeavesTheDigestAlone(t *testing.T) {
 // demoted must not keep delivering the event's finances to their phone.
 func TestOnlyActiveAdminsAreNotified(t *testing.T) {
 	f := newFixture(t)
-	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2027-02-27", 250000, 0, 1)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
 
 	admin := f.seedAdmin(t, "ada@example.test")
 	viewer, err := f.store.CreateUser(t.Context(), store.User{

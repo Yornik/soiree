@@ -55,6 +55,33 @@ var DefaultParams = Params{
 // is a wrong guess, the other is a corrupted row.
 var ErrInvalidHash = errors.New("auth: malformed password hash")
 
+// MaxConcurrentHashes bounds how many Argon2 evaluations run at once.
+//
+// Memory is the point of Argon2, and it is this process's memory as well as
+// the attacker's. Every login costs one evaluation — deliberately including a
+// login for an address with no account, so that timing says nothing about who
+// has one — which makes the cost something an anonymous caller can ask for,
+// twenty at a time under the per-address limit. Unbounded, that is twenty
+// 19 MiB blocks at once: measured at 415 MiB in a bare process, against a
+// container that is rightly given a fraction of that. Seven would do it.
+//
+// So they queue. Four at a time is 76 MiB, each takes a few tens of
+// milliseconds, and a burst of twenty drains in well under a second. The wait
+// falls on every caller alike, whether the account exists or not, so it
+// discloses nothing the hashing itself was arranged not to.
+const MaxConcurrentHashes = 4
+
+var hashSlots = make(chan struct{}, MaxConcurrentHashes)
+
+// idKey is argon2.IDKey behind the bound above, and the only place this
+// package calls it. A second call site added beside it would be a second way
+// to spend the memory, outside the limit.
+func idKey(password string, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+	hashSlots <- struct{}{}
+	defer func() { <-hashSlots }()
+	return argon2.IDKey([]byte(password), salt, time, memory, threads, keyLen)
+}
+
 // Hash hashes password with the default policy.
 func Hash(password string) (string, error) { return DefaultParams.Hash(password) }
 
@@ -68,7 +95,7 @@ func (p Params) Hash(password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("auth: read salt: %w", err)
 	}
-	key := argon2.IDKey([]byte(password), salt, p.Time, p.Memory, p.Threads, p.KeyLen)
+	key := idKey(password, salt, p.Time, p.Memory, p.Threads, p.KeyLen)
 	return p.encode(salt, key), nil
 }
 
@@ -92,7 +119,7 @@ func (p Params) Verify(encoded, password string) (ok, rehash bool, err error) {
 
 	// The output length comes from the stored hash rather than from policy, so
 	// raising KeyLen does not make every existing password fail to verify.
-	got := argon2.IDKey([]byte(password), salt, stored.Time, stored.Memory, stored.Threads, uint32(len(want)))
+	got := idKey(password, salt, stored.Time, stored.Memory, stored.Threads, uint32(len(want)))
 
 	// Constant-time: a byte-by-byte comparison leaks how much of a guess was
 	// right through how long the answer took.

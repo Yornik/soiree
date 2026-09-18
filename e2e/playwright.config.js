@@ -45,8 +45,37 @@ const { defineConfig, devices } = require('@playwright/test');
 const {
   PORT, ALT_PORT, API_PORT,
   METRICS_PORT, ALT_METRICS_PORT, API_METRICS_PORT,
-  BASE_URL, ALT_URL, API_URL,
+  BASE_URL, ALT_URL, API_URL, AUTH_URL,
 } = require('./servers');
+
+// The bootstrap admin the accounts spec signs in as. Synthetic, and only ever
+// reachable on a throwaway container that lives for the length of one run —
+// the same shape as the fixture passwords in the Go tests. Long enough to
+// clear the server's twelve-character minimum, which refuses anything shorter
+// at startup rather than creating an account nobody can use.
+// Defined in servers.js so the specs that have to sign in read the same pair
+// rather than a second copy that drifts.
+const { ADMIN_EMAIL: E2E_ADMIN, ADMIN_PASSWORD: E2E_ADMIN_PASSWORD } = require('./servers');
+
+/*
+ * A VAPID pair made when the run starts and thrown away with it.
+ *
+ * Generated rather than written down: a private key in a repository is a
+ * private key in a repository, however clearly it is labelled a fixture, and
+ * it costs four lines not to have one. The format is webpush-go's — the public
+ * key is the uncompressed P-256 point and the private key is the bare scalar,
+ * both base64url without padding.
+ */
+function vapidForThisRun() {
+  const { privateKey } = require('crypto').generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const jwk = privateKey.export({ format: 'jwk' });
+  const point = Buffer.concat([Buffer.from([4]), Buffer.from(jwk.x, 'base64url'), Buffer.from(jwk.y, 'base64url')]);
+  return {
+    SOIREE_VAPID_PUBLIC_KEY: point.toString('base64url'),
+    SOIREE_VAPID_PRIVATE_KEY: jwk.d,
+    SOIREE_VAPID_SUBJECT: 'mailto:push@example.test',
+  };
+}
 
 const repoRoot = path.resolve(__dirname, '..');
 const binary = path.join(__dirname, '.tmp', 'soiree');
@@ -78,7 +107,13 @@ module.exports = defineConfig({
 
   // Reachable from a test without hardcoding a port twice. `./servers` is the
   // same values for the specs that need one at module scope.
-  metadata: { altBaseURL: ALT_URL, apiBaseURL: API_URL },
+  metadata: {
+    altBaseURL: ALT_URL,
+    apiBaseURL: API_URL,
+    authBaseURL: AUTH_URL,
+    adminEmail: E2E_ADMIN,
+    adminPassword: E2E_ADMIN_PASSWORD,
+  },
 
   use: {
     baseURL: BASE_URL,
@@ -195,6 +230,34 @@ module.exports = defineConfig({
       SOIREE_LOCALE: 'en-US',
       SOIREE_BUDGET_CEILING: '0',
       SOIREE_DEMO_DATA: 'false',
+
+      // Accounts exist wherever a database does, so this is also the only
+      // instance with a sign-in to test. Three settings turn it into one:
+      //
+      //   BASE_URL     the origin set-password links are built against, and
+      //                the relying party passkeys are scoped to. `localhost`
+      //                rather than 127.0.0.1 because a relying party id is a
+      //                domain and an address is not one; the server refuses to
+      //                derive one from an address and leaves passkeys off.
+      //   BOOTSTRAP_*  the first admin, since every other account is created
+      //                by one and an empty database has nobody to start from.
+      //                With a password set the account starts active and can
+      //                sign in immediately, which is what the spec needs.
+      //
+      // No SMTP: that is deliberate, and it is the branch worth testing. With
+      // no relay the server hands the set-password link back to the admin who
+      // asked for it, and the interface has to surface it — otherwise such a
+      // deployment can never onboard anybody.
+      SOIREE_BASE_URL: AUTH_URL,
+      SOIREE_BOOTSTRAP_ADMIN: E2E_ADMIN,
+      SOIREE_BOOTSTRAP_PASSWORD: E2E_ADMIN_PASSWORD,
+
+      // Web Push, so that the reminders control has something to control.
+      // Without a key the page draws none of it — which is right, and is why
+      // the client half of push went untested for as long as this block did
+      // not exist. Nothing is ever sent: the specs stub the browser's Push API
+      // and no digest runs here.
+      ...vapidForThisRun(),
     },
   }],
 });

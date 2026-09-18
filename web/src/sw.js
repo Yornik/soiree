@@ -39,6 +39,64 @@ self.addEventListener('activate', function (event) {
   );
 });
 
+/* Web Push.
+ *
+ * The payload is composed by the server (internal/reminders) and arrives as
+ * JSON: a title, a line of body, the URL to open and a tag.
+ *
+ * The tag is the part that is easy to drop and unpleasant to leave out.
+ * Without it a second digest stacks on top of the first and the shade fills up
+ * with near-identical notifications; with it, the newer one replaces the older,
+ * which is what somebody actually wants from a list of what is coming up.
+ *
+ * showNotification is not optional: the subscription was made with
+ * userVisibleOnly, and a push handled without showing anything spends the
+ * browser's patience and eventually the subscription.
+ */
+self.addEventListener('push', function (event) {
+  var payload = {};
+  try { payload = (event.data && event.data.json()) || {}; } catch (e) { payload = {}; }
+  event.waitUntil(self.registration.showNotification(payload.title || 'soiree', {
+    body: payload.body || '',
+    tag: payload.tag || 'soiree-deadlines',
+    data: { url: payload.url || '/' }
+  }));
+});
+
+/* Bring the planner to the front rather than opening a second copy of it. A
+ * notification that spawns another tab every time is one nobody taps twice —
+ * and on a phone the planner is very often already open behind it. */
+self.addEventListener('notificationclick', function (event) {
+  event.notification.close();
+  var url = new URL((event.notification.data || {}).url || '/', self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (windows) {
+      for (var i = 0; i < windows.length; i++) {
+        var w = windows[i];
+        if (w.url.indexOf(self.location.origin) !== 0) continue;
+        // navigate() rejects on a client this worker does not control — which
+        // includeUncontrolled deliberately turns up, a tab opened before the
+        // worker activated being the ordinary case. Unhandled, that rejection
+        // reaches waitUntil and the tap does nothing at all: no focus, no new
+        // window, no error anybody sees. Bringing the tab forward at the wrong
+        // page is a far better answer than a notification that ignores you.
+        if (w.url !== url && 'navigate' in w) {
+          return w.navigate(url).then(
+            function (moved) { return (moved || w).focus(); },
+            function () { return w.focus(); }
+          );
+        }
+        return w.focus();
+      }
+      return self.clients.openWindow(url);
+    })
+  );
+});
+
+/* Anything that is not an asset or a navigation falls through this handler
+ * without respondWith, which is what keeps /api/v1/events out of it. Do not
+ * add a default branch: an event stream buffered through a cache handler
+ * delivers nothing, looks like a server fault, and is miserable to find. */
 self.addEventListener('fetch', function (event) {
   var req = event.request;
   if (req.method !== 'GET') return;

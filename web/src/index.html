@@ -22,7 +22,60 @@
 <script type="application/json" id="soiree-config">{{ .ConfigJSON }}</script>
 </head>
 <body>
-<div class="wrap">
+
+<!-- The language switcher. Outside the planner and outside the accounts screen
+     because it belongs to both: the first screen somebody invited here sees is
+     the one for choosing a password, and that is exactly where being in the
+     wrong language matters most.
+
+     Flags, because that is what was asked for, and a flag is not a language —
+     so each one is a button named, to a screen reader and on hover, with the
+     language's own word for itself. English is the Union flag.
+
+     Inline SVG with presentation attributes only. The CSP here allows no
+     inline style, so there is no style="" anywhere in these; and they cost no
+     request, which an <img> each would. app.js binds them. -->
+<div class="lang-switch" id="langSwitch" role="group" aria-label="Language">
+  <button class="flag-btn" type="button" data-lang="en" lang="en" aria-label="English" title="English" aria-pressed="false">
+    <svg viewBox="0 0 60 40" width="24" height="16" aria-hidden="true" focusable="false">
+      <clipPath id="flag-en-box"><path d="M0,0 v40 h60 v-40 z"/></clipPath>
+      <clipPath id="flag-en-quarters"><path d="M30,20 h30 v20 z v20 h-30 z h-30 v-20 z v-20 h30 z"/></clipPath>
+      <g clip-path="url(#flag-en-box)">
+        <path d="M0,0 v40 h60 v-40 z" fill="#012169"/>
+        <path d="M0,0 L60,40 M60,0 L0,40" stroke="#fff" stroke-width="8"/>
+        <path d="M0,0 L60,40 M60,0 L0,40" clip-path="url(#flag-en-quarters)" stroke="#C8102E" stroke-width="5"/>
+        <path d="M30,0 v40 M0,20 h60" stroke="#fff" stroke-width="13"/>
+        <path d="M30,0 v40 M0,20 h60" stroke="#C8102E" stroke-width="8"/>
+      </g>
+    </svg>
+  </button>
+  <button class="flag-btn" type="button" data-lang="nl" lang="nl" aria-label="Nederlands" title="Nederlands" aria-pressed="false">
+    <svg viewBox="0 0 60 40" width="24" height="16" aria-hidden="true" focusable="false">
+      <path d="M0,0 h60 v40 h-60 z" fill="#fff"/>
+      <path d="M0,0 h60 v13.4 h-60 z" fill="#AE1C28"/>
+      <path d="M0,26.6 h60 v13.4 h-60 z" fill="#21468B"/>
+    </svg>
+  </button>
+  <button class="flag-btn" type="button" data-lang="id" lang="id" aria-label="Bahasa Indonesia" title="Bahasa Indonesia" aria-pressed="false">
+    <svg viewBox="0 0 60 40" width="24" height="16" aria-hidden="true" focusable="false">
+      <path d="M0,0 h60 v40 h-60 z" fill="#fff"/>
+      <path d="M0,0 h60 v20 h-60 z" fill="#CE1126"/>
+    </svg>
+  </button>
+</div>
+
+<div class="wrap" id="plannerWrap">
+
+  <!-- Who is signed in, and the way in for everyone who is not.
+       auth.js draws this only once the server has said there are accounts to
+       sign in to: a deployment with no database answers 404 from
+       /api/v1/auth/session, and a door that is not there should not be drawn.
+       It sits above the masthead because it identifies the reader, not the
+       event. -->
+  <div class="account-bar" id="accountBar" hidden>
+    <p class="account-who" id="accountWho"></p>
+    <div class="account-acts" id="accountActs"></div>
+  </div>
 
   <!-- Masthead. The event identifies the page on the left; the deadline is
        the one figure that applies to every tab, so it sits in the corner the
@@ -291,6 +344,175 @@
   </div>
 
 </div>
+
+<!-- THE ACCOUNTS SCREEN
+     Signing in, choosing a password, and an admin's view of who has an
+     account. One screen with five panels rather than five documents: this is
+     a single page, and the link in an invitation mail has to land somewhere
+     that is already loaded. auth.js decides which panel from the URL
+     fragment (#/login, #/set-password, #/admin, #/account) and hides the
+     whole thing otherwise.
+
+     The fragment is not decoration. A set-password link carries its token
+     there — #/set-password?token=… — because a fragment is never sent to a
+     server, so the one-time secret stays out of every access log and out of
+     the Referer header. auth.js takes it out of the URL before anything
+     else. -->
+<div class="auth-wrap" id="authScreen" hidden>
+  <header class="auth-head">
+    <p class="auth-event">{{ .EventName }}</p>
+    <h1 class="auth-title" id="authTitle" data-i18n-auth="signin">Sign in</h1>
+    <p class="auth-lede" id="authLede"></p>
+  </header>
+
+  <!-- SIGN IN -->
+  <section class="auth-panel" id="panelLogin" hidden>
+    <form class="auth-form" id="loginForm" novalidate>
+      <div class="auth-field">
+        <label for="loginEmail" data-i18n-auth="f.email">Email</label>
+        <input type="email" id="loginEmail" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="auth-field">
+        <label for="loginPassword" data-i18n-auth="f.password">Password</label>
+        <input type="password" id="loginPassword" autocomplete="current-password">
+      </div>
+      <p class="auth-msg" id="loginMsg" role="status" aria-live="polite"></p>
+      <div class="auth-acts">
+        <button class="solid-btn" type="submit" id="loginSubmit" data-i18n-auth="signin">Sign in</button>
+        <!-- Shown only where the server mounted the passkey routes; the
+             config block says whether it did. -->
+        <button class="ghost-btn" type="button" id="loginPasskey" data-i18n-auth="login.passkey" hidden>Use a passkey</button>
+      </div>
+    </form>
+    <p class="auth-aside">
+      <button class="link-btn" type="button" id="loginForgot" data-i18n-auth="login.forgot">Email me a link to set a new password</button>
+    </p>
+  </section>
+
+  <!-- CHOOSE A PASSWORD -->
+  <section class="auth-panel" id="panelSetPassword" hidden>
+    <form class="auth-form" id="setPasswordForm" novalidate>
+      <div class="auth-field">
+        <label for="newPassword" data-i18n-auth="setpw.new">New password</label>
+        <input type="password" id="newPassword" autocomplete="new-password">
+        <p class="auth-hint" data-i18n-auth="setpw.hint">At least 12 characters. Length is what makes a password
+           hard to guess, so a short sentence beats a short scramble.</p>
+      </div>
+      <div class="auth-field">
+        <label for="newPassword2" data-i18n-auth="setpw.again">Type it again</label>
+        <input type="password" id="newPassword2" autocomplete="new-password">
+      </div>
+      <p class="auth-msg" id="setPasswordMsg" role="status" aria-live="polite"></p>
+      <div class="auth-acts">
+        <button class="solid-btn" type="submit" id="setPasswordSubmit" data-i18n-auth="setpw.submit">Set password</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- PEOPLE (admin only; every route behind it is admin-only at the server
+       too, checked per request against the role as it stands in the
+       database) -->
+  <section class="auth-panel" id="panelAdmin" hidden>
+    <form class="auth-form auth-form-row" id="createUserForm" novalidate>
+      <div class="auth-field">
+        <label for="newUserEmail" data-i18n-auth="f.email">Email</label>
+        <input type="email" id="newUserEmail" autocomplete="off"
+               autocapitalize="none" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="auth-field">
+        <label for="newUserRole" data-i18n-auth="people.role">Role</label>
+        <select id="newUserRole">
+          <option value="viewer" data-i18n-auth="opt.viewer">Viewer</option>
+          <option value="editor" data-i18n-auth="opt.editor" selected>Editor</option>
+          <option value="admin" data-i18n-auth="opt.admin">Admin</option>
+        </select>
+      </div>
+      <!-- Filled by auth.js: the first choice names the deployment's own
+           language, which the template does not know how to say. -->
+      <div class="auth-field">
+        <label for="newUserLanguage" data-i18n-auth="people.language">Language</label>
+        <select id="newUserLanguage"></select>
+      </div>
+      <button class="solid-btn" type="submit" id="createUserSubmit" data-i18n-auth="people.add">Add person</button>
+    </form>
+    <p class="auth-roles" data-i18n-auth="people.roles">A viewer reads the ledger. An editor changes it. An admin
+       also decides who has an account.</p>
+    <p class="auth-roles" data-i18n-auth="people.language.hint">The invitation, and the screens it opens, are written in this language.</p>
+
+    <p class="auth-msg" id="adminMsg" role="status" aria-live="polite"></p>
+
+    <!-- The documented degraded mode: with no SMTP configured the server hands
+         the set-password link back to the admin who asked for it, because
+         there is no other way for it to reach the person it belongs to. Shown
+         once, here, and kept nowhere. -->
+    <div class="auth-link-out" id="adminLinkOut" hidden>
+      <p class="auth-link-lede" id="adminLinkLede"></p>
+      <input type="text" id="adminLinkValue" readonly aria-label="Set-password link" data-i18n-auth-aria="link.aria">
+      <div class="auth-acts">
+        <button class="ghost-btn" type="button" id="adminLinkCopy" data-i18n-auth="link.copy">Copy link</button>
+        <button class="link-btn" type="button" id="adminLinkDismiss" data-i18n-auth="link.done">Done</button>
+      </div>
+    </div>
+
+    <ul class="people" id="peopleList"></ul>
+    <p class="empty-note" id="peopleEmpty" data-i18n-auth="people.empty" hidden>No accounts yet.</p>
+  </section>
+
+  <!-- YOUR ACCOUNT -->
+  <section class="auth-panel" id="panelAccount" hidden>
+    <section class="auth-block" id="passkeySection" hidden>
+      <h2 data-i18n-auth="pk.title">Passkeys</h2>
+      <p class="auth-note-body" data-i18n-auth="pk.body">A passkey signs you in with the fingerprint reader or
+         screen lock on a device you already have. It never leaves that device,
+         and it cannot be phished or reused anywhere else.</p>
+      <ul class="passkey-list" id="passkeyList"></ul>
+      <p class="empty-note" id="passkeyEmpty" data-i18n-auth="pk.empty">No passkeys on this account yet.</p>
+      <form class="auth-form auth-form-row" id="passkeyForm" novalidate>
+        <div class="auth-field">
+          <label for="passkeyLabel" data-i18n-auth="pk.name">Name this device</label>
+          <input type="text" id="passkeyLabel" maxlength="64" placeholder="Phone" data-i18n-auth-placeholder="pk.placeholder">
+        </div>
+        <button class="add-row-btn" type="submit" id="passkeyAdd" data-i18n-auth="pk.add">Add a passkey</button>
+      </form>
+      <p class="auth-msg" id="passkeyMsg" role="status" aria-live="polite"></p>
+    </section>
+    <!-- Drawn by auth.js for an admin on a deployment that can push; hidden
+         otherwise. The planner's one-time offer is a good moment to ask, and
+         this is the switch that is still there afterwards. -->
+    <section class="auth-block" id="remindersSection" hidden>
+      <h2 data-i18n-auth="rem.title">Reminders</h2>
+      <p class="auth-note-body" data-i18n-auth="rem.body">One notification on this device when a deadline is near, listing what is coming up. Reminders go to admins, and each device is turned on by itself.</p>
+      <p class="auth-msg" id="remindersState" role="status" aria-live="polite"></p>
+      <div class="auth-acts">
+        <button class="ghost-btn" type="button" id="remindersToggle"></button>
+      </div>
+    </section>
+    <div class="auth-acts auth-acts-parted">
+      <button class="ghost-btn" type="button" id="signOutBtn" data-i18n-auth="signout">Sign out</button>
+    </div>
+  </section>
+
+  <!-- Anything with one sentence to say and nothing to fill in. -->
+  <section class="auth-panel" id="panelNote" hidden>
+    <p class="auth-note-body" id="authNote"></p>
+    <div class="auth-acts">
+      <button class="solid-btn" type="button" id="authNoteAct" data-i18n-auth="signin" hidden>Sign in</button>
+    </div>
+  </section>
+
+  <p class="auth-foot">
+    <button class="link-btn" type="button" data-auth-goto="" data-i18n-auth="back">Back to the planner</button>
+  </p>
+</div>
+
 <script src="{{ .Asset "app.js" }}" defer></script>
+<!-- Two files, not one: the planner and the accounts surface share a page but
+     nothing else, and this one has to be loadable on a deployment that has no
+     accounts at all. Both are ordinary same-origin scripts, which is all the
+     CSP here permits — there is no inline script anywhere in this document,
+     and the configuration above is a data block rather than an executable
+     one for exactly that reason. -->
+<script src="{{ .Asset "auth.js" }}" defer></script>
 </body>
 </html>

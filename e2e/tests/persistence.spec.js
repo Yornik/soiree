@@ -119,7 +119,7 @@ test('a full planner comes back after a reload', async ({ page }) => {
   await expect(task.locator('select.status-select')).toHaveValue('in-progress');
 });
 
-test('with no database behind it, the planner asks once and then stays off the network', async ({ page }) => {
+test('with no database behind it, the page asks its two questions once and then stays off the network', async ({ page }) => {
   /** @type {string[]} */
   const apiRequests = [];
   page.on('request', (r) => {
@@ -138,26 +138,31 @@ test('with no database behind it, the planner asks once and then stays off the n
   await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
   await expectStored(page, (s) => !!s && s.budgetItems.length === 1, 'the write lands in localStorage');
 
-  // Exactly one request, ever: "is there a database here". The answer was a
-  // 404, which is final — those routes are not registered in this deployment
-  // and asking again would only be a second 404. A planner that spent a round
-  // trip per keystroke rediscovering that would be worse than one that never
-  // asked.
+  // Two questions at startup, each asked exactly once: "is there a database
+  // here" from the planner, and "does this deployment have accounts" from the
+  // accounts surface. Both were answered 404, and a 404 here is final — those
+  // routes are not registered in this deployment, so asking again would only
+  // be a second 404. A page that spent a round trip per keystroke
+  // rediscovering that would be worse than one that never asked.
+  //
+  // Named rather than counted: a third probe, or either of these repeating,
+  // has to fail this — which counting a total would not catch on its own.
+  const probed = () => apiRequests.map((u) => new URL(u).pathname).sort();
   await expect
-    .poll(() => apiRequests.length, { message: 'the API is probed exactly once at startup' })
-    .toBe(1);
-  expect(apiRequests[0]).toContain('/api/v1/plan');
+    .poll(probed, { message: 'each startup probe is made exactly once' })
+    .toEqual(['/api/v1/auth/session', '/api/v1/plan']);
 
   // More edits, and a flush, and still nothing goes out.
   await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 300 });
   await flushToStorage(page);
-  expect(apiRequests).toHaveLength(1);
+  expect(probed()).toEqual(['/api/v1/auth/session', '/api/v1/plan']);
 
-  // Nothing in the console that the application put there. The 404 itself is
-  // logged by the browser's own network stack against the API URL — that is
-  // Chromium reporting the probe, not soiree reporting a fault — so it is
+  // Nothing in the console that the application put there. The two 404s are
+  // logged by the browser's own network stack against the URLs above — that is
+  // Chromium reporting the probes, not soiree reporting a fault — so they are
   // named here rather than swept up in a blanket filter.
-  expect(errors.filter((e) => e.url.indexOf('/api/v1/plan') === -1)).toEqual([]);
+  const probes = ['/api/v1/plan', '/api/v1/auth/session'];
+  expect(errors.filter((e) => !probes.some((p) => e.url.indexOf(p) !== -1))).toEqual([]);
 });
 
 test('the planner is stored under one known key, and nothing else', async ({ page }) => {
@@ -168,8 +173,69 @@ test('the planner is stored under one known key, and nothing else', async ({ pag
 
   // The key is a compatibility surface: change it and every saved planner is
   // silently orphaned, with no error anyone would see.
+  //
+  // Still an equality, and still exactly one key, because a theme nobody has
+  // chosen is stored by storing nothing — see the test below, which is where
+  // the second key is pinned down.
   const keys = await page.evaluate(() => Object.keys(localStorage));
   expect(keys).toEqual([STORAGE_KEY]);
+});
+
+/*
+ * The theme is the one preference on this page that deliberately does not
+ * travel. Everything else a person changes is a fact about the event and is
+ * shared; this is a fact about the screen they are looking at, and one person
+ * picking dark must not darken the ledger for everybody else.
+ *
+ * So it is not in the planner document, not in the export and not on the wire
+ * — which leaves a second localStorage key, and leaves the assertion above
+ * needing a companion rather than a loosening. The two together still pin the
+ * whole storage surface: exactly one key until somebody overrides their
+ * device, exactly two afterwards, and back to one when they stop.
+ */
+test('the theme is a per-device choice, kept out of the planner', async ({ page }) => {
+  await openPlanner(page);
+  const themed = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  const stored = () => page.evaluate(() => Object.keys(localStorage).sort());
+  // Addressed by its accessible name rather than by position in the footer, so
+  // this says which control it means and keeps meaning it when something else
+  // lands beside it.
+  const themes = page.getByRole('group', { name: 'Theme' }).getByRole('button');
+  const pill = (i) => themes.nth(i);
+
+  // Three states, not two: "follow the system" is the one most people want and
+  // the one there is no way back to from a two-position switch.
+  await expect(themes).toHaveCount(3);
+  await expect(pill(0)).toHaveText('System');
+  await expect(pill(2)).toHaveText('Dark');
+
+  // Nothing chosen yet. The page follows the device, and says so by writing
+  // no attribute and storing no key.
+  expect(await themed()).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem('soiree.theme'))).toBeNull();
+
+  await pill(2).click();
+  expect(await themed()).toBe('dark');
+
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 300 });
+  await flushToStorage(page);
+
+  expect(await stored()).toEqual(['soiree.theme', STORAGE_KEY]);
+  const planner = await readStored(page);
+  expect(planner).not.toHaveProperty('theme');
+
+  // It is remembered, and the control says which one is in force.
+  await page.reload();
+  expect(await themed()).toBe('dark');
+  await expect(pill(2)).toHaveAttribute('aria-pressed', 'true');
+  await expect(pill(0)).toHaveAttribute('aria-pressed', 'false');
+
+  // Back to following the device clears the key rather than storing a third
+  // value that then has to be kept in step with what "system" means.
+  await pill(0).click();
+  expect(await themed()).toBeNull();
+  expect(await stored()).toEqual([STORAGE_KEY]);
 });
 
 test('a corrupt saved planner is repaired rather than fatal', async ({ page }) => {

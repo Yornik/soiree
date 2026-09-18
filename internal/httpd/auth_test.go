@@ -68,6 +68,13 @@ type fixture struct {
 // and one without, where the admin is handed the link to pass on.
 func newFixture(t *testing.T, withMail bool) *fixture {
 	t.Helper()
+	return newFixtureIn(t, withMail, "")
+}
+
+// newFixtureIn is newFixture on a deployment with a locale, which is what
+// decides the language an account with none of its own is written to in.
+func newFixtureIn(t *testing.T, withMail bool, locale string) *fixture {
+	t.Helper()
 
 	pool := pgtest.Pool(t)
 	if _, err := migrate.Run(t.Context(), pool, nil); err != nil {
@@ -81,7 +88,7 @@ func newFixture(t *testing.T, withMail bool) *fixture {
 		mailer = fake
 	}
 
-	a := NewAuth(AuthOptions{Store: st, Mailer: mailer, BaseURL: "https://soiree.example.test/"})
+	a := NewAuth(AuthOptions{Store: st, Mailer: mailer, BaseURL: "https://soiree.example.test/", Locale: locale})
 	a.params = cheapParams
 	// Synchronous, so "did this send a mail?" is answerable without sleeping
 	// and the race detector has nothing in flight at the end of a test.

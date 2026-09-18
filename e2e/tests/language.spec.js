@@ -85,16 +85,87 @@ test('an unknown language falls back to English rather than to raw keys', async 
   await expect(page.locator('.first-run h2')).toHaveText('Nothing in the ledger yet');
 });
 
-test('with no override the language follows the configured locale', async ({ page }, testInfo) => {
-  // This instance is served with SOIREE_LOCALE=nl-NL and nothing else: no
-  // query string, no stored preference. The operator configured a Dutch event
-  // and got a Dutch interface.
-  await page.goto(testInfo.config.metadata.altBaseURL + '/');
-  await expect(page.locator('body')).toHaveClass(/is-empty/);
+/*
+ * A deployment has one locale, and the people using it do not have one
+ * language. So the page asks the reader's own browser before it falls back on
+ * what the operator configured — and nothing about language is stored against
+ * an account, because a setting somebody made on their own device is better
+ * evidence than anything an admin typed once, and theirs to change.
+ */
+test.describe('a browser that asks for Dutch', () => {
+  test.use({ locale: 'nl-NL' });
+
+  test('gets Dutch, on a deployment configured in English, with nothing in the URL', async ({ page }) => {
+    await openIn(page);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'nl');
+    await expect(page.locator('#tab-overview')).toHaveText('Overzicht');
+    // Language and locale are still separate axes: the figures are the event's.
+    await expect(page.locator('#statDaysLabel')).toHaveText('June 12, 2030');
+  });
+
+  test('still gets whatever a link asks for', async ({ page }) => {
+    await openIn(page, '?lang=id');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'id');
+  });
+});
+
+test.describe('a browser that asks for a language there is no translation for', () => {
+  test.use({ locale: 'de-DE' });
+
+  test('gets the language the deployment was configured in', async ({ page }, testInfo) => {
+    // This instance is served with SOIREE_LOCALE=nl-NL. The operator
+    // configured a Dutch event, and a reader this page cannot place gets a
+    // Dutch interface rather than an English one.
+    await page.goto(testInfo.config.metadata.altBaseURL + '/');
+    await expect(page.locator('body')).toHaveClass(/is-empty/);
+
+    await expect(page.locator('html')).toHaveAttribute('lang', 'nl');
+    await expect(page.locator('#tab-overview')).toHaveText('Overzicht');
+    await expect(page.locator('.first-run h2')).toHaveText('Nog niets in het kasboek');
+  });
+});
+
+/*
+ * The switcher: three flags above everything. A click is somebody's own
+ * explicit choice, so it outranks their browser and is remembered on the
+ * device — and it happens in place, because a reload discards whatever was
+ * typed while signed out.
+ */
+test('a flag changes the language in place, and the device remembers it', async ({ page }) => {
+  await openIn(page);
+  await expect(page.locator('#langSwitch [data-lang="en"]')).toHaveAttribute('aria-pressed', 'true');
+  // Named for a screen reader in the language's own word for itself: a flag is
+  // not a language, and two of these three are red and white.
+  await expect(page.locator('#langSwitch [data-lang]')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Bahasa Indonesia' })).toBeVisible();
+
+  await page.evaluate(() => { window.__neverReloaded = true; });
+  await page.getByRole('button', { name: 'Nederlands' }).click();
 
   await expect(page.locator('html')).toHaveAttribute('lang', 'nl');
   await expect(page.locator('#tab-overview')).toHaveText('Overzicht');
   await expect(page.locator('.first-run h2')).toHaveText('Nog niets in het kasboek');
+  await expect(page.locator('#langSwitch [data-lang="nl"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#langSwitch [data-lang="en"]')).toHaveAttribute('aria-pressed', 'false');
+  expect(await page.evaluate(() => window.__neverReloaded)).toBe(true);
+
+  // Labels baked when a control was built are said again too.
+  await expect(page.locator('.data-tools .filter-pills .pill').first()).not.toHaveText('System');
+
+  expect(await page.evaluate(() => localStorage.getItem('soiree.lang'))).toBe('nl');
+  await openIn(page);
+  await expect(page.locator('html')).toHaveAttribute('lang', 'nl');
+});
+
+test('a flag clicked on a ?lang= link takes the link\'s language out of the address', async ({ page }) => {
+  // ?lang= outranks a stored choice. Left in the address bar it would make the
+  // flag somebody just clicked stop working at their next reload.
+  await openIn(page, '?lang=id');
+  await page.getByRole('button', { name: 'English' }).click();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  expect(page.url()).not.toContain('lang=');
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
 });
 
 test('the language is a view of the page, not a setting written into the planner', async ({ page }) => {

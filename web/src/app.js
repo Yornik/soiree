@@ -10,6 +10,37 @@
   var STORAGE_KEY = 'soiree.v1';
 
   /* ------------------------------------------------------------------
+   * THEME
+   * ------------------------------------------------------------------
+   * Both palettes are in the stylesheet already and :root[data-theme] is the
+   * hook that picks one. Until now nothing set it.
+   *
+   * A preference of the device, not a fact about the event, so it is the one
+   * thing here that deliberately does not travel: not in `state`, not in the
+   * export, not over the API. One person reading in the dark must not darken
+   * the ledger for everybody else. Hence a key of its own — and only once
+   * somebody has chosen: "follow the system" is the default and is stored by
+   * storing nothing, so a planner nobody has themed keeps exactly the one key
+   * it documents.
+   *
+   * Applied as the first thing this file does, so the page is painted once
+   * rather than repainted. A frame of the OS theme still gets through before
+   * this script runs; closing that needs an inline <script> in the head, which
+   * the CSP forbids on purpose.
+   * ------------------------------------------------------------------ */
+  var THEME_KEY = 'soiree.theme';
+  var THEMES = ['system', 'light', 'dark'];
+
+  function readTheme() {
+    try { return localStorage.getItem(THEME_KEY) || 'system'; } catch (e) { return 'system'; }
+  }
+  function paintTheme(mode) {
+    if (mode === 'light' || mode === 'dark') document.documentElement.setAttribute('data-theme', mode);
+    else document.documentElement.removeAttribute('data-theme');
+  }
+  paintTheme(readTheme());
+
+  /* ------------------------------------------------------------------
    * CONFIGURATION
    * ------------------------------------------------------------------
    * Injected by the server from SOIREE_* environment variables. Read from a
@@ -64,10 +95,26 @@
    *   1. ?lang= in the URL   — makes a link shareable in one language, and is
    *                            deliberately not persisted: it is a view of the
    *                            page, not a setting on the planner.
-   *   2. config.language     — read if the server ever sends it.
-   *   3. config.locale       — what an operator already configures, and it
+   *   2. the flag they chose — the switcher at the top of the page. Somebody's
+   *                            own explicit choice, made on this device, so it
+   *                            is kept on this device (LANG_KEY) and outranks
+   *                            what their browser asks for: plenty of people
+   *                            read a language their phone was never set to.
+   *   3. the browser         — navigator.languages, in the person's own
+   *                            order, first one there is a translation for. A
+   *                            deployment has one locale and the people using
+   *                            it do not have one language, and the setting
+   *                            somebody made on their own device is the best
+   *                            evidence there is of which one they read. It is
+   *                            also theirs to change. Nothing about language
+   *                            is stored against an account, for that reason:
+   *                            an admin's guess made once, when inviting
+   *                            somebody, is right for the one mail it was made
+   *                            for and wrong to pin an interface to.
+   *   4. config.language     — read if the server ever sends it.
+   *   5. config.locale       — what an operator already configures, and it
    *                            carries the language tag: nl-NL -> nl.
-   *   4. 'en'
+   *   6. 'en'
    *
    * Currency and date formatting stay on config.locale throughout. Language is
    * what the interface is written in; locale is how numbers are spelled, and
@@ -179,13 +226,23 @@
       'd.offline': 'Your changes are not reaching the server. Still trying — they are safe in this browser meanwhile.',
       'd.online': 'Back in touch with the server. Everything is saved.',
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
+      'd.session': 'Your session has ended. Sign in again — what you changed is safe in this browser and is sent as soon as you are back.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
       'ar.reopen': 'Reopen for editing',
       'ar.open': 'Reopened for editing. Close it again once everything is settled.',
       'ar.close': 'Close the planner',
       'ar.settle': 'The final reckoning',
       'ar.settlenote': 'what each person covered',
-      'ar.nothing': 'Nothing was recorded.'
+      'ar.nothing': 'Nothing was recorded.',
+      'th.title': 'Theme',
+      'th.system': 'System',
+      'th.light': 'Light',
+      'th.dark': 'Dark',
+      'n.offer': 'Want a reminder here when a deadline is near? One notification on this device, listing what is coming up.',
+      'n.on': 'Turn on',
+      'n.later': 'Not now',
+      'n.done': 'Reminders are on for this device.',
+      'n.no': 'Notifications are blocked for this site. Your browser’s site settings can undo that.'
     },
     nl: {
       'nav.sections': 'Onderdelen van de planner',
@@ -290,13 +347,23 @@
       'd.offline': 'Je wijzigingen bereiken de server niet. Er wordt opnieuw geprobeerd — ondertussen staan ze veilig in deze browser.',
       'd.online': 'Weer verbinding met de server. Alles is opgeslagen.',
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
+      'd.session': 'Je sessie is verlopen. Meld je opnieuw aan — je wijzigingen staan veilig in deze browser en worden verstuurd zodra je terug bent.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
       'ar.reopen': 'Heropenen om te bewerken',
       'ar.open': 'Weer opengesteld. Sluit de planner zodra alles is afgerekend.',
       'ar.close': 'Planner sluiten',
       'ar.settle': 'De eindafrekening',
       'ar.settlenote': 'wat ieder heeft betaald',
-      'ar.nothing': 'Er is niets vastgelegd.'
+      'ar.nothing': 'Er is niets vastgelegd.',
+      'th.title': 'Thema',
+      'th.system': 'Systeem',
+      'th.light': 'Licht',
+      'th.dark': 'Donker',
+      'n.offer': 'Hier een seintje krijgen als een deadline nadert? Eén melding op dit apparaat, met wat eraan komt.',
+      'n.on': 'Aanzetten',
+      'n.later': 'Nu niet',
+      'n.done': 'Herinneringen staan aan op dit apparaat.',
+      'n.no': 'Meldingen zijn geblokkeerd voor deze site. Dat kun je terugdraaien bij de site-instellingen van je browser.'
     },
     id: {
       'nav.sections': 'Bagian perencana',
@@ -400,28 +467,73 @@
       'd.offline': 'Perubahanmu belum sampai ke server. Masih dicoba lagi — sementara ini aman tersimpan di browser.',
       'd.online': 'Terhubung lagi dengan server. Semuanya tersimpan.',
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
+      'd.session': 'Sesimu sudah berakhir. Masuk lagi — perubahanmu aman tersimpan di browser ini dan dikirim begitu kamu kembali.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
       'ar.reopen': 'Buka lagi untuk diubah',
       'ar.open': 'Dibuka lagi untuk diubah. Tutup lagi setelah semuanya beres.',
       'ar.close': 'Tutup perencana',
       'ar.settle': 'Perhitungan akhir',
       'ar.settlenote': 'berapa yang ditanggung tiap orang',
-      'ar.nothing': 'Tidak ada yang tercatat.'
+      'ar.nothing': 'Tidak ada yang tercatat.',
+      'th.title': 'Tema',
+      'th.system': 'Sistem',
+      'th.light': 'Terang',
+      'th.dark': 'Gelap',
+      'n.offer': 'Mau diingatkan di sini kalau tenggat sudah dekat? Satu notifikasi di perangkat ini, berisi apa yang akan datang.',
+      'n.on': 'Nyalakan',
+      'n.later': 'Nanti saja',
+      'n.done': 'Pengingat aktif di perangkat ini.',
+      'n.no': 'Notifikasi diblokir untuk situs ini. Kamu bisa membatalkannya di pengaturan situs browser.'
     }
   };
 
-  var LANG = (function () {
-    function pick(v) {
-      var tag = String(v || '').toLowerCase().replace(/_/g, '-').split('-')[0];
-      return LANGS.indexOf(tag) !== -1 ? tag : '';
-    }
+  function pickLang(v) {
+    var tag = String(v || '').toLowerCase().replace(/_/g, '-').split('-')[0];
+    return LANGS.indexOf(tag) !== -1 ? tag : '';
+  }
+
+  // What the deployment speaks, with nobody's preference applied.
+  var LANG_DEFAULT = pickLang(CONFIG.language) || pickLang(CONFIG.locale) || 'en';
+
+  // A language in the URL is somebody's explicit choice for this view, and
+  // nothing an account says overrides it.
+  var LANG_FROM_URL = (function () {
     var q = '';
     try {
       q = (location.search.match(/[?&]lang=([^&]*)/) || [])[1] || '';
       q = decodeURIComponent(q);
     } catch (e) { q = ''; }
-    return pick(q) || pick(CONFIG.language) || pick(CONFIG.locale) || 'en';
+    return pickLang(q);
   })();
+
+  // The first language the browser asks for that this page is written in.
+  // `languages` is the person's whole ordered list; `language` is only its
+  // head, and somebody whose list is German, then Dutch, should get Dutch.
+  var LANG_FROM_BROWSER = (function () {
+    var list = [];
+    try {
+      list = (navigator.languages && navigator.languages.length)
+        ? navigator.languages : [navigator.language];
+    } catch (e) { list = []; }
+    for (var i = 0; i < list.length; i += 1) {
+      var tag = pickLang(list[i]);
+      if (tag) return tag;
+    }
+    return '';
+  })();
+
+  // The third and last thing this page keeps in localStorage, beside the
+  // planner and the theme: the language somebody picked from the switcher.
+  // Theirs, on their device — nothing about language is stored on an account.
+  var LANG_KEY = 'soiree.lang';
+
+  var LANG = LANG_FROM_URL || (function () {
+    try { return pickLang(localStorage.getItem(LANG_KEY)); } catch (e) { return ''; }
+  })() || LANG_FROM_BROWSER || LANG_DEFAULT;
+
+  // Things that say something once, when they are built, and have to be told
+  // to say it again: see chooseLanguage().
+  var languageHooks = [];
 
   // Drives screen-reader pronunciation and hyphenation, so it has to be the
   // language the page is actually written in rather than the one the server
@@ -649,6 +761,9 @@
       // A no-op until the probe has found an API, so the local-only
       // deployment never touches the network again after it.
       Sync.push();
+    },
+    clear: function () {
+      try { localStorage.removeItem(this.key); } catch (e) { /* storage unavailable */ }
     }
   };
 
@@ -692,6 +807,13 @@
     });
     state.notes.forEach(function (n) { if (!n.id) n.id = uid('n'); });
   })();
+
+  // The planner exactly as this page found it, before anybody touched it. When
+  // the plan arrives late — after a sign-in, on a tab reopened a week on — this
+  // is the only record of what the copy on screen looked like before the edits
+  // made to it, which is what tells an edit apart from a copy that is merely
+  // old. See adopt().
+  var loaded = JSON.parse(JSON.stringify(state));
 
   /* ==================================================================
    * THE SHARED BACKEND
@@ -811,15 +933,21 @@
    *
    * `phases` and `programme` are in the plan and are not here. This page has
    * no interface for either, and a client must not delete rows it cannot draw.
+   *
+   * `entity` is the third name each of these has: the table, which is the word
+   * the change feed speaks. Written down beside the other two rather than
+   * derived, because `budget_items` -> `budget-items` -> `budgetItems` is three
+   * spellings of one thing and a rule that converts between them is a rule to
+   * get wrong.
    */
   var COLLECTIONS = [
     {
-      key: 'sponsors', route: 'sponsors', container: 'sponsorGrid',
+      key: 'sponsors', route: 'sponsors', entity: 'sponsors', container: 'sponsorGrid',
       fields: [textField('code'), textField('name')],
       render: function () { renderSponsors(); renderBudgetTable(); renderSplit(); }
     },
     {
-      key: 'budgetItems', route: 'budget-items', container: 'budgetBody',
+      key: 'budgetItems', route: 'budget-items', entity: 'budget_items', container: 'budgetBody',
       fields: [
         textField('item'), moneyField('unit'), numberField('qty'),
         moneyField('paid'), textField('note'), idsField('sponsors')
@@ -827,12 +955,12 @@
       render: function () { renderBudgetTable(); renderBudgetTotals(); renderOverview(); }
     },
     {
-      key: 'tasks', route: 'tasks', container: 'tasksBody',
+      key: 'tasks', route: 'tasks', entity: 'tasks', container: 'tasksBody',
       fields: [textField('name'), textField('owner'), dateField('due'), textField('status')],
       render: function () { renderTasksTable(); renderOverview(); }
     },
     {
-      key: 'notes', route: 'notes', container: 'watchList',
+      key: 'notes', route: 'notes', entity: 'notes', container: 'watchList',
       fields: [textField('text')],
       render: function () { renderNotes(); }
     }
@@ -844,13 +972,17 @@
    * is why this descriptor is not in the list above — everything else about
    * it, revision included, is the same. */
   var SETTINGS = {
-    key: 'settings', route: 'settings', singleton: true, container: 'panel-budget',
+    key: 'settings', route: 'settings', entity: 'settings', singleton: true, container: 'panel-budget',
     fields: [
       moneyField('ceiling'), numberField('inflationPct'),
       numberField('fxRate'), boolField('splitEvenly')
     ],
     render: function () { renderSettingsInputs(); renderBudgetTotals(); renderOverview(); }
   };
+
+  // Table name -> the descriptor that draws it, for reading the change feed.
+  var BY_ENTITY = { settings: SETTINGS };
+  COLLECTIONS.forEach(function (c) { BY_ENTITY[c.entity] = c; });
 
   function fieldNamed(coll, name) {
     for (var i = 0; i < coll.fields.length; i++) {
@@ -864,6 +996,15 @@
       if (list[i] && list[i].id === id) return list[i];
     }
     return null;
+  }
+
+  // Removal by identity rather than by index. A remote change can add or take
+  // away rows above this one, and a rebuild of the table is held off while
+  // somebody is typing in it — so the position a row had when its controls were
+  // drawn is not the position it has when one of them is pressed.
+  function dropRow(list, row) {
+    var i = list.indexOf(row);
+    if (i !== -1) list.splice(i, 1);
   }
 
   /* ---------- Wire <-> page ---------- */
@@ -884,15 +1025,19 @@
 
   /* Every row in the plan becomes a row on the page, including the child rows
    * of a broken-down quote. This page has no notion of a parent and a
-   * breakdown, so a plan loaded by cmd/soiree-import — where a caterer's
-   * per-dish sheet is child rows under one line — reads its headline figures
-   * high, because the parent and its children are both counted.
+   * breakdown, so a plan that holds rows with a parentId — which only a
+   * client writing to the API directly can create — reads its headline
+   * figures high, because the parent and its children are both counted.
    *
-   * Do not fix that by filtering parentId out here. The shadow would still
-   * hold those rows, so the very next difference would be a DELETE for every
-   * child in the breakdown, and the import would be destroyed by the act of
-   * looking at it. Teaching the page about parents is the fix, and it is a
-   * change to the page rather than to this function. */
+   * cmd/soiree-import does not produce that. It folds a breakdown's amounts
+   * into the parent, summarises the rows in the parent's note, and nests them
+   * under a `children` key that the import below never reads.
+   *
+   * Do not fix the first case by filtering parentId out here. The shadow
+   * would still hold those rows, so the very next difference would be a DELETE
+   * for every child in the breakdown, and they would be destroyed by the act
+   * of looking at them. Teaching the page about parents is the fix, and it is
+   * a change to the page rather than to this function. */
   function stateFromPlan(plan) {
     var s = emptyState();
     var wire = plan.settings || {};
@@ -911,6 +1056,24 @@
       (plan[c.key] || []).forEach(function (w) {
         if (!w || !w.id) return;
         byId[w.id] = { row: rowFromWire(c, w), revision: Number(w.revision) || 0 };
+      });
+      sh[c.key] = byId;
+    });
+    return sh;
+  }
+
+  // A server id is a uuid; one minted here is a letter and seven characters of
+  // base 36 (see uid), until adoptServerId() renames it on the 201.
+  var SERVER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  // The stand-in shadow adopt() merges against. The revisions are never read:
+  // applyPlan() replaces every entry with the plan's own before it returns.
+  function shadowFromLoaded() {
+    var sh = { settings: { row: loaded, revision: 0 } };
+    COLLECTIONS.forEach(function (c) {
+      var byId = {};
+      (loaded[c.key] || []).forEach(function (r) {
+        if (r && r.id && SERVER_ID.test(r.id)) byId[r.id] = { row: cloneRow(c, r), revision: 0 };
       });
       sh[c.key] = byId;
     });
@@ -1119,6 +1282,15 @@
       reconcile(op, res.body.current);
       return true;
     }
+    if (res.status === 401) {
+      // Not a refusal of this row — a refusal of this browser. Parking the row
+      // would be exactly wrong: nothing about the edit needs to change for it
+      // to be accepted, only who is asking, and a parked row stays parked
+      // until it is edited again. So the pass stops, the shadow does not
+      // advance, and the same difference goes up after the next sign-in.
+      sessionLost();
+      return false;
+    }
     if (res.status >= 400 && res.status < 500) {
       // The server understood and said no. Sending the identical body again
       // would only produce the identical refusal, so this row is parked until
@@ -1236,6 +1408,12 @@
    */
   var Sync = { queued: false, running: false, failures: 0, timer: null };
 
+  // Bumped whenever a write pass begins or ends. It is how a plan fetched from
+  // the live stream knows it was overtaken: a read that spans a pass may be
+  // missing a row this browser has just created, or carrying a revision it has
+  // just superseded, and merging either would undo work that did land.
+  var passes = 0;
+
   Sync.push = function () {
     if (!apiMode) return;
     Sync.queued = true;
@@ -1243,14 +1421,16 @@
   };
 
   Sync.run = function () {
-    if (!apiMode || Sync.running || Sync.timer || !Sync.queued) return;
+    if (!apiMode || sessionGone || Sync.running || Sync.timer || !Sync.queued) return;
     Sync.queued = false;
     Sync.running = true;
+    passes++;
     drain(0).then(Sync.done, function () { Sync.done('retry'); });
   };
 
   Sync.done = function (outcome) {
     Sync.running = false;
+    passes++;
     if (outcome === 'done') {
       if (Sync.failures >= FAILURES_BEFORE_NOTICE) flash(t('d.online'));
       Sync.failures = 0;
@@ -1258,6 +1438,12 @@
       if (Sync.queued) Sync.run();
       return;
     }
+
+    // No session: there is nothing to wait out. A retry timer here would send
+    // the same write into the same 401 every thirty seconds for as long as the
+    // tab stays open, and a 401 is what the proxy's ban rule counts. The work
+    // stays queued; signing in is what runs it.
+    if (sessionGone) { Sync.queued = true; return; }
 
     // 'retry' and 'outrun' are different causes with the same consequence and
     // the same remedy, so they share a message: in both, edits this person has
@@ -1301,17 +1487,232 @@
    * only be a second 404. Anything else that is not an answer might be this
    * browser being offline on a first visit, which is worth a few more tries.
    */
+  // One at a time. Two things ask for a connection on an ordinary signed-in
+  // load — the page starting, and auth.js reporting the session a moment later
+  // — and the second arrives while the first is still in flight. Letting both
+  // through fetched the whole plan twice on every load, which is the largest
+  // request this page makes, to a server that may be 300 ms away. It was also
+  // a race with a worse ending: both answers reach adopt(), the second resets
+  // the shadow while the first one's POSTs are landing, and a planner being
+  // carried up to an empty database is carried up twice.
+  var connecting = false;
+
   function connect(attempt) {
     if (typeof fetch !== 'function' || typeof Promise !== 'function') return;
+    // A retry (attempt > 0) is the connection already in progress, not a
+    // second one.
+    if (attempt === 0) {
+      if (connecting) return;
+      connecting = true;
+    }
     api('GET', '/plan').then(function (res) {
-      if (res.status === 200 && res.body) { adopt(res.body); return; }
-      if (res.status === 404) return;
+      if (res.status === 200 && res.body) { connecting = false; announceAPI(true); adopt(res.body); return; }
+      // 404 is final: with no database those paths are never registered.
+      if (res.status === 404) { connecting = false; announceAPI(false); return; }
+      // 401 is not "no API" — it is an API that wants a session. Falling back
+      // to localStorage here would be the worst of both: edits would look
+      // saved, live in this browser only, and never reach the plan everybody
+      // else is reading. So hold, and connect for real once auth.js reports a
+      // sign-in.
+      if (res.status === 401) { connecting = false; announceAPI(true); return; }
       if (attempt < 4) {
         setTimeout(function () { connect(attempt + 1); },
           Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, attempt)));
+        return;
       }
+      connecting = false;
     });
   }
+
+  /* Tell auth.js whether this deployment has an API at all.
+   *
+   * It has its own question to ask — whether anybody is signed in — and with
+   * no database there is nobody to sign in as, so a second probe would be a
+   * request whose answer is already known. Latched on window and announced as
+   * an event, because auth.js may have finished loading either before or after
+   * this resolves. */
+  function announceAPI(available) {
+    window.soiree = window.soiree || {};
+    if (window.soiree.apiAvailable === available) return;
+    window.soiree.apiAvailable = available;
+    document.dispatchEvent(new CustomEvent('soiree:api', { detail: { available: available } }));
+  }
+
+  /* ---------- A session that ends while the page is open ----------
+   * connect() above handles a 401 on the first request. This is every 401
+   * after it: seven idle days, an admin disabling the account, a sign-out in
+   * another tab. The page is mid-use when it happens, so three things are
+   * already running that would each keep asking — the write loop, the resync
+   * and the event stream — and each asks into the same refusal on a timer.
+   *
+   * That is not only wasted requests. The deployment this was written for has
+   * a ban rule at the proxy that counts 401s per address, and one tab left
+   * open over a week is enough of them to lock out a household.
+   *
+   * So: stop all three, say so, and keep every edit. Nothing here touches
+   * `state` or the shadow, which is what makes signing back in free — the
+   * difference is still there to send.
+   */
+  var sessionGone = false;
+
+  // Stop asking. No event: this is also what an ordinary sign-out needs, and
+  // auth.js already knows about that one because it caused it.
+  function haltSync() {
+    if (sessionGone) return false;
+    sessionGone = true;
+    closeLive();
+    if (resyncTimer) { clearTimeout(resyncTimer); resyncTimer = null; }
+    if (Sync.timer) { clearTimeout(Sync.timer); Sync.timer = null; }
+    if (apiMode) setSticky(t('d.session'));
+    return true;
+  }
+
+  // A request of ours was refused for want of a session. That is definitive,
+  // so halt first and tell auth.js second.
+  function sessionLost() {
+    if (haltSync()) doubtSession();
+  }
+
+  /* Ask auth.js to look again.
+   *
+   * It owns the question of who is signed in, and it answers on
+   * `soiree:session` like any other change. Used directly by the one caller
+   * that cannot know: an EventSource reports a refused connection as an error
+   * with no status, so a closed stream may be a 401 or may be the subscriber
+   * cap, and only one of those is a reason to stop. */
+  function doubtSession() {
+    document.dispatchEvent(new CustomEvent('soiree:session-check'));
+  }
+
+  /* ---------- Signing out ----------
+   * The copy of the plan this browser keeps is what lets the page paint at
+   * once and work offline. It is also a ledger of people's names against
+   * money, in localStorage, on whatever computer somebody happened to use — so
+   * signing out takes it away again.
+   *
+   * Only a sign-out somebody asked for. A session that merely ENDED leaves
+   * everything where it is: that person is coming back, their unsent edits are
+   * in that copy, and "what you changed is safe in this browser" is a promise
+   * the sign-in screen has just made them.
+   *
+   * Which is also the hazard here, from the other side: signing out discards
+   * whatever has not reached the server. So auth.js asks first, through
+   * beforeSignOut() — the debounce is flushed, the write loop gets a few
+   * seconds to finish, and what comes back is the number of changes that still
+   * exist nowhere else. Anything above zero is put to the person as a
+   * question rather than decided for them.
+   */
+  var forgotten = false;
+
+  function unsentCount() {
+    if (!apiMode || !shadow) return 0;
+    // Waiting to be sent, plus refused by the server and parked: both are
+    // edits that exist in this browser and nowhere else.
+    return planOps().length + Object.keys(blocked).length;
+  }
+
+  function beforeSignOut() {
+    flushSave();
+    if (!apiMode || sessionGone) return Promise.resolve(unsentCount());
+    return new Promise(function (resolve) {
+      var deadline = Date.now() + 4000;
+      (function wait() {
+        // Settled is either "nothing left to send" or "gave up for now": a
+        // retry timer means the origin is not answering, and waiting out its
+        // backoff would hold somebody at the door of a shared computer.
+        var settled = !Sync.running && !saveTimer && (!Sync.queued || Sync.timer);
+        if (settled || Date.now() > deadline) { resolve(unsentCount()); return; }
+        setTimeout(wait, 100);
+      })();
+    });
+  }
+
+  function forgetPlan() {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    Store.clear();
+
+    // Column widths are how this person likes their table and say nothing
+    // about anybody. Row heights are keyed by the ids of budget lines, so they
+    // go with the lines.
+    var widths = state.colWidths;
+    state = emptyState();
+    state.colWidths = widths;
+
+    // Back to a page that has never met the server. The next sign-in then
+    // takes connect() and adopt() — the plan as the server has it — rather
+    // than a merge against a shadow of something this browser no longer holds.
+    shadow = null;
+    apiMode = false;
+    dirty = false;
+    hadSavedCopy = false;
+    blocked = {};
+    idMap = {};
+    pendingRefresh = {};
+    loaded = JSON.parse(JSON.stringify(state));
+    Sync.queued = false;
+    Sync.failures = 0;
+    forgotten = true;
+
+    setSticky('');
+    renderAll();
+  }
+
+  window.soiree = window.soiree || {};
+  window.soiree.beforeSignOut = beforeSignOut;
+
+  // Another tab signed out. This one still holds the plan in memory and would
+  // write it straight back the next time it saved or was closed, so it lets go
+  // of it too, and asks auth.js to look at the session — which is gone.
+  window.addEventListener('storage', function (e) {
+    if (!e || e.key !== STORAGE_KEY || e.newValue !== null || forgotten) return;
+    if (apiMode) haltSync();
+    forgetPlan();
+    doubtSession();
+  });
+
+  // The digest is pushed to active admins and to nobody else (the store's
+  // NotifiablePushSubscriptions), so an offer made to anybody else is an offer
+  // of something that will never arrive.
+  var sessionRole = '';
+
+  document.addEventListener('soiree:session', function (e) {
+    var signedIn = !!(e && e.detail && e.detail.signedIn);
+    sessionRole = signedIn ? String(e.detail.role || '') : '';
+    if (!signedIn) {
+      // Only once there is something to halt. Before the first plan arrives
+      // this is the ordinary "nobody is signed in yet" and connect() is
+      // already holding.
+      if (apiMode) haltSync();
+      if (e && e.detail && e.detail.reason === 'signout') forgetPlan();
+      return;
+    }
+
+    // Back. Rows parked by a refusal are released, because who is asking is
+    // exactly what changed: an editor signing in where a viewer was is a
+    // different answer to the same 403. Anything still refused is parked
+    // again on the pass that follows, with one notice rather than none.
+    sessionGone = false;
+    blocked = {};
+    setSticky('');
+
+    // Never signed in on this page before: the ordinary first load.
+    if (!apiMode) { connect(0); return; }
+
+    // Signed in AGAIN, on a page that has been holding a plan — and for as
+    // long as it was signed out, other people kept editing. That makes this a
+    // merge and emphatically not adopt(), for the reason applyPlan() gives:
+    // adopt() lets this browser's copy win. `dirty` has been true since the
+    // first keystroke of this page's life, so adopt() would diff a copy that
+    // may be a week stale against a fresh shadow and PATCH it over everyone —
+    // at the current revision, so without so much as a 409 — and POST back
+    // every row somebody deleted in the meantime.
+    //
+    // The shadow this page still holds is the version both sides started
+    // from, which is exactly what the three-way merge wants: a field edited
+    // here while signed out is kept and sent, everything else is theirs.
+    openLive();
+    scheduleResync();
+  });
 
   /* Take the plan the origin sent.
    *
@@ -1345,6 +1746,31 @@
       return (state[c.key] || []).length > 0;
     });
 
+    // Edited here, and the server has a plan of its own. "Something was typed
+    // between the cached copy painting and the plan arriving" was written for
+    // a gap of a few hundred milliseconds. Behind a sign-in it is as long as
+    // somebody takes to notice they are signed out — on a tab reopened after a
+    // week, showing a week-old copy, with nothing stopping them editing it.
+    // Letting this browser's copy win then does not keep a keystroke; it
+    // PATCHes every stale field over a week of other people's work, at the
+    // current revision and so with no 409, and POSTs back every row they
+    // deleted.
+    //
+    // So this is a merge as well, and the copy as it was loaded stands in for
+    // the shadow that was lost with the last page: a field that differs from
+    // it was edited here and is ours; everything else is theirs. Only rows the
+    // server once knew go into it — a row under an id this browser minted has
+    // never been sent, and applyPlan() must read its absence from the plan as
+    // "not created yet", not as "somebody deleted it".
+    if (dirty && !planIsEmpty) {
+      shadow = shadowFromLoaded();
+      applyPlan(plan);
+      renderAll();
+      openLive();
+      pushRefresh();
+      return;
+    }
+
     if (dirty || (hadSavedCopy && holdingRows && planIsEmpty)) {
       // The rows the server has that this browser has not are taken rather
       // than deleted: in this window "absent here" means "not fetched yet",
@@ -1370,6 +1796,269 @@
 
     renderAll();
     Sync.push();
+    openLive();
+    pushRefresh();
+  }
+
+  /* ==================================================================
+   * LIVE SYNC — GET /api/v1/events
+   * ==================================================================
+   * Two people have shared one ledger since the API was wired up, and neither
+   * saw the other until they reloaded. That is how a venue gets booked twice.
+   *
+   * The stream carries identifiers, never rows — "budget_items <id> is now at
+   * revision 4" — so every event resolves to the same act: re-read GET /plan
+   * and merge it. The interesting parts are the merge, and knowing when not to
+   * read. Four rules from the endpoint's contract, each counter-intuitive and
+   * each load-bearing:
+   *
+   *   - `resync` means "your copy is stale". It arrives on every connect and
+   *     again whenever the server re-establishes its database connection,
+   *     because changes happened in that gap that nobody was told about. There
+   *     is no replay and no Last-Event-ID: this is the whole of what a client
+   *     does about missed events.
+   *   - On create and update, ignore a revision already held. That is what
+   *     suppresses the echo of this browser's own write — the server does not
+   *     filter it out, and re-reading the plan to be told what we just wrote is
+   *     a round trip for nothing.
+   *   - On delete, never compare revisions. A delete announces the row's final
+   *     revision, which is the one already held, so a `<=` test would discard
+   *     the one event that must never be discarded and the row would stay.
+   *   - Deleting a phase, a sponsor or a budget line is why every event ends in
+   *     a whole-plan read rather than a surgical one. Those cascade — a line's
+   *     phase and a programme entry's line go to NULL, attributions are removed
+   *     — without bumping the affected rows' revisions, so none of it is
+   *     announced, and a stale copy here would sail through the revision check
+   *     on the next PATCH and write the dangling reference back.
+   * ================================================================== */
+
+  var live = null;        // the EventSource, once there is a database behind us
+  var liveWait = 0;       // backoff for a stream that was refused outright
+  var liveTimer = null;   // the pending reopen, so that it can be called off
+
+  // Reconnect is normally the browser's job — the server sends `retry: 3000`.
+  // This is only for the case the browser will not retry: see onerror.
+  var LIVE_RETRY_MS = 5000;
+
+  function closeLive() {
+    if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }
+    if (live) { live.close(); live = null; }
+    liveWait = 0;
+  }
+
+  function openLive() {
+    if (!apiMode || sessionGone || live || typeof EventSource !== 'function') return;
+    try { live = new EventSource(API_BASE + '/events'); } catch (e) { live = null; return; }
+
+    // Named events. Nothing is ever sent as a default `message`, so onmessage
+    // would sit there receiving nothing and the page would look connected and
+    // be deaf.
+    live.addEventListener('resync', function () { scheduleResync(); });
+    live.addEventListener('change', function (e) { onChange(e.data); });
+    live.onopen = function () { liveWait = 0; };
+    live.onerror = function () {
+      // CONNECTING means the browser is already reconnecting on the interval
+      // the server asked for, and anything done here would be a second attempt
+      // racing the first. CLOSED is the case that needs us: a stream refused
+      // with a status — a 503 when the subscriber cap is reached — puts an
+      // EventSource into CLOSED permanently, and it never comes back on its
+      // own. The Retry-After that came with it is not readable from here, so
+      // the wait is ours, doubling and jittered: a full cap means everyone hit
+      // it at once, and reconnecting in lockstep is how it stays hit.
+      if (!live || live.readyState !== EventSource.CLOSED) return;
+      live.close();
+      live = null;
+      liveWait = Math.min(RETRY_MAX_MS, liveWait ? liveWait * 2 : LIVE_RETRY_MS);
+      liveTimer = setTimeout(function () { liveTimer = null; openLive(); },
+        liveWait / 2 + Math.random() * liveWait);
+
+      // The other reason a stream is refused outright is a session that has
+      // ended, and from in here the two look identical. The reopen above stays
+      // booked, because if this was the cap it is still the right thing to do;
+      // if auth.js finds there is no session, haltSync() calls it off before
+      // it fires. One question asked, rather than a 401 every thirty seconds
+      // for as long as the tab is open.
+      doubtSession();
+    };
+  }
+
+  function onChange(raw) {
+    var n;
+    try { n = JSON.parse(raw); } catch (e) { return; }
+    if (!n || !n.entity || !shadow) return;
+
+    var c = BY_ENTITY[n.entity];
+    if (n.action === 'delete') {
+      // No revision test, deliberately. `phases` is not drawn here and is acted
+      // on anyway, because deleting one silently rewrites budget lines; a
+      // programme entry is the one deletion with nothing behind it.
+      if (!c && n.entity !== 'phases') return;
+    } else {
+      if (!c) return;   // phases and programme entries: nothing here is drawn from them
+      var held = c.singleton ? shadow.settings : shadow[c.key][n.id];
+      if (held && n.revision != null && Number(n.revision) <= held.revision) return;
+    }
+    scheduleResync();
+  }
+
+  /* ---------- Re-reading the plan ----------
+   * Coalesced, and never on top of this browser's own writing.
+   *
+   * The wait is long enough to swallow the two resyncs a connect sends and the
+   * burst a cascading delete makes, and long enough that a keystroke which has
+   * only just landed has started the save debounce below: a read that overtakes
+   * the write it raced settles a conflict silently, where the write would have
+   * reported it.
+   */
+  var RESYNC_MS = 400;
+  var resyncTimer = null;
+  var resyncing = false;
+  var resyncAgain = false;
+  var resyncWait = 0;
+
+  function scheduleResync() {
+    if (!apiMode) return;
+    resyncAgain = true;
+    armResync(RESYNC_MS);
+  }
+
+  function armResync(ms) {
+    if (sessionGone || resyncTimer || resyncing) return;
+    resyncTimer = setTimeout(runResync, ms);
+  }
+
+  function runResync() {
+    resyncTimer = null;
+
+    // Not while this browser has a write in flight, waiting to be retried, or
+    // still sitting in the save debounce. A plan read around a POST that has
+    // committed but not answered carries a row under an id this page has never
+    // seen, and merging it would put a second copy of it on screen. A plan
+    // merged on top of an edit that has not been sent resolves a conflict
+    // silently and in the wrong direction — where letting the write go first
+    // produces the 409 the merge path already handles, and says out loud.
+    if (Sync.running || Sync.timer || saveTimer) { armResync(RESYNC_MS); return; }
+
+    resyncing = true;
+    resyncAgain = false;
+    var mark = passes;
+    api('GET', '/plan').then(function (res) {
+      resyncing = false;
+      // The same three conditions again, because the answer is what gets
+      // merged and a write can have started while it was on its way.
+      if (res.status === 401) {
+        // An answer, not an outage, and asking again will not change it.
+        sessionLost();
+        return;
+      }
+      if (res.status === 200 && res.body && passes === mark && !Sync.running && !saveTimer) {
+        resyncWait = 0;
+        applyPlan(res.body);
+      } else {
+        // Overtaken by a write of our own, or no answer at all. Both are worth
+        // another go — a stream that is still up will not repeat itself — but
+        // on a widening wait, so an origin that is down is asked about once in
+        // a while rather than constantly.
+        resyncAgain = true;
+        resyncWait = Math.min(RETRY_MAX_MS, resyncWait ? resyncWait * 2 : RETRY_BASE_MS);
+      }
+      if (resyncAgain) armResync(resyncWait || RESYNC_MS);
+    });
+  }
+
+  /* Merge a plan that arrived while this page was already running.
+   *
+   * Emphatically not adopt(). That one is allowed to decide this browser's
+   * copy wins and seed an empty database from it, which is right on a first
+   * load and catastrophic here: somebody else removing the last row would make
+   * this browser put its entire planner back.
+   *
+   * It is the same three-way merge reconcile() does on a 409, applied to every
+   * row at once, against the shadow — the version both sides started from:
+   *
+   *   field changed here since the server confirmed it -> ours. It is an edit
+   *     somebody is in the middle of making, and it goes again on the next
+   *     pass. Nothing anybody has typed is ever overwritten, focused or not.
+   *   field unchanged here -> theirs, which is simply newer.
+   *
+   * Rows work the same way, and the shadow is what tells the two halves of
+   * each ambiguity apart:
+   *
+   *   here, not on the server -> in the shadow? somebody deleted it: drop it.
+   *                              not in the shadow? our own create, unsent:
+   *                              keep it, and let the next pass POST it.
+   *   on the server, not here -> in the shadow? our own delete, unsent: keep
+   *                              it deleted, and keep the shadow entry so the
+   *                              DELETE still goes, at the revision that now
+   *                              stands. not in the shadow? somebody added it.
+   */
+  function applyPlan(plan) {
+    var touched = {};
+
+    COLLECTIONS.forEach(function (c) {
+      var was = shadow[c.key];
+      var now = {};
+      var here = {};
+
+      (plan[c.key] || []).forEach(function (w) {
+        if (!w || !w.id) return;
+        here[w.id] = true;
+        var entry = { row: rowFromWire(c, w), revision: Number(w.revision) || 0 };
+        now[w.id] = entry;
+
+        var mine = findRow(state[c.key], w.id);
+        if (!mine) {
+          if (was[w.id]) return;                     // removed here, not yet sent
+          state[c.key].push(cloneRow(c, entry.row)); // somebody else's new row
+          touched[c.key] = c;
+          return;
+        }
+        var base = was[w.id] ? was[w.id].row : entry.row;
+        c.fields.forEach(function (f) {
+          var ours = f.canon(mine);
+          if (ours !== f.canon(base)) return;        // edited here: ours wins
+          if (ours === f.canon(entry.row)) return;   // nobody changed it
+          mine[f.name] = f.copy(entry.row[f.name]);
+          touched[c.key] = c;
+        });
+      });
+
+      state[c.key] = (state[c.key] || []).filter(function (r) {
+        if (!r || !r.id || here[r.id] || !was[r.id]) return true;
+        touched[c.key] = c;
+        return false;
+      });
+      shadow[c.key] = now;
+    });
+
+    var wire = plan.settings || {};
+    var entry = { row: rowFromWire(SETTINGS, wire), revision: Number(wire.revision) || 0 };
+    var base = shadow.settings.row;
+    SETTINGS.fields.forEach(function (f) {
+      var ours = f.canon(state);
+      if (ours !== f.canon(base) || ours === f.canon(entry.row)) return;
+      state[f.name] = f.copy(entry.row[f.name]);
+      touched.settings = SETTINGS;
+    });
+    shadow.settings = entry;
+
+    // Before the early return below: a merge can leave work to do even when
+    // nothing on screen moved — a delete of ours that the plan shows already
+    // gone settles here, and a pending one keeps its shadow entry and still has
+    // to go out.
+    Sync.push();
+
+    var keys = Object.keys(touched);
+    if (!keys.length) return;
+
+    // The figures belong to no caret, so they are always current. The editable
+    // containers go through scheduleRefresh, which holds a rebuild back while
+    // somebody is typing inside one — rebuilding a table under a cursor moves
+    // it, drops the selection and truncates a half-typed number, which is the
+    // one thing a remote change must never do to a local edit.
+    keys.forEach(function (k) { scheduleRefresh(touched[k]); });
+    renderBudgetTotals();
+    renderOverview();
   }
 
   /* ---------- Saving ----------
@@ -1383,9 +2072,13 @@
 
   function flushSave() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    // Signed out and nothing typed since: there is nothing to keep, and
+    // writing the empty planner back would only put the key there again.
+    if (forgotten) return;
     Store.write(state);
   }
   function save() {
+    forgotten = false;
     // Noted before the write, not after: connect() needs to know whether this
     // browser has edits of its own before it decides whether the plan it just
     // fetched can simply replace what is on screen.
@@ -1694,7 +2387,7 @@
     host.innerHTML = '';
     empty.style.display = state.notes.length ? 'none' : 'block';
 
-    state.notes.forEach(function (note, idx) {
+    state.notes.forEach(function (note) {
       var row = document.createElement('div');
       row.className = 'flag';
 
@@ -1703,12 +2396,12 @@
       ta.value = note.text || '';
       ta.placeholder = t('w.ph');
       ta.addEventListener('input', function () {
-        state.notes[idx].text = ta.value;
+        note.text = ta.value;
         save();
       });
 
       var del = delButton(t('w.del'), function () {
-        state.notes.splice(idx, 1);
+        dropRow(state.notes, note);
         save();
         renderNotes();
       });
@@ -1800,7 +2493,7 @@
   function renderSponsors() {
     var grid = document.getElementById('sponsorGrid');
     grid.innerHTML = '';
-    state.sponsors.forEach(function (sp, idx) {
+    state.sponsors.forEach(function (sp) {
       var row = document.createElement('div');
       row.className = 'sponsor-row';
 
@@ -1810,7 +2503,7 @@
       code.placeholder = t('sp.code');
       code.value = sp.code || '';
       code.addEventListener('input', function () {
-        state.sponsors[idx].code = code.value;
+        sp.code = code.value;
         save();
         renderBudgetTable();
         renderSplit();
@@ -1822,7 +2515,7 @@
       name.placeholder = t('sp.who');
       name.value = sp.name || '';
       name.addEventListener('input', function () {
-        state.sponsors[idx].name = name.value;
+        sp.name = name.value;
         save();
         renderSplit();
       });
@@ -1832,8 +2525,8 @@
       amt.textContent = fmtCur(sponsorShare(sp.id));
 
       var del = delButton(t('sp.del'), function () {
-        var id = state.sponsors[idx].id;
-        state.sponsors.splice(idx, 1);
+        var id = sp.id;
+        dropRow(state.sponsors, sp);
         state.budgetItems.forEach(function (i) {
           i.sponsors = (i.sponsors || []).filter(function (x) { return x !== id; });
         });
@@ -2234,7 +2927,7 @@
     if (!state.budgetItems.length) {
       emptyRow(body, 9, t('b.empty'));
     }
-    state.budgetItems.forEach(function (item, idx) {
+    state.budgetItems.forEach(function (item) {
       var tr = document.createElement('tr');
 
       function textCell(key, cls) {
@@ -2244,7 +2937,7 @@
         inp.rows = 1;
         inp.value = item[key] || '';
         inp.addEventListener('input', function () {
-          state.budgetItems[idx][key] = inp.value;
+          item[key] = inp.value;
           save();
         });
         td.appendChild(inp);
@@ -2260,9 +2953,9 @@
         if (step) inp.step = step;
         inp.value = Number(item[key]) || 0;
         inp.addEventListener('input', function () {
-          state.budgetItems[idx][key] = Number(inp.value) || 0;
+          item[key] = Number(inp.value) || 0;
           save();
-          refreshRow(tr, state.budgetItems[idx]);
+          refreshRow(tr, item);
           renderBudgetTotals();
           renderOverview();
         });
@@ -2291,7 +2984,7 @@
       setByLabel(byBtn, item);
       byBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
-        openPicker(byBtn, state.budgetItems[idx]);
+        openPicker(byBtn, item);
       });
       tdBy.appendChild(byBtn);
 
@@ -2311,7 +3004,7 @@
       label(tdNote, 'c.remarks');
       label(tdDel, 'c.remove');
       tdDel.appendChild(delButton(t('b.del'), function () {
-        state.budgetItems.splice(idx, 1);
+        dropRow(state.budgetItems, item);
         save();
         renderBudgetTable();
         renderBudgetTotals();
@@ -2377,7 +3070,7 @@
     var body = document.getElementById('tasksBody');
     body.innerHTML = '';
     var shown = 0;
-    state.tasks.forEach(function (task, idx) {
+    state.tasks.forEach(function (task) {
       if (currentFilter !== 'all' && task.status !== currentFilter) return;
       shown++;
       var tr = document.createElement('tr');
@@ -2387,7 +3080,7 @@
       nameInput.type = 'text';
       nameInput.value = task.name;
       nameInput.addEventListener('input', function () {
-        state.tasks[idx].name = nameInput.value;
+        task.name = nameInput.value;
         save();
       });
       tdName.appendChild(nameInput);
@@ -2397,7 +3090,7 @@
       ownerInput.type = 'text';
       ownerInput.value = task.owner || '';
       ownerInput.addEventListener('input', function () {
-        state.tasks[idx].owner = ownerInput.value;
+        task.owner = ownerInput.value;
         save();
         renderOverview();
       });
@@ -2408,9 +3101,12 @@
       dueInput.type = 'date';
       dueInput.value = task.due || '';
       dueInput.addEventListener('input', function () {
-        state.tasks[idx].due = dueInput.value;
+        task.due = dueInput.value;
         save();
         renderOverview();
+        // The one gesture on this page that makes a deadline reminder obvious:
+        // somebody has just written a date they intend to be held to.
+        if (dueInput.value) offerPush();
       });
       tdDue.appendChild(dueInput);
 
@@ -2425,7 +3121,7 @@
         statusSelect.appendChild(opt);
       });
       statusSelect.addEventListener('change', function () {
-        state.tasks[idx].status = statusSelect.value;
+        task.status = statusSelect.value;
         save();
         renderOverview();
         if (currentFilter !== 'all') renderTasksTable();
@@ -2435,7 +3131,7 @@
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
       tdDel.appendChild(delButton(t('k.del'), function () {
-        state.tasks.splice(idx, 1);
+        dropRow(state.tasks, task);
         save();
         renderTasksTable();
         renderOverview();
@@ -2609,6 +3305,300 @@
     };
     reader.readAsText(f);
   });
+
+  /* ---------- The theme control ----------
+   * Built here rather than written into index.html because the markup and the
+   * stylesheet are somebody else's file this week. It borrows the classes the
+   * task filters already use, which is the same segmented control this page
+   * makes elsewhere and costs no new rules.
+   *
+   * Three states, not two. A switch with two positions cannot express "follow
+   * whatever this device is set to", which is the state most people want and
+   * the one the page starts in — and a person who has picked dark on a laptop
+   * that switches at sunset needs a way back to that.
+   */
+  (function themeControl() {
+    var tools = document.querySelector('.data-tools');
+    if (!tools) return;
+
+    var group = document.createElement('div');
+    group.className = 'filter-pills';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', t('th.title'));
+
+    var btns = THEMES.map(function (mode) {
+      var b = document.createElement('button');
+      b.className = 'pill';
+      b.type = 'button';
+      b.textContent = t('th.' + mode);
+      b.addEventListener('click', function () { choose(mode); });
+      group.appendChild(b);
+      return b;
+    });
+
+    function mark(mode) {
+      THEMES.forEach(function (m, i) {
+        var on = m === mode;
+        btns[i].classList.toggle('active', on);
+        btns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+
+    function choose(mode) {
+      try {
+        // Back to the system means back to no stored preference at all, so the
+        // key exists exactly while somebody is overriding their device.
+        if (mode === 'system') localStorage.removeItem(THEME_KEY);
+        else localStorage.setItem(THEME_KEY, mode);
+      } catch (e) { /* storage unavailable; the choice still applies here */ }
+      paintTheme(mode);
+      mark(mode);
+    }
+
+    mark(readTheme());
+    languageHooks.push(function () {
+      group.setAttribute('aria-label', t('th.title'));
+      THEMES.forEach(function (mode, i) { btns[i].textContent = t('th.' + mode); });
+    });
+    // Before the status line, which is the last thing in the row and the one
+    // that grows a sentence long.
+    tools.insertBefore(group, document.getElementById('dataMsg'));
+  })();
+
+  /* ---------- The language switcher ----------
+   * In place, never by reloading. A reload throws away whatever somebody typed
+   * while signed out — it is on screen and in `state`, but `dirty` does not
+   * survive a reload, so the plan that arrives afterwards simply replaces it.
+   * Everything this page says comes from three calls, so saying it again in
+   * another language is those three calls, plus the few things that bake a
+   * label when they are built.
+   *
+   * A click is remembered on this device. It also takes any ?lang= out of the
+   * address bar: that outranks a stored choice, so leaving it there would make
+   * the flag somebody just clicked stop working at the next reload.
+   *
+   * auth.js is told on `soiree:language`, because its screens may be the ones
+   * showing — the switcher sits above the sign-in screen precisely so that
+   * somebody who cannot read it can change it.
+   */
+  function chooseLanguage(tag) {
+    tag = pickLang(tag);
+    if (!tag) return;
+    try { localStorage.setItem(LANG_KEY, tag); } catch (e) { /* this visit only */ }
+
+    if (/[?&]lang=/.test(location.search) && window.history && history.replaceState) {
+      var rest = location.search.replace(/([?&])lang=[^&]*(&|$)/, function (m, lead, tail) {
+        return tail ? lead : '';
+      });
+      history.replaceState(null, '', location.pathname + rest + location.hash);
+    }
+
+    if (tag !== LANG) {
+      LANG = tag;
+      document.documentElement.lang = LANG;
+      applyStrings();
+      renderCountdown();
+      renderAll();
+      languageHooks.forEach(function (fn) { fn(); });
+      document.dispatchEvent(new CustomEvent('soiree:language', { detail: { language: LANG } }));
+    }
+    markFlags();
+  }
+
+  function markFlags() {
+    Array.prototype.forEach.call(document.querySelectorAll('#langSwitch [data-lang]'), function (b) {
+      b.setAttribute('aria-pressed', b.getAttribute('data-lang') === LANG ? 'true' : 'false');
+    });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('#langSwitch [data-lang]'), function (b) {
+    b.addEventListener('click', function () { chooseLanguage(b.getAttribute('data-lang')); });
+  });
+  markFlags();
+
+  /* ---------- Deadline notifications ----------
+   * Three conditions, all of them necessary:
+   *
+   *   - The server published a VAPID public key. Its *absence* is the signal:
+   *     the field is omitted from the config rather than sent empty, because a
+   *     browser cannot subscribe without it and offering a button that cannot
+   *     work spends a permission prompt on nothing.
+   *   - There is an API here at all. The subscription endpoints are mounted
+   *     with the accounts surface, so a deployment with a key and no database
+   *     has the key and no route behind it.
+   *   - The browser has the Push API, which on iOS means the site has been
+   *     added to the Home Screen first. That is Apple's rule, not something to
+   *     work around; on Android, which is most of this audience, it is ordinary.
+   */
+  var VAPID = String(CONFIG.vapidPublicKey || '');
+
+  function pushable() {
+    return !!(apiMode && VAPID && navigator.serviceWorker &&
+      window.PushManager && window.Notification);
+  }
+
+  // Unpadded base64url to the bytes applicationServerKey wants. atob reads
+  // neither the URL alphabet nor a missing pad, so both go back on first.
+  function vapidKey(k) {
+    var b = (k + '==='.slice(0, (4 - k.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+    var raw = atob(b);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  // POSTed verbatim: the endpoint takes the PushSubscription as the Push API
+  // hands it over, and transcribing it by hand is how a p256dh ends up in the
+  // auth field. JSON.stringify calls the object's own toJSON, which is the
+  // shape the server parses.
+  function pushSave(sub) { return api('POST', '/push/subscriptions', sub); }
+
+  /* Re-post whatever this device is already subscribed to, on every load.
+   *
+   * It costs one request and the endpoint is idempotent on the endpoint URL,
+   * so it cannot pile up rows — and it is the only thing that puts a device
+   * back in the table after the server's subscriptions are restored from a
+   * backup, or after its key changed and the browser made a new subscription.
+   * Silent: no permission is asked for and nothing is said if it fails.
+   */
+  function pushRefresh() {
+    if (!pushable() || Notification.permission !== 'granted') return;
+    navigator.serviceWorker.ready
+      .then(function (reg) { return reg.pushManager.getSubscription(); })
+      .then(function (sub) { if (sub) pushSave(sub); })
+      .catch(function () { /* nothing subscribed here */ });
+  }
+
+  /* Turning reminders on and off, for the one-time offer below and for the
+   * standing control on the account screen (auth.js draws it; this owns what
+   * it does). Five states:
+   *
+   *   unavailable — no VAPID key or no API. Not this deployment's feature;
+   *                 nothing should be drawn at all.
+   *   unsupported — the browser has no Push API. On an iPhone that means the
+   *                 page is in a Safari tab rather than on the Home Screen.
+   *   blocked     — the person said no to the browser's prompt. Only the
+   *                 browser's own site settings can undo that.
+   *   off, on     — whether this device holds a subscription.
+   *
+   * `ready` never settles on a page whose service worker did not register, so
+   * everything that waits on it is bounded: a control that spins for ever is
+   * worse than one that says it cannot.
+   */
+  function pushRegistration() {
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish(reg) { if (!done) { done = true; resolve(reg || null); } }
+      setTimeout(function () { finish(null); }, 3000);
+      try { navigator.serviceWorker.ready.then(finish, function () { finish(null); }); }
+      catch (e) { finish(null); }
+    });
+  }
+
+  function pushState() {
+    // `apiAvailable` rather than `apiMode`: the first is latched the moment the
+    // origin answers, the second only once the plan has been adopted, and the
+    // account screen can ask in between — it draws as soon as the session
+    // answers, which on a page opened at /#/account is usually first.
+    var api = apiMode || !!(window.soiree && window.soiree.apiAvailable === true);
+    if (!api || !VAPID) return Promise.resolve('unavailable');
+    if (!(navigator.serviceWorker && window.PushManager && window.Notification)) {
+      return Promise.resolve('unsupported');
+    }
+    if (Notification.permission === 'denied') return Promise.resolve('blocked');
+    return pushRegistration().then(function (reg) {
+      if (!reg) return 'unsupported';
+      return reg.pushManager.getSubscription().then(function (sub) { return sub ? 'on' : 'off'; });
+    }).catch(function () { return 'off'; });
+  }
+
+  // Must be called from inside a click: the permission prompt is only shown
+  // for a gesture, and this page spends it exactly once.
+  function pushEnable() {
+    if (!pushable()) return pushState();
+    var asked;
+    try { asked = Notification.requestPermission(); } catch (e) { asked = null; }
+    // Old Safari answers through a callback and returns nothing.
+    if (!asked || typeof asked.then !== 'function') return pushState();
+    return asked.then(function (verdict) {
+      if (verdict !== 'granted') return 'blocked';
+      return pushRegistration().then(function (reg) {
+        if (!reg) return 'unsupported';
+        return reg.pushManager.getSubscription().then(function (existing) {
+          return existing || reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: vapidKey(VAPID)
+          });
+        }).then(pushSave).then(function (res) { return res.status === 204 ? 'on' : 'off'; });
+      });
+    }).catch(function () { return pushState(); });
+  }
+
+  // The server first, then the browser. The other order leaves a row the
+  // digest keeps sending to until the push service reports it gone; this one
+  // leaves, at worst, a browser subscription nobody sends to.
+  function pushDisable() {
+    return pushRegistration().then(function (reg) {
+      if (!reg) return 'unsupported';
+      return reg.pushManager.getSubscription().then(function (sub) {
+        if (!sub) return 'off';
+        return api('DELETE', '/push/subscriptions?endpoint=' + encodeURIComponent(sub.endpoint))
+          .then(function (res) {
+            if (res.status !== 204) return 'on';
+            return Promise.resolve(sub.unsubscribe()).then(function () { return 'off'; }, function () { return 'off'; });
+          });
+      });
+    }).catch(function () { return pushState(); });
+  }
+
+  window.soiree = window.soiree || {};
+  window.soiree.push = { state: pushState, enable: pushEnable, disable: pushDisable };
+
+  var pushAsked = false;
+
+  /* The offer, and the one permission prompt this page ever spends.
+   *
+   * Never on load. A denied notification permission in Chrome is sticky — the
+   * person has to go into the site settings to undo it — so there is exactly
+   * one attempt per person, and it is worth spending at the moment the value
+   * is obvious rather than the moment the page appears. Notification.permission
+   * is also the memory of whether the question has been asked: it is already
+   * persistent, already per-device, and not asking the browser to remember it
+   * twice keeps this page's storage to the three keys it documents.
+   */
+  function offerPush() {
+    if (pushAsked || editingLocked || !pushable() || sessionRole !== 'admin') return;
+    if (Notification.permission !== 'default') return;
+    var anchor = document.getElementById('addTaskRow');
+    if (!anchor || !anchor.parentNode) return;
+    pushAsked = true;
+
+    var note = document.createElement('p');
+    note.className = 'empty-note';
+    note.setAttribute('role', 'status');
+    // One plain sentence saying what will arrive, before anything is asked.
+    note.appendChild(document.createTextNode(t('n.offer') + ' '));
+
+    function button(label, fn) {
+      var b = document.createElement('button');
+      b.className = 'ghost-btn';
+      b.type = 'button';
+      b.textContent = label;
+      b.style.marginLeft = '8px';
+      b.addEventListener('click', fn);
+      note.appendChild(b);
+      return b;
+    }
+
+    button(t('n.on'), function () {
+      note.remove();
+      // Inside the click, so the browser still counts it as a gesture.
+      pushEnable().then(function (now) { flash(t(now === 'on' ? 'n.done' : 'n.no')); });
+    });
+    button(t('n.later'), function () { note.remove(); });
+
+    anchor.parentNode.insertBefore(note, anchor);
+  }
 
   // ---------- Init ----------
   applyStrings();

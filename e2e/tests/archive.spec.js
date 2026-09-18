@@ -195,17 +195,25 @@ test('a planner saved before this existed opens as a planner, not an archive', a
   expect(await readStored(page)).not.toBeNull();
 });
 
-test('with no event date configured there is no "after"', async ({ page }, testInfo) => {
-  // This instance is served with SOIREE_EVENT_DATE unset. However far the
-  // clock is moved, there is no date for it to be past.
-  await openAt(page, '2099-01-01T00:00:00Z', SETTLED, testInfo.config.metadata.altBaseURL + '/');
+// The assertions below read Dutch, which this instance speaks because it is
+// served with SOIREE_LOCALE=nl-NL. The page asks the browser first, so the
+// browser here asks for a language there is no translation for — which is the
+// case the deployment's locale exists to answer.
+test.describe('on the instance with no event date', () => {
+  test.use({ locale: 'de-DE' });
 
-  await expect(page.locator('body')).not.toHaveClass(/is-archived/);
-  await expect(page.locator('body')).not.toHaveClass(/is-reopened/);
-  await expect(page.locator('#archiveNote')).toBeHidden();
-  await expect(page.locator('#daysLabel')).toHaveText('geen datum ingesteld');
+  test('with no event date configured there is no "after"', async ({ page }, testInfo) => {
+    // This instance is served with SOIREE_EVENT_DATE unset. However far the
+    // clock is moved, there is no date for it to be past.
+    await openAt(page, '2099-01-01T00:00:00Z', SETTLED, testInfo.config.metadata.altBaseURL + '/');
 
-  await gotoTab(page, 'budget');
-  await expect(page.locator('#addBudgetRow')).toBeVisible();
-  await expect(page.locator('#budgetBody .del-btn').first()).toBeVisible();
+    await expect(page.locator('body')).not.toHaveClass(/is-archived/);
+    await expect(page.locator('body')).not.toHaveClass(/is-reopened/);
+    await expect(page.locator('#archiveNote')).toBeHidden();
+    await expect(page.locator('#daysLabel')).toHaveText('geen datum ingesteld');
+
+    await gotoTab(page, 'budget');
+    await expect(page.locator('#addBudgetRow')).toBeVisible();
+    await expect(page.locator('#budgetBody .del-btn').first()).toBeVisible();
+  });
 });

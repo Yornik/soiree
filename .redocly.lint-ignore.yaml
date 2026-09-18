@@ -1,0 +1,21 @@
+# This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
+# See https://redocly.com/docs/cli/ for more information.
+#
+# Both entries are the document being right and the rule being general:
+#
+#   - POST /auth/logout has no 4xx because it has none. It answers 204 with or
+#     without a session, and inventing a refusal to satisfy a linter would make
+#     the document wrong.
+#   - ChangeNotice is referenced from prose and from `x-events` on the
+#     text/event-stream response. OpenAPI 3.1 cannot type the data of a
+#     Server-Sent Event, so no `$ref` the rule counts can point at it.
+#     TestTheChangeFrameIsAsDocumented is what keeps it true.
+#
+# Regenerate with `redocly lint api/openapi.yaml --generate-ignore-file` only
+# after reading what it would add: this file is a list of things somebody
+# decided, not a way to make CI green.
+api/openapi.yaml:
+  operation-4xx-response:
+    - '#/paths/~1auth~1logout/post/responses'
+  no-unused-components:
+    - '#/components/schemas/ChangeNotice'

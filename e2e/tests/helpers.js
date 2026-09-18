@@ -11,7 +11,7 @@
  *    does not break when ICU changes its mind about a space.
  */
 const { expect } = require('@playwright/test');
-const { API_URL } = require('../servers');
+const { API_URL, ADMIN_EMAIL, ADMIN_PASSWORD } = require('../servers');
 
 // Must match STORAGE_KEY in web/src/app.js. If that changes, a saved planner
 // is silently orphaned, so the constant is worth asserting on directly.
@@ -223,9 +223,109 @@ async function readSplit(page) {
  * three servers and knows nothing about whether one of them has an API.
  * ------------------------------------------------------------------ */
 
+/**
+ * Signs a raw request context in and returns the session cookie to send back.
+ *
+ * The API is behind a session: a viewer may read, an editor or admin may
+ * write, an anonymous caller gets 401. A page carries the cookie by itself,
+ * but a Playwright request context is a separate client — and the cookie is
+ * marked Secure, which its jar will not store over plain http to a loopback
+ * address even though a browser treats that origin as trustworthy. So the
+ * value is read off the response and sent back by hand.
+ *
+ * Returns null when the instance has no accounts at all, which is how the
+ * two servers without a database answer.
+ */
+const sessions = new Map();
+
+async function apiSignIn(request, base = API_URL) {
+  if (sessions.has(base)) return sessions.get(base);
+  const cookie = await freshSession(request, base);
+  sessions.set(base, cookie);
+  return cookie;
+}
+
+/**
+ * A session nobody else is using, never cached.
+ *
+ * For the specs that END a session. The run shares one login, replayed into
+ * every context, so a spec that signed that one out would leave every spec
+ * after it anonymous — and an anonymous request is answered 401 whether or not
+ * the thing it asked for works, which is a suite that goes green by testing
+ * nothing. A spec that means to destroy a session brings its own.
+ *
+ * Each call is a real login against the real limiters (ten per account per
+ * quarter hour), so this is for the two or three specs that need it and not a
+ * replacement for apiSignIn.
+ */
+async function freshSession(request, base = API_URL, who = { email: ADMIN_EMAIL, password: ADMIN_PASSWORD }) {
+  const res = await request.post(`${base}/api/v1/auth/login`, {
+    data: { email: who.email, password: who.password },
+  });
+  if (res.status() === 404) return null;
+  expect(res.status(), 'POST /api/v1/auth/login').toBe(200);
+
+  const setCookie = res
+    .headersArray()
+    .filter((h) => h.name.toLowerCase() === 'set-cookie')
+    .map((h) => h.value)
+    .find((v) => v.startsWith('soiree_session='));
+  expect(setCookie, 'login set no session cookie').toBeTruthy();
+
+  return setCookie.split(';')[0];
+}
+
+/**
+ * A second account, for the specs that sign in more than once.
+ *
+ * The login limiter counts per account as well as per address — ten in a
+ * quarter of an hour — and the whole run otherwise shares the admin. A spec
+ * that ends its own session and signs in again through the form spends two
+ * logins a time; charging those to the admin's bucket would make the LAST spec
+ * in the file fail with a 429 the day somebody adds an eleventh, a long way
+ * from the cause.
+ *
+ * Made the way a real one is: an admin creates it, this deployment has no SMTP
+ * so the link comes back in the response, and the token in it sets the
+ * password. An editor, because that is the least privilege that can write.
+ */
+// More than one, by name, because the budget is per account and a file that
+// keeps growing spends it: ten logins a quarter hour, two per spec that ends a
+// session and signs in again. The eleventh is a 429 in whichever spec happens
+// to be last, which is what happened. Specs that belong together share a name.
+const editors = new Set();
+
+async function ensureEditor(request, base = API_URL, name = 'grace') {
+  const EDITOR = { email: `${name}-e2e@example.test`, password: 'a-second-long-password' };
+  if (editors.has(base + name)) return EDITOR;
+
+  const headers = await apiAuth(request, base);
+  const made = await request.post(`${base}/api/v1/users`, {
+    headers, data: { email: EDITOR.email, role: 'editor' },
+  });
+  // 409: a server left running from an earlier run already has it.
+  if (made.status() !== 409) {
+    expect(made.status(), 'POST /api/v1/users').toBe(201);
+    const link = (await made.json()).setPasswordUrl;
+    expect(link, 'with no SMTP the set-password link comes back in the response').toBeTruthy();
+    const set = await request.post(`${base}/api/v1/auth/set-password`, {
+      data: { token: link.split('token=')[1], password: EDITOR.password },
+    });
+    expect(set.status(), 'POST /api/v1/auth/set-password').toBe(204);
+  }
+  editors.add(base + name);
+  return EDITOR;
+}
+
+/** Headers carrying the session, for a raw request context. */
+async function apiAuth(request, base = API_URL) {
+  const cookie = await apiSignIn(request, base);
+  return cookie ? { Cookie: cookie } : {};
+}
+
 /** The whole plan as the server reports it, or null if this one has no database. */
 async function apiPlan(request, base = API_URL) {
-  const res = await request.get(`${base}/api/v1/plan`);
+  const res = await request.get(`${base}/api/v1/plan`, { headers: await apiAuth(request, base) });
   if (res.status() === 404) return null;
   expect(res.status(), 'GET /api/v1/plan').toBe(200);
   return res.json();
@@ -268,7 +368,9 @@ async function sweepPlan(request, base) {
 
   for (const [key, route] of PLAN_COLLECTIONS) {
     for (const row of plan[key] || []) {
-      const res = await request.delete(`${base}/api/v1/${route}/${row.id}?revision=${row.revision}`);
+      const res = await request.delete(`${base}/api/v1/${route}/${row.id}?revision=${row.revision}`, {
+        headers: await apiAuth(request, base),
+      });
       // Already gone is the outcome that was wanted; a stale revision is the
       // race this function exists to absorb.
       if (![204, 404].includes(res.status())) {
@@ -283,6 +385,7 @@ async function sweepPlan(request, base) {
   // instance is ever reconfigured.
   const places = (String(plan.settings.ceiling).split('.')[1] || '').length;
   const res = await request.patch(`${base}/api/v1/settings`, {
+    headers: await apiAuth(request, base),
     data: {
       revision: plan.settings.revision,
       ceiling: (0).toFixed(places),
@@ -316,8 +419,46 @@ async function awaitPlan(page, action) {
   await planned;
 }
 
-/** Opens the shared planner and waits for it to have the server's plan. */
+/**
+ * Signs a page in, through its own cookie jar.
+ *
+ * page.request shares cookies with the page, so logging in here is what the
+ * page itself would do through the form — without making every spec drive a
+ * login screen it is not testing. The API refuses an anonymous caller, and
+ * app.js treats that 401 as "wait for a session" rather than as "no API", so
+ * a page that skipped this would sit in local-only mode and never write
+ * anything the next person could read.
+ */
+async function signInPage(page, base = API_URL) {
+  // One login for the whole run, replayed as a cookie into each context.
+  //
+  // Logging in per page would be both unrealistic — a browser signs in once —
+  // and self-defeating: the per-IP and per-account limiters are real, every
+  // test shares one address and one account, and a suite that logs in fifty
+  // times answers 429 to the ones at the end.
+  await adoptSession(page, await apiSignIn(page.request, base), base);
+}
+
+/** Puts one particular session into a page's cookie jar. */
+async function adoptSession(page, cookie, base = API_URL) {
+  if (!cookie) return;
+
+  const [name, value] = cookie.split('=');
+  await page.context().addCookies([{
+    name,
+    value,
+    url: base,
+    httpOnly: true,
+    // Matching how the server set it. 127.0.0.1 is a secure context, so a
+    // Secure cookie is accepted there despite the plain-http scheme.
+    secure: true,
+    sameSite: 'Lax',
+  }]);
+}
+
+/** Opens the shared planner, signed in, and waits for it to have the server's plan. */
 async function openSharedPlanner(page, path = '/') {
+  await signInPage(page);
   await awaitPlan(page, () => page.goto(path));
 }
 
@@ -327,6 +468,14 @@ async function reloadSharedPlanner(page) {
 }
 
 module.exports = {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  adoptSession,
+  apiSignIn,
+  ensureEditor,
+  freshSession,
+  signInPage,
+  apiAuth,
   API_URL,
   STORAGE_KEY,
   apiPlan,

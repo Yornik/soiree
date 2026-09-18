@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -127,6 +128,11 @@ type AuthOptions struct {
 
 	// TrustProxyHeaders says whether X-Forwarded-For may be believed.
 	TrustProxyHeaders bool
+
+	// Locale is the deployment's SOIREE_LOCALE. Only its language is used
+	// here: it is what a mail is written in when whoever asked for it did not
+	// say, which keeps the mail in step with the page its link opens.
+	Locale string
 }
 
 // Auth is the accounts, sessions and roles surface.
@@ -136,6 +142,10 @@ type Auth struct {
 	log        *slog.Logger
 	baseURL    string
 	trustProxy bool
+
+	// defaultLanguage is the deployment's language, resolved once. See
+	// mailLanguage.
+	defaultLanguage string
 
 	loginIP   *limiter
 	loginAcct *limiter
@@ -173,12 +183,15 @@ func NewAuth(o AuthOptions) *Auth {
 		log:        log,
 		baseURL:    strings.TrimRight(o.BaseURL, "/"),
 		trustProxy: o.TrustProxyHeaders,
-		loginIP:    newLimiter(loginIPBurst, loginIPWindow),
-		loginAcct:  newLimiter(loginAcctBurst, loginAcctWindow),
-		resetIP:    newLimiter(resetIPBurst, resetIPWindow),
-		redeemIP:   newLimiter(redeemIPBurst, redeemIPWindow),
-		params:     auth.DefaultParams,
-		now:        time.Now,
+
+		defaultLanguage: languageOfLocale(o.Locale),
+
+		loginIP:   newLimiter(loginIPBurst, loginIPWindow),
+		loginAcct: newLimiter(loginAcctBurst, loginAcctWindow),
+		resetIP:   newLimiter(resetIPBurst, resetIPWindow),
+		redeemIP:  newLimiter(redeemIPBurst, redeemIPWindow),
+		params:    auth.DefaultParams,
+		now:       time.Now,
 		background: func(fn func(context.Context)) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), backgroundTimeout)
@@ -299,10 +312,20 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	email := normaliseEmail(req.Email)
 
+	// No address at all is a malformed request, and is said to be one. It used
+	// to share the branch below and answer 429 with Retry-After: 60 — telling a
+	// client with a bug to wait a minute and send the same bug again. Refusing
+	// it outright discloses nothing: whether the field is empty is a fact about
+	// the request, not about any account.
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "invalid_email", "email is required")
+		return
+	}
+
 	// Keyed on the submitted address, whether or not it names an account. A
 	// bucket that exists only for real accounts turns 429-versus-401 into the
 	// same disclosure the constant-time work above is avoiding.
-	if email == "" || !a.loginAcct.allow(email) {
+	if !a.loginAcct.allow(email) {
 		tooManyRequests(w)
 		return
 	}
@@ -421,6 +444,8 @@ func (a *Auth) handleSession(w http.ResponseWriter, r *http.Request) {
 
 type passwordResetRequest struct {
 	Email string `json:"email"`
+	// Language is the language the sign-in screen is being read in. Optional.
+	Language *string `json:"language"`
 }
 
 // handlePasswordReset mails a set-password link, if there is anybody to mail
@@ -438,6 +463,18 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := normaliseEmail(req.Email)
+
+	// The sign-in screen sends the language it is being read in, which is the
+	// best evidence there is of what this person reads: nobody else is
+	// involved in a reset, and the server has never seen their browser. One it
+	// has no translation for is ignored rather than refused — this endpoint
+	// answers 202 to everything, and a language is not worth an exception.
+	var language *string
+	if req.Language != nil {
+		if l, ok := parseLanguage(*req.Language); ok {
+			language = &l
+		}
+	}
 
 	a.background(func(ctx context.Context) {
 		if email == "" {
@@ -459,7 +496,7 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		if user.Status == store.StatusInvited {
 			purpose = store.PurposeInvite
 		}
-		if _, err := a.issueToken(ctx, user, purpose); err != nil {
+		if _, err := a.issueToken(ctx, user, purpose, language); err != nil {
 			a.log.Error("could not issue a reset link", "user", user.ID, "err", err)
 		}
 	})
@@ -576,6 +613,14 @@ func (a *Auth) handleGetUser(w http.ResponseWriter, r *http.Request) {
 type createUserRequest struct {
 	Email string `json:"email"`
 	Role  string `json:"role"`
+	// Language is the language of the invitation, and of nothing else: it is
+	// used to write this one mail and the link inside it, and is not stored.
+	// The admin creating the account is the one person who knows what the
+	// person they are inviting reads; after that first mail, the page follows
+	// the reader's own browser, which is better evidence than anything an
+	// admin typed once. Omitted or null, the mail is in the deployment's
+	// language.
+	Language *string `json:"language"`
 }
 
 // createUserResponse carries the new account, and the link when — and only
@@ -615,6 +660,11 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	language, ok := a.chosenLanguage(w, req.Language)
+	if !ok {
+		return
+	}
+
 	user, err := a.store.CreateUser(r.Context(), store.User{
 		Email:     email,
 		Role:      role,
@@ -632,7 +682,7 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	a.log.Info("account created", "user", user.ID, "role", user.Role, "by", actor.ID)
 
-	a.respondWithInvite(w, r, user, store.PurposeInvite, http.StatusCreated)
+	a.respondWithInvite(w, r, user, store.PurposeInvite, language, http.StatusCreated)
 }
 
 // handleInvite issues a fresh link for an existing account: the first one
@@ -656,12 +706,47 @@ func (a *Auth) handleInvite(w http.ResponseWriter, r *http.Request) {
 	if user.Status == store.StatusInvited {
 		purpose = store.PurposeInvite
 	}
-	a.respondWithInvite(w, r, user, purpose, http.StatusOK)
+
+	// The body is optional, and so is everything in it. This route took no
+	// body at all before a mail had a language, and `curl -X POST` with
+	// nothing attached must go on meaning "send it, in the usual language".
+	var req inviteRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json", "")
+		return
+	}
+	language, ok := a.chosenLanguage(w, req.Language)
+	if !ok {
+		return
+	}
+	a.respondWithInvite(w, r, user, purpose, language, http.StatusOK)
+}
+
+type inviteRequest struct {
+	// Language is the language of this one mail. See createUserRequest.
+	Language *string `json:"language"`
+}
+
+// chosenLanguage reads the language an admin picked for a mail. Nil and true
+// means nothing was picked. A language there is no translation for is refused
+// rather than quietly answered in another one: an admin who asked for Dutch
+// and sent English would not find out.
+func (a *Auth) chosenLanguage(w http.ResponseWriter, asked *string) (*string, bool) {
+	if asked == nil {
+		return nil, true
+	}
+	l, ok := parseLanguage(*asked)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_language", "language must be one of "+strings.Join(languages, ", "))
+		return nil, false
+	}
+	return &l, true
 }
 
 // respondWithInvite mints the link and decides who gets to see it.
-func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user store.User, purpose store.TokenPurpose, status int) {
-	link, err := a.issueToken(r.Context(), user, purpose)
+func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user store.User, purpose store.TokenPurpose, language *string, status int) {
+	link, err := a.issueToken(r.Context(), user, purpose, language)
 	if err != nil {
 		a.log.Error("could not issue a set-password link", "user", user.ID, "err", err)
 		// The account exists; only the link failed. Say so rather than
@@ -684,7 +769,10 @@ func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user st
 //
 // The return value is a credential. It goes into a response only on the
 // no-SMTP path, and it is never logged anywhere.
-func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.TokenPurpose) (string, error) {
+//
+// language is whatever whoever asked for the mail said it should be in, or nil.
+// It shapes this mail and this link and is kept nowhere.
+func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.TokenPurpose, language *string) (string, error) {
 	token, err := auth.NewToken()
 	if err != nil {
 		return "", err
@@ -698,9 +786,9 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 		return "", err
 	}
 
-	link := a.setPasswordURL(token)
+	link := a.setPasswordURL(token, language)
 	if a.mailer != nil {
-		subject, body := inviteMessage(purpose, link)
+		subject, body := inviteMessage(purpose, link, a.mailLanguage(language))
 		a.background(func(ctx context.Context) {
 			if err := a.mailer.Send(ctx, user.Email, subject, body); err != nil {
 				// The error, never the message. The body is the link.
@@ -719,22 +807,61 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 // Referer header the page would otherwise leak it through. The origin comes
 // from configuration and never from the request's Host header, which the
 // client controls.
-func (a *Auth) setPasswordURL(token string) string {
-	return a.baseURL + "/#/set-password?token=" + url.QueryEscape(token)
+//
+// A mail somebody chose a language for carries it as ?lang=, so the screen the
+// link opens is in the language the mail was. That part is a query string and
+// is sent to the server, which is fine: it is a language tag, and the secret
+// is still behind the #. With no language chosen the link is bare, and the
+// page decides for itself — from the reader's browser, then the deployment.
+func (a *Auth) setPasswordURL(token string, language *string) string {
+	query := ""
+	if language != nil {
+		if l, ok := parseLanguage(*language); ok {
+			query = "?lang=" + l
+		}
+	}
+	return a.baseURL + "/" + query + "#/set-password?token=" + url.QueryEscape(token)
 }
 
-func inviteMessage(purpose store.TokenPurpose, link string) (subject, body string) {
-	if purpose == store.PurposeReset {
-		subject = "Set a new password"
-		body = "Someone asked to set a new password on your account.\n\n" +
-			link + "\n\nThe link works once and expires in 24 hours. " +
-			"If this was not you, nothing has changed and you can ignore this.\n"
-		return subject, body
+// inviteMessage composes the two mails this surface sends.
+//
+// Plain text and short: the link is the message. None of them names the event
+// or the admin who sent it, and a consequence worth keeping when editing them
+// is that a mail sent to a mistyped address tells a stranger nothing about
+// whose planner this is.
+func inviteMessage(purpose store.TokenPurpose, link, language string) (subject, body string) {
+	reset := purpose == store.PurposeReset
+	switch language {
+	case "nl":
+		if reset {
+			return "Stel een nieuw wachtwoord in",
+				"Iemand heeft gevraagd om een nieuw wachtwoord voor je account in te stellen.\n\n" +
+					link + "\n\nDe link werkt één keer en verloopt na 24 uur. " +
+					"Was jij dit niet, dan is er niets veranderd en kun je dit bericht negeren.\n"
+		}
+		return "Je account staat klaar",
+			"Er is een account voor je aangemaakt. Kies hier een wachtwoord:\n\n" +
+				link + "\n\nDe link werkt één keer en verloopt na 24 uur.\n"
+	case "id":
+		if reset {
+			return "Buat kata sandi baru",
+				"Seseorang meminta pembuatan kata sandi baru untuk akunmu.\n\n" +
+					link + "\n\nTautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam. " +
+					"Kalau ini bukan kamu, tidak ada yang berubah dan pesan ini bisa diabaikan.\n"
+		}
+		return "Akunmu sudah siap",
+			"Sebuah akun telah dibuat untukmu. Buat kata sandi di sini:\n\n" +
+				link + "\n\nTautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam.\n"
 	}
-	subject = "Your account is ready"
-	body = "An account has been created for you. Choose a password here:\n\n" +
-		link + "\n\nThe link works once and expires in 24 hours.\n"
-	return subject, body
+	if reset {
+		return "Set a new password",
+			"Someone asked to set a new password on your account.\n\n" +
+				link + "\n\nThe link works once and expires in 24 hours. " +
+				"If this was not you, nothing has changed and you can ignore this.\n"
+	}
+	return "Your account is ready",
+		"An account has been created for you. Choose a password here:\n\n" +
+			link + "\n\nThe link works once and expires in 24 hours.\n"
 }
 
 type updateUserRequest struct {
@@ -815,7 +942,6 @@ func (a *Auth) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		next.Email = email
 	}
-
 	updated, err := a.store.UpdateUser(r.Context(), next)
 	if err != nil {
 		var stale *store.StaleRevisionError
