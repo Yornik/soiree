@@ -1,12 +1,24 @@
 // @ts-check
 /*
- * State survives a reload.
+ * State survives a reload — in the deployment that has no database.
+ *
+ * That is now one of two modes rather than the only one, which is why this
+ * file says so. These tests run against the default instance, which is started
+ * with no DATABASE_URL: the binary then registers no /api/v1 routes at all, so
+ * the planner is localStorage and nothing else. It is a supported deployment,
+ * not a transitional one — `docker run` with no arguments lands here, the CI
+ * image smoke test checks it, and a self-hoster without PostgreSQL gets a
+ * working planner out of it. Every claim below is still exactly true of it.
+ *
+ * The shared mode is api.spec.js, against the instance that has a database.
  *
  * Writes are debounced by 500 ms and flushed on `pagehide`, so a test that
  * edits and immediately reloads is racing the debounce. Nothing here sleeps
  * and hopes: either it waits for the write to land (`expectStored`) or it
  * provokes the flush the way leaving the page does (`flushToStorage`) and then
- * reads, which is safe because the flush is synchronous.
+ * reads, which is safe because the flush is synchronous — localStorage is
+ * written first and synchronously in both modes, precisely so that leaving the
+ * page never has to wait on a promise.
  */
 const { test, expect } = require('@playwright/test');
 const {
@@ -105,6 +117,47 @@ test('a full planner comes back after a reload', async ({ page }) => {
   await expect(task.locator('td').nth(1).locator('input')).toHaveValue('Ada');
   await expect(task.locator('td').nth(2).locator('input')).toHaveValue('2030-01-15');
   await expect(task.locator('select.status-select')).toHaveValue('in-progress');
+});
+
+test('with no database behind it, the planner asks once and then stays off the network', async ({ page }) => {
+  /** @type {string[]} */
+  const apiRequests = [];
+  page.on('request', (r) => {
+    if (new URL(r.url()).pathname.indexOf('/api/') === 0) apiRequests.push(r.url());
+  });
+
+  /** @type {{text: string, url: string}[]} */
+  const errors = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push({ text: m.text(), url: (m.location() || {}).url || '' });
+  });
+  page.on('pageerror', (e) => errors.push({ text: String(e), url: 'pageerror' }));
+
+  await openPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expectStored(page, (s) => !!s && s.budgetItems.length === 1, 'the write lands in localStorage');
+
+  // Exactly one request, ever: "is there a database here". The answer was a
+  // 404, which is final — those routes are not registered in this deployment
+  // and asking again would only be a second 404. A planner that spent a round
+  // trip per keystroke rediscovering that would be worse than one that never
+  // asked.
+  await expect
+    .poll(() => apiRequests.length, { message: 'the API is probed exactly once at startup' })
+    .toBe(1);
+  expect(apiRequests[0]).toContain('/api/v1/plan');
+
+  // More edits, and a flush, and still nothing goes out.
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 300 });
+  await flushToStorage(page);
+  expect(apiRequests).toHaveLength(1);
+
+  // Nothing in the console that the application put there. The 404 itself is
+  // logged by the browser's own network stack against the API URL — that is
+  // Chromium reporting the probe, not soiree reporting a fault — so it is
+  // named here rather than swept up in a blanket filter.
+  expect(errors.filter((e) => e.url.indexOf('/api/v1/plan') === -1)).toEqual([]);
 });
 
 test('the planner is stored under one known key, and nothing else', async ({ page }) => {

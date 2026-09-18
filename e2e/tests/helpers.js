@@ -11,6 +11,7 @@
  *    does not break when ICU changes its mind about a space.
  */
 const { expect } = require('@playwright/test');
+const { API_URL } = require('../servers');
 
 // Must match STORAGE_KEY in web/src/app.js. If that changes, a saved planner
 // is silently orphaned, so the constant is worth asserting on directly.
@@ -215,8 +216,96 @@ async function readSplit(page) {
   return rows.map((r) => ({ label: r.label, amount: money(r.amount), pct: r.pct }));
 }
 
+/* ------------------------------------------------------------------
+ * The instance with a database behind it
+ * ------------------------------------------------------------------
+ * Only api.spec.js uses these. Everything above works against any of the
+ * three servers and knows nothing about whether one of them has an API.
+ * ------------------------------------------------------------------ */
+
+/** The whole plan as the server reports it, or null if this one has no database. */
+async function apiPlan(request, base = API_URL) {
+  const res = await request.get(`${base}/api/v1/plan`);
+  if (res.status() === 404) return null;
+  expect(res.status(), 'GET /api/v1/plan').toBe(200);
+  return res.json();
+}
+
+/**
+ * Empties the shared plan.
+ *
+ * This state really is shared — one database, one event — so a test that did
+ * not start from a known page would be reading whatever the previous one left.
+ * Done over the API rather than against the database directly, so the tests
+ * need no second connection and no credentials of their own.
+ */
+async function resetPlan(request, base = API_URL) {
+  const plan = await apiPlan(request, base);
+  if (!plan) return;
+
+  const collections = [
+    ['notes', 'notes'],
+    ['tasks', 'tasks'],
+    ['budgetItems', 'budget-items'],
+    ['sponsors', 'sponsors'],
+  ];
+  for (const [key, route] of collections) {
+    for (const row of plan[key] || []) {
+      await request.delete(`${base}/api/v1/${route}/${row.id}?revision=${row.revision}`);
+    }
+  }
+
+  // The singleton cannot be deleted, only put back. Its ceiling is money, so
+  // zero has to carry the currency's decimal places — taken from the value the
+  // server just reported rather than hardcoded, which keeps this honest if the
+  // instance is ever reconfigured.
+  const places = (String(plan.settings.ceiling).split('.')[1] || '').length;
+  const res = await request.patch(`${base}/api/v1/settings`, {
+    data: {
+      revision: plan.settings.revision,
+      ceiling: (0).toFixed(places),
+      inflationPct: 0,
+      fxRate: 0,
+      splitEvenly: false,
+    },
+  });
+  expect(res.status(), 'PATCH /api/v1/settings while resetting').toBe(200);
+}
+
+/**
+ * Runs an action that loads the page, and waits for the plan it fetches.
+ *
+ * The page paints from its cached copy first and adopts the server's plan when
+ * it arrives, so "the document is loaded" is not the same moment as "this
+ * browser has the shared planner". Waiting on the request is the honest
+ * signal, and it is a condition rather than a clock.
+ */
+async function awaitPlan(page, action) {
+  const planned = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && r.url().includes('/api/v1/plan'),
+  );
+  await action();
+  await planned;
+}
+
+/** Opens the shared planner and waits for it to have the server's plan. */
+async function openSharedPlanner(page, path = '/') {
+  await awaitPlan(page, () => page.goto(path));
+}
+
+/** Reloads it, same wait. */
+async function reloadSharedPlanner(page) {
+  await awaitPlan(page, () => page.reload());
+}
+
 module.exports = {
+  API_URL,
   STORAGE_KEY,
+  apiPlan,
+  awaitPlan,
+  openSharedPlanner,
+  reloadSharedPlanner,
+  resetPlan,
   addBudgetLine,
   addSponsor,
   addTask,

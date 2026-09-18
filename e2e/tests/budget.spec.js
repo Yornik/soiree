@@ -170,3 +170,18 @@ test('the first row of a fresh grid starts at zero rather than at NaN', async ({
   await expect(row.committed).toHaveText('€0');
   await expectFigures(page, { committed: 0, paid: 0, outstanding: 0, forecast: 0 });
 });
+
+test('a line paid to the cent is settled, not a rounding error short', async ({ page }) => {
+  // 45.33 x 40 is 1813.1999999999998 in floating point, and 1813.2 paid
+  // against it leaves a negative fraction of a cent. Rendered with no decimal
+  // places that reads "-€0": a ledger that says nothing is outstanding and
+  // prints a minus sign in front of it is a ledger nobody trusts. Counting in
+  // whole minor units and converting once is what makes it exactly zero.
+  const row = await addBudgetLine(page, { item: 'Catering', unit: 45.33, qty: 40, paid: 1813.2 });
+
+  await expect(row.committed).toHaveText('€1,813');
+  await expect(row.outstanding).toHaveText('€0');
+  await expect(row.outstanding).not.toHaveClass(/owing/);
+  await expect(page.locator('#sumOwing')).toHaveText('€0');
+  await expect(page.locator('#sumOwingAlt')).toHaveText('€0');
+});
