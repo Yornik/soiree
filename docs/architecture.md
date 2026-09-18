@@ -136,6 +136,15 @@ registered, so asking again would only be a second `404` — and anything else
 that is not an answer gets a few retries, because it might be a browser offline
 on a first visit.
 
+There is one connection at a time. Two things want one on an ordinary signed-in
+load — the page starting, and `auth.js` reporting the session a moment later,
+while the first request is still in flight — and letting both through fetched
+the whole plan twice on every load, the largest request the page makes, from a
+server that may be 300 ms away. It was also a race: both answers reached
+`adopt()`, the second reset the shadow while the first one's `POST`s were
+landing, and a planner being carried up to an empty database was carried up
+twice.
+
 A `401` is a third answer and must not be read as either of the others: it is a
 deployment that *has* an API, which wants a session. Falling back to
 `localStorage` on it would be the worst of both — edits would look saved, live
@@ -307,8 +316,8 @@ constraint drives the design:
 4. **Compression and cache headers in the binary.** No proxy configuration is
    required for either.
 
-Measured at 1.0.0, brotli: shell 4.2 kB, stylesheet 8.8 kB, planner script
-37 kB, accounts script 20 kB, font 33 kB. Both scripts are `defer`, so first
+Measured at 1.0.0, brotli: shell 4.3 kB, stylesheet 8.8 kB, planner script
+39 kB, accounts script 22 kB, font 33 kB. Both scripts are `defer`, so first
 paint needs the shell and stylesheet only — about 13 kB.
 
 ### Deliberately excluded
@@ -429,8 +438,6 @@ Open, in the order they matter:
   written in a language chosen for that mail. The digest
   (`internal/reminders/render.go`) is one body for every admin and is in
   English; per-recipient bodies would mean one send per language.
-- **A standing control for reminders.** See *Web push*: the offer is the only
-  way in and there is no way out.
 - **What an expired session leaves behind.** Signing out removes this browser's
   copy of the plan. A session that ends by itself does not, because the unsent
   edits are in that copy — so a tab abandoned on a shared computer still shows
@@ -1235,9 +1242,15 @@ open planner to the front rather than opening a second one. The payload's four
 fields (`title`, `body`, `url`, `tag`) are a contract between the server and
 that handler: adding a field is safe, renaming one is not.
 
-What is missing is a standing control. The offer is the only way in, so
-somebody who never sets a due date is never asked, and there is nowhere to turn
-reminders off again short of the browser's own site settings.
+The offer is a good moment to ask and a bad thing to depend on, so the account
+screen has the standing switch: on, off, and an honest line when neither is
+possible — the browser has no Push API, or its prompt was refused and only its
+own site settings can undo that. `app.js` owns what the switch does
+(`window.soiree.push`: `state`, `enable`, `disable`) and `auth.js` only draws
+it, for admins alone, because `NotifiablePushSubscriptions` sends to active
+admins alone and a switch connected to nothing is worse than none. Turning off
+tells the server first and the browser second: the other order leaves a row the
+digest keeps sending to until the push service reports it gone.
 
 #### The reminder digest
 

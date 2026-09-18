@@ -389,6 +389,15 @@ func TestTheDocumentedErrorContractHolds(t *testing.T) {
 			`{"email":"nobody@example.test","role":"viewer","language":"fr"}`, admin,
 			http.StatusBadRequest, "invalid_language"},
 
+		// A delete carries no body in this API, and the specification once said
+		// this one did. The endpoint travels where a revision does.
+		{"unsubscribing with the endpoint in a body", "DELETE", "/api/v1/push/subscriptions",
+			`{"endpoint":"https://push.example.test/send/abc"}`, editor,
+			http.StatusBadRequest, "bad_request"},
+		{"unsubscribing with the endpoint in the query", "DELETE",
+			"/api/v1/push/subscriptions?endpoint=https%3A%2F%2Fpush.example.test%2Fsend%2Fabc", "", editor,
+			http.StatusNoContent, ""},
+
 		// The accounts surface is NOT strict, and the specification says so.
 		// Pinned because it is the half of that sentence somebody would
 		// "fix" by assumption.

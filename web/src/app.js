@@ -1487,22 +1487,40 @@
    * only be a second 404. Anything else that is not an answer might be this
    * browser being offline on a first visit, which is worth a few more tries.
    */
+  // One at a time. Two things ask for a connection on an ordinary signed-in
+  // load — the page starting, and auth.js reporting the session a moment later
+  // — and the second arrives while the first is still in flight. Letting both
+  // through fetched the whole plan twice on every load, which is the largest
+  // request this page makes, to a server that may be 300 ms away. It was also
+  // a race with a worse ending: both answers reach adopt(), the second resets
+  // the shadow while the first one's POSTs are landing, and a planner being
+  // carried up to an empty database is carried up twice.
+  var connecting = false;
+
   function connect(attempt) {
     if (typeof fetch !== 'function' || typeof Promise !== 'function') return;
+    // A retry (attempt > 0) is the connection already in progress, not a
+    // second one.
+    if (attempt === 0) {
+      if (connecting) return;
+      connecting = true;
+    }
     api('GET', '/plan').then(function (res) {
-      if (res.status === 200 && res.body) { announceAPI(true); adopt(res.body); return; }
+      if (res.status === 200 && res.body) { connecting = false; announceAPI(true); adopt(res.body); return; }
       // 404 is final: with no database those paths are never registered.
-      if (res.status === 404) { announceAPI(false); return; }
+      if (res.status === 404) { connecting = false; announceAPI(false); return; }
       // 401 is not "no API" — it is an API that wants a session. Falling back
       // to localStorage here would be the worst of both: edits would look
       // saved, live in this browser only, and never reach the plan everybody
       // else is reading. So hold, and connect for real once auth.js reports a
       // sign-in.
-      if (res.status === 401) { announceAPI(true); return; }
+      if (res.status === 401) { connecting = false; announceAPI(true); return; }
       if (attempt < 4) {
         setTimeout(function () { connect(attempt + 1); },
           Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, attempt)));
+        return;
       }
+      connecting = false;
     });
   }
 
@@ -1652,8 +1670,14 @@
     doubtSession();
   });
 
+  // The digest is pushed to active admins and to nobody else (the store's
+  // NotifiablePushSubscriptions), so an offer made to anybody else is an offer
+  // of something that will never arrive.
+  var sessionRole = '';
+
   document.addEventListener('soiree:session', function (e) {
     var signedIn = !!(e && e.detail && e.detail.signedIn);
+    sessionRole = signedIn ? String(e.detail.role || '') : '';
     if (!signedIn) {
       // Only once there is something to halt. Before the first plan arrives
       // this is the ordinary "nobody is signed in yet" and connect() is
@@ -3445,6 +3469,91 @@
       .catch(function () { /* nothing subscribed here */ });
   }
 
+  /* Turning reminders on and off, for the one-time offer below and for the
+   * standing control on the account screen (auth.js draws it; this owns what
+   * it does). Five states:
+   *
+   *   unavailable — no VAPID key or no API. Not this deployment's feature;
+   *                 nothing should be drawn at all.
+   *   unsupported — the browser has no Push API. On an iPhone that means the
+   *                 page is in a Safari tab rather than on the Home Screen.
+   *   blocked     — the person said no to the browser's prompt. Only the
+   *                 browser's own site settings can undo that.
+   *   off, on     — whether this device holds a subscription.
+   *
+   * `ready` never settles on a page whose service worker did not register, so
+   * everything that waits on it is bounded: a control that spins for ever is
+   * worse than one that says it cannot.
+   */
+  function pushRegistration() {
+    return new Promise(function (resolve) {
+      var done = false;
+      function finish(reg) { if (!done) { done = true; resolve(reg || null); } }
+      setTimeout(function () { finish(null); }, 3000);
+      try { navigator.serviceWorker.ready.then(finish, function () { finish(null); }); }
+      catch (e) { finish(null); }
+    });
+  }
+
+  function pushState() {
+    // `apiAvailable` rather than `apiMode`: the first is latched the moment the
+    // origin answers, the second only once the plan has been adopted, and the
+    // account screen can ask in between — it draws as soon as the session
+    // answers, which on a page opened at /#/account is usually first.
+    var api = apiMode || !!(window.soiree && window.soiree.apiAvailable === true);
+    if (!api || !VAPID) return Promise.resolve('unavailable');
+    if (!(navigator.serviceWorker && window.PushManager && window.Notification)) {
+      return Promise.resolve('unsupported');
+    }
+    if (Notification.permission === 'denied') return Promise.resolve('blocked');
+    return pushRegistration().then(function (reg) {
+      if (!reg) return 'unsupported';
+      return reg.pushManager.getSubscription().then(function (sub) { return sub ? 'on' : 'off'; });
+    }).catch(function () { return 'off'; });
+  }
+
+  // Must be called from inside a click: the permission prompt is only shown
+  // for a gesture, and this page spends it exactly once.
+  function pushEnable() {
+    if (!pushable()) return pushState();
+    var asked;
+    try { asked = Notification.requestPermission(); } catch (e) { asked = null; }
+    // Old Safari answers through a callback and returns nothing.
+    if (!asked || typeof asked.then !== 'function') return pushState();
+    return asked.then(function (verdict) {
+      if (verdict !== 'granted') return 'blocked';
+      return pushRegistration().then(function (reg) {
+        if (!reg) return 'unsupported';
+        return reg.pushManager.getSubscription().then(function (existing) {
+          return existing || reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: vapidKey(VAPID)
+          });
+        }).then(pushSave).then(function (res) { return res.status === 204 ? 'on' : 'off'; });
+      });
+    }).catch(function () { return pushState(); });
+  }
+
+  // The server first, then the browser. The other order leaves a row the
+  // digest keeps sending to until the push service reports it gone; this one
+  // leaves, at worst, a browser subscription nobody sends to.
+  function pushDisable() {
+    return pushRegistration().then(function (reg) {
+      if (!reg) return 'unsupported';
+      return reg.pushManager.getSubscription().then(function (sub) {
+        if (!sub) return 'off';
+        return api('DELETE', '/push/subscriptions?endpoint=' + encodeURIComponent(sub.endpoint))
+          .then(function (res) {
+            if (res.status !== 204) return 'on';
+            return Promise.resolve(sub.unsubscribe()).then(function () { return 'off'; }, function () { return 'off'; });
+          });
+      });
+    }).catch(function () { return pushState(); });
+  }
+
+  window.soiree = window.soiree || {};
+  window.soiree.push = { state: pushState, enable: pushEnable, disable: pushDisable };
+
   var pushAsked = false;
 
   /* The offer, and the one permission prompt this page ever spends.
@@ -3458,7 +3567,7 @@
    * twice keeps this page's storage to the three keys it documents.
    */
   function offerPush() {
-    if (pushAsked || editingLocked || !pushable()) return;
+    if (pushAsked || editingLocked || !pushable() || sessionRole !== 'admin') return;
     if (Notification.permission !== 'default') return;
     var anchor = document.getElementById('addTaskRow');
     if (!anchor || !anchor.parentNode) return;
@@ -3484,23 +3593,7 @@
     button(t('n.on'), function () {
       note.remove();
       // Inside the click, so the browser still counts it as a gesture.
-      var asked;
-      try { asked = Notification.requestPermission(); } catch (e) { asked = null; }
-      // Old Safari answers through a callback and returns nothing.
-      if (!asked || typeof asked.then !== 'function') return;
-      asked.then(function (verdict) {
-        if (verdict !== 'granted') { flash(t('n.no')); return; }
-        return navigator.serviceWorker.ready.then(function (reg) {
-          return reg.pushManager.getSubscription().then(function (existing) {
-            return existing || reg.pushManager.subscribe({
-              userVisibleOnly: true,
-              applicationServerKey: vapidKey(VAPID)
-            });
-          });
-        }).then(pushSave).then(function (res) {
-          flash(t(res.status === 204 ? 'n.done' : 'n.no'));
-        });
-      }).catch(function () { flash(t('n.no')); });
+      pushEnable().then(function (now) { flash(t(now === 'on' ? 'n.done' : 'n.no')); });
     });
     button(t('n.later'), function () { note.remove(); });
 

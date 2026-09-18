@@ -48,6 +48,7 @@ const {
   reloadSharedPlanner,
   resetPlan,
   tagLine,
+  signInPage,
   apiAuth,
   adoptSession,
   awaitPlan,
@@ -544,8 +545,8 @@ test('a planner built before the database existed is carried up, not wiped', asy
  * after this anonymous, and an anonymous request is answered 401 whether or
  * not the thing it asked for works.
  */
-async function openWithOwnSession(page, request) {
-  const who = await ensureEditor(request);
+async function openWithOwnSession(page, request, name = 'grace') {
+  const who = await ensureEditor(request, API_URL, name);
   const cookie = await freshSession(request, API_URL, who);
   await adoptSession(page, cookie);
   await awaitPlan(page, () => page.goto('/'));
@@ -585,8 +586,8 @@ async function editAsTheSessionEnds(page, request, cookie, paid) {
   await page.unroute(held);
 }
 
-async function signInThroughTheForm(page, request) {
-  const who = await ensureEditor(request);
+async function signInThroughTheForm(page, request, name = 'grace') {
+  const who = await ensureEditor(request, API_URL, name);
   await page.fill('#loginEmail', who.email);
   await page.fill('#loginPassword', who.password);
   await page.click('#loginSubmit');
@@ -767,7 +768,7 @@ test('a reopened tab that was edited while signed out does not overwrite a week 
 const signOutButton = (page) => page.locator('#accountActs button', { hasText: 'Sign out' });
 
 test('signing out removes this browser\'s copy of the plan, and signing in brings it back from the server', async ({ page, request }) => {
-  await openWithOwnSession(page, request);
+  await openWithOwnSession(page, request, 'linus');
   await gotoTab(page, 'budget');
   await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
   await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
@@ -790,14 +791,14 @@ test('signing out removes this browser\'s copy of the plan, and signing in bring
 
   // Nothing was lost: it was only ever a copy.
   await page.goto('/#/login');
-  await signInThroughTheForm(page, request);
+  await signInThroughTheForm(page, request, 'linus');
   await gotoTab(page, 'budget');
   await expect(budgetRow(page, 0).item).toHaveValue('Venue deposit');
   await expect(budgetRow(page, 0).paid).toHaveValue('500');
 });
 
 test('signing out with changes that never reached the server asks first', async ({ page, request }) => {
-  await openWithOwnSession(page, request);
+  await openWithOwnSession(page, request, 'linus');
   await gotoTab(page, 'budget');
   await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
   await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
@@ -822,4 +823,119 @@ test('signing out with changes that never reached the server asks first', async 
   await expect(page.locator('#authScreen')).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toBeNull();
   expect((await apiPlan(request)).budgetItems.map((i) => i.paid)).toEqual(['500.00']);
+});
+
+/*
+ * Reminders, as a switch that is still there afterwards.
+ *
+ * The planner offers them once, the first time an admin gives a task a due
+ * date. Somebody who never does is never asked, "Not now" had no way back, and
+ * there was no way to turn them off at all. The account screen has the standing
+ * version.
+ *
+ * The browser's Push API is stubbed: headless Chromium has no push service to
+ * subscribe to. Everything on this side of it is real — the page, the routes,
+ * the database row.
+ *
+ * Here rather than in auth-api.spec.js, which answers the planner's own probe
+ * with a 404 to keep its pages out of the shared plan. A page told there is no
+ * API rightly draws no switch for a feature that needs one.
+ */
+async function stubPush(page) {
+  await page.addInitScript(() => {
+    const state = { sub: null, permission: 'default' };
+    const made = {
+      endpoint: 'https://push.example.test/send/e2e-device',
+      unsubscribe: async () => { state.sub = null; return true; },
+      toJSON() {
+        return { endpoint: this.endpoint, expirationTime: null, keys: { p256dh: 'BPfixture-p256dh', auth: 'fixture-auth' } };
+      },
+    };
+    const reg = {
+      pushManager: {
+        getSubscription: async () => state.sub,
+        subscribe: async () => { state.sub = made; return made; },
+      },
+    };
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: { ready: Promise.resolve(reg), register: async () => reg, getRegistration: async () => reg, addEventListener() {} },
+    });
+    window.PushManager = window.PushManager || function PushManager() {};
+    function FakeNotification() {}
+    FakeNotification.requestPermission = async () => { state.permission = 'granted'; return 'granted'; };
+    Object.defineProperty(FakeNotification, 'permission', { get: () => state.permission });
+    window.Notification = FakeNotification;
+  });
+}
+
+test('an admin can turn reminders on for a device, and off again, from their account', async ({ page }) => {
+  await stubPush(page);
+  const calls = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/v1/push/subscriptions')) calls.push(`${r.method()} ${new URL(r.url()).search}`);
+  });
+
+  // The run's shared session is the bootstrap admin.
+  await openSharedPlanner(page, '/#/account');
+
+  await expect(page.locator('#remindersSection')).toBeVisible();
+  await expect(page.locator('#remindersState')).toHaveText('Reminders are off on this device.');
+  await page.click('#remindersToggle');
+  await expect(page.locator('#remindersState')).toHaveText('Reminders are on for this device.');
+  await expect(page.locator('#remindersToggle')).toHaveText('Turn off');
+  expect(calls).toContain('POST ');
+
+  await page.click('#remindersToggle');
+  await expect(page.locator('#remindersState')).toHaveText('Reminders are off on this device.');
+  await expect(page.locator('#remindersToggle')).toHaveText('Turn on');
+  // The endpoint travels in the query string, as a revision does on any other
+  // delete here; a body on DELETE is what this API does not do.
+  expect(calls.some((c) => c.startsWith('DELETE ?endpoint=https%3A%2F%2Fpush.example.test'))).toBe(true);
+});
+
+test('somebody the digest is never sent to is not offered a switch for it', async ({ page, request }) => {
+  // The server pushes to active admins and nobody else, so for an editor this
+  // would be a switch connected to nothing.
+  await stubPush(page);
+  await openWithOwnSession(page, request, 'linus');
+  await page.goto('/#/account');
+  await expect(page.locator('#signOutBtn')).toBeVisible();
+  await expect(page.locator('#remindersSection')).toBeHidden();
+});
+
+/*
+ * One connection per load.
+ *
+ * Two things ask for the plan on an ordinary signed-in load: the page as it
+ * starts, and auth.js reporting the session a moment later, while the first
+ * request is still in flight. Both used to go out. That is the largest request
+ * the page makes, doubled, on every load — and both answers reached adopt(),
+ * which is how a planner being carried up to an empty database was, about one
+ * run in six, carried up twice.
+ *
+ * The answer is held here until the session has been reported, so the count is
+ * of requests made while the first is unanswered and owes nothing to timing.
+ */
+test('a signed-in load asks for the plan once, not once per thing that wanted it', async ({ page }) => {
+  await signInPage(page);
+
+  const asked = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route('**/api/v1/plan', async (route) => {
+    asked.push(route.request().method());
+    await gate;
+    await route.continue();
+  });
+
+  await page.goto('/');
+  // The session has answered, and auth.js has told the planner so: this is the
+  // moment the second request used to go out.
+  await expect(page.locator('body')).toHaveClass(/signed-in/);
+  await expect(page.locator('#accountActs')).toContainText('Sign out');
+  expect(asked).toEqual(['GET']);
+
+  release();
+  await expect(page.locator('body')).not.toHaveClass(/showing-auth/);
 });

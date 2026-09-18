@@ -477,6 +477,17 @@
       </form>
       <p class="auth-msg" id="passkeyMsg" role="status" aria-live="polite"></p>
     </section>
+    <!-- Drawn by auth.js for an admin on a deployment that can push; hidden
+         otherwise. The planner's one-time offer is a good moment to ask, and
+         this is the switch that is still there afterwards. -->
+    <section class="auth-block" id="remindersSection" hidden>
+      <h2 data-i18n-auth="rem.title">Reminders</h2>
+      <p class="auth-note-body" data-i18n-auth="rem.body">One notification on this device when a deadline is near, listing what is coming up. Reminders go to admins, and each device is turned on by itself.</p>
+      <p class="auth-msg" id="remindersState" role="status" aria-live="polite"></p>
+      <div class="auth-acts">
+        <button class="ghost-btn" type="button" id="remindersToggle"></button>
+      </div>
+    </section>
     <div class="auth-acts auth-acts-parted">
       <button class="ghost-btn" type="button" id="signOutBtn" data-i18n-auth="signout">Sign out</button>
     </div>

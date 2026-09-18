@@ -1362,21 +1362,27 @@ paths:
       operationId: unsubscribePush
       summary: Stop the digest on this browser.
       description: |
-        Send the endpoint of the subscription. The server deletes it.
+        Send the endpoint of the subscription as `?endpoint=`. A delete carries
+        no body in this API. The revision of a row travels the same way.
+
+        The server deletes the subscription of the current account that has
+        that endpoint. It does not delete the subscription of another account.
 
         This operation succeeds for an endpoint the server does not hold.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [endpoint]
-              properties:
-                endpoint:
-                  type: string
-                  format: uri
-                  description: The endpoint of the subscription to delete.
+
+        Call this first, and `unsubscribe()` in the browser second. The other
+        order leaves a row that the digest sends to until the push service
+        reports it gone.
+      parameters:
+        - name: endpoint
+          in: query
+          required: true
+          description: |
+            The `endpoint` of the `PushSubscription`. It is an absolute https
+            URL. Encode it.
+          schema:
+            type: string
+            format: uri
       responses:
         '204':
           description: The subscription is gone.

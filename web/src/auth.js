@@ -198,6 +198,15 @@
       'pk.e.setup': 'Your device did not complete the setup. Try again.',
       'pk.e.nologin': 'That passkey did not sign you in. Try your password instead.',
       'pk.e.signin': 'Your device did not complete the sign-in. Try again.',
+      'rem.title': 'Reminders',
+      'rem.body': 'One notification on this device when a deadline is near, listing what is coming up. Reminders go to admins, and each device is turned on by itself.',
+      'rem.on': 'Reminders are on for this device.',
+      'rem.off': 'Reminders are off on this device.',
+      'rem.blocked': 'Notifications are blocked for this site. Your browser\'s site settings can undo that.',
+      'rem.unsupported': 'This browser cannot receive notifications from a web page. On an iPhone, add this page to the Home Screen first, and open it from there.',
+      'rem.turnon': 'Turn on',
+      'rem.turnoff': 'Turn off',
+      'rem.failed': 'That did not work. Try again.',
       'tr.internal': 'built into a device',
       'tr.hybrid': 'a phone or tablet',
       'tr.usb': 'a security key',
@@ -322,6 +331,15 @@
       'pk.e.setup': 'Je apparaat heeft de installatie niet afgerond. Probeer het opnieuw.',
       'pk.e.nologin': 'Met die passkey ben je niet aangemeld. Probeer je wachtwoord.',
       'pk.e.signin': 'Je apparaat heeft het aanmelden niet afgerond. Probeer het opnieuw.',
+      'rem.title': 'Herinneringen',
+      'rem.body': 'Eén melding op dit apparaat als een deadline nadert, met wat eraan komt. Herinneringen gaan naar beheerders, en elk apparaat zet je apart aan.',
+      'rem.on': 'Herinneringen staan aan op dit apparaat.',
+      'rem.off': 'Herinneringen staan uit op dit apparaat.',
+      'rem.blocked': 'Meldingen zijn geblokkeerd voor deze site. Dat kun je terugdraaien bij de site-instellingen van je browser.',
+      'rem.unsupported': 'Deze browser kan geen meldingen van een webpagina ontvangen. Zet deze pagina op een iPhone eerst op het beginscherm, en open haar van daaruit.',
+      'rem.turnon': 'Aanzetten',
+      'rem.turnoff': 'Uitzetten',
+      'rem.failed': 'Dat is niet gelukt. Probeer het opnieuw.',
       'tr.internal': 'ingebouwd in een apparaat',
       'tr.hybrid': 'een telefoon of tablet',
       'tr.usb': 'een beveiligingssleutel',
@@ -446,6 +464,15 @@
       'pk.e.setup': 'Perangkatmu tidak menyelesaikan pengaturan. Coba lagi.',
       'pk.e.nologin': 'Kunci sandi itu tidak berhasil memasukkanmu. Coba pakai kata sandi.',
       'pk.e.signin': 'Perangkatmu tidak menyelesaikan proses masuk. Coba lagi.',
+      'rem.title': 'Pengingat',
+      'rem.body': 'Satu notifikasi di perangkat ini kalau tenggat sudah dekat, berisi apa yang akan datang. Pengingat dikirim ke admin, dan setiap perangkat dinyalakan sendiri-sendiri.',
+      'rem.on': 'Pengingat aktif di perangkat ini.',
+      'rem.off': 'Pengingat tidak aktif di perangkat ini.',
+      'rem.blocked': 'Notifikasi diblokir untuk situs ini. Kamu bisa membatalkannya di pengaturan situs browser.',
+      'rem.unsupported': 'Browser ini tidak bisa menerima notifikasi dari halaman web. Di iPhone, tambahkan dulu halaman ini ke Layar Utama, lalu buka dari sana.',
+      'rem.turnon': 'Nyalakan',
+      'rem.turnoff': 'Matikan',
+      'rem.failed': 'Itu tidak berhasil. Coba lagi.',
       'tr.internal': 'tertanam di perangkat',
       'tr.hybrid': 'ponsel atau tablet',
       'tr.usb': 'kunci keamanan',
@@ -802,6 +829,14 @@
     // Arrived after the probe went out: nothing to undo, the answer stands.
     if (state !== 'unknown') return;
     setSession('none');
+  });
+
+  // And the other answer: there is an API. Whatever on screen depends on that
+  // and was drawn before it was known — the reminders switch, on a page opened
+  // straight at the account screen — is drawn again.
+  document.addEventListener('soiree:api', function (ev) {
+    if (!ev || !ev.detail || ev.detail.available !== true) return;
+    if (state === 'in' && readRoute().path === 'account') renderReminders();
   });
 
   function probeSession() {
@@ -1612,6 +1647,60 @@
     show(byId('passkeySection'), PASSKEYS_OFFERED);
     say(byId('passkeyMsg'), '');
     if (PASSKEYS_OFFERED) loadPasskeys();
+    renderReminders();
+  }
+
+  /* Reminders on this device.
+   *
+   * The planner offers them once, the first time an admin gives a task a due
+   * date — a good moment to ask and a bad thing to depend on: somebody who
+   * never sets a date is never asked, "Not now" had no way back, and there was
+   * no way to turn them off short of the browser's own settings. This is the
+   * standing version of the same switch.
+   *
+   * app.js owns what it does (window.soiree.push); this only draws it. Shown
+   * to admins and nobody else, because the server pushes the digest to active
+   * admins and nobody else, and a switch that does nothing is worse than none.
+   */
+  function renderReminders() {
+    var section = byId('remindersSection');
+    var push = window.soiree && window.soiree.push;
+    if (!section || !push || !isAdmin()) { show(section, false); return; }
+    push.state().then(drawReminders);
+  }
+
+  function drawReminders(now) {
+    var section = byId('remindersSection');
+    var toggle = byId('remindersToggle');
+    if (!section || !toggle) return;
+    // Not this deployment's feature. Nothing to explain and nothing to draw.
+    if (now === 'unavailable') { show(section, false); return; }
+    show(section, true);
+
+    var line = { on: 'rem.on', off: 'rem.off', blocked: 'rem.blocked', unsupported: 'rem.unsupported' }[now] || 'rem.off';
+    say(byId('remindersState'), t(line), now === 'blocked' || now === 'unsupported');
+    // Neither of those two is something a button here can change.
+    show(toggle, now === 'on' || now === 'off');
+    setText(toggle, t(now === 'on' ? 'rem.turnoff' : 'rem.turnon'));
+    toggle.setAttribute('data-now', now);
+    toggle.disabled = false;
+  }
+
+  function bindReminders() {
+    var toggle = byId('remindersToggle');
+    if (!toggle) return;
+    toggle.addEventListener('click', function () {
+      var push = window.soiree && window.soiree.push;
+      if (!push) return;
+      var was = toggle.getAttribute('data-now');
+      toggle.disabled = true;
+      // Straight from the click, with nothing awaited first: the browser only
+      // shows its permission prompt for a gesture.
+      (was === 'on' ? push.disable() : push.enable()).then(function (now) {
+        drawReminders(now);
+        if (now === was) say(byId('remindersState'), t('rem.failed'), true);
+      });
+    });
   }
 
   var passkeys = [];
@@ -1882,6 +1971,7 @@
   bindSetPassword();
   bindAdmin();
   bindPasskeys();
+  bindReminders();
 
   var signOutBtn = byId('signOutBtn');
   if (signOutBtn) signOutBtn.addEventListener('click', signOut);

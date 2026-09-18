@@ -201,10 +201,10 @@ Measured transfer at 1.0.0, brotli:
 
 | | |
 |---|---|
-| HTML shell | 4.2 kB (the three flags are inline SVG, so they cost no request) |
+| HTML shell | 4.3 kB (the three flags are inline SVG, so they cost no request) |
 | Stylesheet | 8.8 kB |
-| Planner script | 37 kB (`defer`, does not block paint) |
-| Accounts script | 20 kB (`defer`, does not block paint; three languages) |
+| Planner script | 39 kB (`defer`, does not block paint) |
+| Accounts script | 22 kB (`defer`, does not block paint; three languages) |
 | Display font | 33 kB (`font-display: swap`, does not block paint) |
 | **First paint** | **~13 kB** |
 
@@ -257,8 +257,9 @@ What works end to end:
   account — stops the page asking, keeps every edit in the browser, opens the
   sign-in screen with a line saying why, and sends those edits once the person
   is back. Signing back in is a merge, never this browser's copy winning.
-- **Deadline reminders** by mail and by web push, with a control on the page
-  that asks for permission and subscribes the device.
+- **Deadline reminders** by mail and by web push, to admins. The page offers
+  push once, at the moment an admin first sets a due date, and the account
+  screen has the switch that is still there afterwards — on, off, per device.
 - **The API is described** in [`api/openapi.yaml`](api/openapi.yaml), and the
   description is tested against the running server.
 

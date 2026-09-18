@@ -57,6 +57,26 @@ const {
 // rather than a second copy that drifts.
 const { ADMIN_EMAIL: E2E_ADMIN, ADMIN_PASSWORD: E2E_ADMIN_PASSWORD } = require('./servers');
 
+/*
+ * A VAPID pair made when the run starts and thrown away with it.
+ *
+ * Generated rather than written down: a private key in a repository is a
+ * private key in a repository, however clearly it is labelled a fixture, and
+ * it costs four lines not to have one. The format is webpush-go's — the public
+ * key is the uncompressed P-256 point and the private key is the bare scalar,
+ * both base64url without padding.
+ */
+function vapidForThisRun() {
+  const { privateKey } = require('crypto').generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const jwk = privateKey.export({ format: 'jwk' });
+  const point = Buffer.concat([Buffer.from([4]), Buffer.from(jwk.x, 'base64url'), Buffer.from(jwk.y, 'base64url')]);
+  return {
+    SOIREE_VAPID_PUBLIC_KEY: point.toString('base64url'),
+    SOIREE_VAPID_PRIVATE_KEY: jwk.d,
+    SOIREE_VAPID_SUBJECT: 'mailto:push@example.test',
+  };
+}
+
 const repoRoot = path.resolve(__dirname, '..');
 const binary = path.join(__dirname, '.tmp', 'soiree');
 // Its own output path per server: Playwright starts them in parallel, and two
@@ -231,6 +251,13 @@ module.exports = defineConfig({
       SOIREE_BASE_URL: AUTH_URL,
       SOIREE_BOOTSTRAP_ADMIN: E2E_ADMIN,
       SOIREE_BOOTSTRAP_PASSWORD: E2E_ADMIN_PASSWORD,
+
+      // Web Push, so that the reminders control has something to control.
+      // Without a key the page draws none of it — which is right, and is why
+      // the client half of push went untested for as long as this block did
+      // not exist. Nothing is ever sent: the specs stub the browser's Push API
+      // and no digest runs here.
+      ...vapidForThisRun(),
     },
   }],
 });

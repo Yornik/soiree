@@ -376,18 +376,21 @@ is in the relay's logs, not this application's.
 Push works end to end from the page. Knowing how the offer is made saves a
 support conversation, because it is deliberately quiet:
 
-- **It is never made on load.** A denied notification permission is sticky in
-  Chrome — undoing it means a trip into the site settings — so the page spends
-  its one prompt at the moment the value is obvious: the first time a signed-in
-  editor or admin gives a task a due date, a line appears under the task list
-  with *Turn on* and *Not now*.
-- **It is offered once per page load and only while the browser has not been
-  asked.** Somebody who said *Not now* is offered it again the next time they
-  set a due date on a fresh load; somebody who said no to the browser's own
-  prompt is not, and has to allow notifications for the site themselves.
-- **A viewer is never offered it**, and an admin who never sets a due date is
-  not either. The digest goes to every active admin by mail regardless; push is
-  per device and opt-in.
+- **It goes to admins, and only they are offered it.** The server pushes the
+  digest to the devices of active admins and nobody else, so an editor or a
+  viewer is shown no switch for it. The mail goes to every active admin
+  regardless; push is per device and opt-in.
+- **The offer is never made on load.** A denied notification permission is
+  sticky in Chrome — undoing it means a trip into the site settings — so the
+  page spends its one prompt at the moment the value is obvious: the first time
+  an admin gives a task a due date, a line appears under the task list with
+  *Turn on* and *Not now*.
+- **The switch is on the account screen** (`/#/account`, *Reminders*), for
+  everything the offer cannot do: turning them on without setting a due date,
+  changing one's mind after *Not now*, and turning them off again. It reads the
+  browser's own subscription, so it is right on each device separately. If the
+  browser's prompt was refused it says so and offers no button, because only
+  the browser's site settings can undo that.
 - **On Android, Chrome is enough.** On an iPhone the site has to be added to
   the Home Screen first; Safari does not offer web push to a tab.
 

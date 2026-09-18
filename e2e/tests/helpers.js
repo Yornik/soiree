@@ -289,11 +289,15 @@ async function freshSession(request, base = API_URL, who = { email: ADMIN_EMAIL,
  * so the link comes back in the response, and the token in it sets the
  * password. An editor, because that is the least privilege that can write.
  */
-const EDITOR = { email: 'grace-e2e@example.test', password: 'a-second-long-password' };
+// More than one, by name, because the budget is per account and a file that
+// keeps growing spends it: ten logins a quarter hour, two per spec that ends a
+// session and signs in again. The eleventh is a 429 in whichever spec happens
+// to be last, which is what happened. Specs that belong together share a name.
 const editors = new Set();
 
-async function ensureEditor(request, base = API_URL) {
-  if (editors.has(base)) return EDITOR;
+async function ensureEditor(request, base = API_URL, name = 'grace') {
+  const EDITOR = { email: `${name}-e2e@example.test`, password: 'a-second-long-password' };
+  if (editors.has(base + name)) return EDITOR;
 
   const headers = await apiAuth(request, base);
   const made = await request.post(`${base}/api/v1/users`, {
@@ -309,7 +313,7 @@ async function ensureEditor(request, base = API_URL) {
     });
     expect(set.status(), 'POST /api/v1/auth/set-password').toBe(204);
   }
-  editors.add(base);
+  editors.add(base + name);
   return EDITOR;
 }
 
