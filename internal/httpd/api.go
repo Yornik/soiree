@@ -91,9 +91,68 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	register(api, programmeEntity(s.store, currency))
 	api.HandleFunc("PATCH /settings", patchSettings(s.store, currency))
 
-	s.routePush(api)
+	// Everything above is guarded as one subtree rather than per route.
+	//
+	// RequireWrite encodes the rule the API actually has — anybody signed in
+	// may read, only an editor or an admin may write — and it is a property of
+	// the method, not of the route. Attaching it per route is how one new route
+	// added later ends up unguarded, which is exactly how this subtree spent
+	// its first several releases: the middleware existed, the roles existed,
+	// the sessions existed, and nothing here called any of it. A planner holds
+	// people's names against amounts of money they owe each other, and all of
+	// it was readable and writable by anyone who could reach the URL.
+	//
+	// A nil auth with a live store is a wiring mistake, not a deployment shape:
+	// cmd/soiree builds both from the same DATABASE_URL. Refusing outright is
+	// the only safe reading, because the alternative — quietly serving the API
+	// unguarded — is the bug being fixed.
+	guarded := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusServiceUnavailable, errInternal,
+			"the API is not available because authentication is not configured")
+	}))
+	if s.auth != nil {
+		guarded = s.auth.RequireWrite(withActor(api))
+	}
 
-	mux.Handle(apiPrefix, noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), api)))
+	mux.Handle(apiPrefix, noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), guarded)))
+
+	// Push is a subtree of its own rather than a hole in the guard above.
+	//
+	// It already decides its own authorisation, and decides it differently on
+	// purpose: any live session may subscribe, because who *receives* a digest
+	// is settled at send time from the account's role. A viewer registering a
+	// device is harmless, and one promoted later starts receiving without
+	// having to subscribe again. RequireWrite would refuse them.
+	//
+	// Mounted as a longer prefix so Go's mux prefers it, which keeps the rule a
+	// property of where the routes live rather than a path exception inside the
+	// middleware — the thing RequireWrite's own comment warns turns into an
+	// unguarded route later.
+	push := http.NewServeMux()
+	s.routePush(push)
+	mux.Handle(apiPrefix+"push/", noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), push)))
+}
+
+// withActor names whoever is signed in as the author of anything they change.
+//
+// It sits inside the auth middleware, so the user is already in the context by
+// the time this runs. store.WithActor puts it somewhere the write paths read on
+// their own, which is why nine entities' worth of methods need no new argument.
+//
+// The ID only, never the address. store.Actor documents the reason and it is
+// not incidental: change_log is append-only and outlives the account, so an
+// email copied into it would survive the erasure that was supposed to remove
+// it. The label is left to the store, which uses it for the kinds of actor that
+// have no account at all — "system", "import".
+func withActor(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, ok := UserFrom(r.Context()); ok {
+			id := u.ID
+			next.ServeHTTP(w, r.WithContext(store.WithActor(r.Context(), store.Actor{ID: &id})))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // noStore marks the whole API subtree uncacheable on the way in, rather than
