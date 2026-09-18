@@ -239,6 +239,60 @@ func TestSendWithoutConfigurationFails(t *testing.T) {
 	}
 }
 
+// Every rejection below has to happen before a socket is opened. Build refuses
+// them already, but Build is called from Send, and the order of the steps
+// inside Send is the thing worth pinning: a version that dialled first would
+// still pass every test in message_test.go.
+//
+// Neither field is attacker-controlled today — the recipient is an
+// admin-entered address and the subject a constant — which is exactly the
+// assumption that stops being true later.
+func TestSendRefusesBadInputBeforeDialling(t *testing.T) {
+	// A host under .example.test, which is reserved and never resolves, so a
+	// dial would fail loudly and in different words.
+	cfg := Config{Host: "smtp.nowhere.example.test", Port: 465, From: "plans@example.test"}
+
+	for name, m := range map[string]Message{
+		"newline in recipient": {
+			To: []string{"ada@example.test\r\nBcc: mallory@example.test"}, Subject: "hello", Text: "body",
+		},
+		"newline in subject": {
+			To: []string{"ada@example.test"}, Subject: "hello\r\nBcc: mallory@example.test", Text: "body",
+		},
+		"recipient is not an address": {
+			To: []string{"not an address"}, Subject: "hello", Text: "body",
+		},
+		"no recipients": {Subject: "hello", Text: "body"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := New(cfg).Send(t.Context(), m)
+			if err == nil {
+				t.Fatal("Send() accepted it")
+			}
+			if strings.Contains(err.Error(), "dial") || strings.Contains(err.Error(), "tls") {
+				t.Errorf("Send() reached the network before refusing: %v", err)
+			}
+			// Nothing left this process, so nothing could have been sent twice.
+			if Ambiguous(err) {
+				t.Errorf("a refusal before the connection was reported as ambiguous: %v", err)
+			}
+		})
+	}
+}
+
+// Port 465 is TLS from the first byte, and the default belongs on that side: on
+// a STARTTLS port a relay that declines the upgrade and asks for no credentials
+// is talked to in the clear, and the body of an account mail is a set-password
+// link — which is a credential.
+func TestNewDefaultsToImplicitTLS(t *testing.T) {
+	if got := New(Config{Host: "smtp.resend.com", From: "plans@example.test"}).cfg.Port; got != DefaultPort {
+		t.Errorf("default port = %d, want %d", got, DefaultPort)
+	}
+	if got := New(Config{Host: "smtp.example.test", Port: 587, From: "plans@example.test"}).cfg.Port; got != 587 {
+		t.Errorf("explicit port = %d, want 587", got)
+	}
+}
+
 // Port 465 is implicit TLS and must not be spoken to in the clear.
 func TestImplicitTLSIsChosenByPort(t *testing.T) {
 	for port, want := range map[int]bool{465: true, 587: false, 25: false} {

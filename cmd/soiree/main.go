@@ -16,7 +16,7 @@ import (
 
 	"github.com/Yornik/soiree/internal/config"
 	"github.com/Yornik/soiree/internal/httpd"
-	"github.com/Yornik/soiree/internal/mail"
+	"github.com/Yornik/soiree/internal/mailer"
 	"github.com/Yornik/soiree/internal/migrate"
 	"github.com/Yornik/soiree/internal/store"
 	"github.com/Yornik/soiree/web"
@@ -93,23 +93,17 @@ func main() {
 	}
 
 	if st != nil {
-		var mailer httpd.Mailer
+		var accountMail httpd.Mailer
 		if cfg.SMTP.Enabled() {
 			// Assigned only when configured: a typed nil in an interface is
 			// not nil, and the accounts surface reads a nil Mailer as "hand
 			// the link back to the admin instead".
-			mailer = mail.New(mail.Config{
-				Host:     cfg.SMTP.Host,
-				Port:     cfg.SMTP.Port,
-				Username: cfg.SMTP.Username,
-				Password: cfg.SMTP.Password,
-				From:     cfg.SMTP.From,
-			})
+			accountMail = accountMailer{send: mailer.New(smtpConfig(cfg.SMTP))}
 		}
 
 		accounts = httpd.NewAuth(httpd.AuthOptions{
 			Store:             st,
-			Mailer:            mailer,
+			Mailer:            accountMail,
 			Logger:            log,
 			BaseURL:           cfg.BaseURL,
 			TrustProxyHeaders: cfg.TrustProxyHeaders,
@@ -127,6 +121,20 @@ func main() {
 		IdleTimeout:       httpd.IdleTimeout,
 	}
 
+	// The metrics exposition, on a port of its own. The public ingress route
+	// carries no path constraint, so /metrics on the main listener would be
+	// world-readable and soiree_build_info would name the running commit to
+	// anyone who asked. The probes stay on the main listener, because that is
+	// the port kubelet reaches.
+	ms := &http.Server{
+		Addr:              cfg.MetricsAddr,
+		Handler:           srv.MetricsHandler(),
+		ReadHeaderTimeout: httpd.ReadHeaderTimeout,
+		ReadTimeout:       httpd.ReadTimeout,
+		WriteTimeout:      httpd.WriteTimeout,
+		IdleTimeout:       httpd.IdleTimeout,
+	}
+
 	// Housekeeping: expired sessions and spent links. Tied to the signal
 	// context, so it stops when the process is asked to.
 	if accounts != nil {
@@ -136,6 +144,7 @@ func main() {
 	go func() {
 		log.Info("soiree listening",
 			"addr", cfg.ListenAddr,
+			"metricsAddr", cfg.MetricsAddr,
 			"version", version,
 			"commit", commit,
 			"event", cfg.EventName,
@@ -149,15 +158,72 @@ func main() {
 		}
 	}()
 
+	// A metrics port that cannot bind takes the process down with it, exactly
+	// as the main one does. The alternative is a pod that looks healthy while
+	// every scrape fails, which is the failure nobody notices until they need
+	// the graph.
+	go func() {
+		if err := ms.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("metrics server stopped", "err", err)
+			stop()
+		}
+	}()
+
 	<-ctx.Done()
 	log.Info("shutting down")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := hs.Shutdown(shutdownCtx); err != nil {
+	// Both, then decide. Letting the first failure skip the second would leave
+	// the metrics listener holding its connections open for the whole of the
+	// termination grace period.
+	if err := errors.Join(hs.Shutdown(shutdownCtx), ms.Shutdown(shutdownCtx)); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// smtpConfig maps the validated environment surface onto the transport.
+//
+// Two structs rather than one because they answer to different things:
+// config.SMTPConfig is what the operator set and is checked against what a
+// deployment needs (a sender with no relay is refused, a relay with no base URL
+// is refused), while mailer.Config is what the SMTP conversation needs. This is
+// the single place that knows the mapping.
+func smtpConfig(c config.SMTPConfig) mailer.Config {
+	return mailer.Config{
+		Host:     c.Host,
+		Port:     c.Port,
+		Username: c.Username,
+		Password: c.Password,
+		From:     c.From,
+	}
+}
+
+// accountMailer adapts internal/mailer to the interface internal/httpd asks
+// for.
+//
+// The accounts surface wants one recipient, a subject and a plain-text body,
+// and deliberately knows nothing else about mail — it is the package that
+// decides what to say, not how to say it. internal/mailer wants a Message. The
+// translation is this, and it is the whole of what used to be a second SMTP
+// client.
+//
+// The error comes back unwrapped, so a caller that cares can still ask
+// mailer.Ambiguous whether the message might have gone out. The accounts
+// surface does not — it has nothing to retry and no ledger to release — but
+// flattening the error here would take that away from whatever does next.
+type accountMailer struct{ send mailer.Sender }
+
+func (m accountMailer) Send(ctx context.Context, to, subject, body string) error {
+	// Text only: a set-password link is a credential, and nothing about it
+	// wants rendering. No HTML part means nothing in the mail can fetch
+	// anything from anywhere, which is the same rule the digest follows.
+	return m.send.Send(ctx, mailer.Message{
+		To:      []string{to},
+		Subject: subject,
+		Text:    body,
+	})
 }
 
 // openDatabase connects, proves the connection works, brings the schema up to

@@ -23,6 +23,41 @@ func TestLoadDefaults(t *testing.T) {
 	if c.DemoData {
 		t.Error("DemoData should be off unless explicitly enabled")
 	}
+	if c.ListenAddr != ":8080" {
+		t.Errorf("ListenAddr = %q, want :8080", c.ListenAddr)
+	}
+	// The exposition has to land somewhere other than the public port without
+	// anyone configuring it, or the default deployment is the leaky one.
+	if c.MetricsAddr != ":9090" {
+		t.Errorf("MetricsAddr = %q, want :9090", c.MetricsAddr)
+	}
+}
+
+func TestMetricsAddrIsSeparateFromTheListenAddr(t *testing.T) {
+	t.Setenv("SOIREE_METRICS_ADDR", "127.0.0.1:9999")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.MetricsAddr != "127.0.0.1:9999" {
+		t.Errorf("MetricsAddr = %q", c.MetricsAddr)
+	}
+
+	// Serving both on one socket puts /metrics back on the public route, which
+	// is the thing the second listener exists to prevent. It would also simply
+	// fail to bind, naming a port without saying why.
+	t.Setenv("SOIREE_LISTEN_ADDR", ":9999")
+	t.Setenv("SOIREE_METRICS_ADDR", ":9999")
+	_, err = Load()
+	if err == nil {
+		t.Fatal("Load() accepted the metrics listener on the public port")
+	}
+	// Load has a dozen error paths and this test leaves several variables set.
+	// Naming the one that failed is what stops a reordering from turning this
+	// into a test that passes for an unrelated reason.
+	if !strings.Contains(err.Error(), "SOIREE_METRICS_ADDR") {
+		t.Errorf("Load() failed for some other reason: %v", err)
+	}
 }
 
 func TestLoadReadsEnv(t *testing.T) {
@@ -207,7 +242,7 @@ func TestAccountsConfigReadsEnv(t *testing.T) {
 	if !c.TrustProxyHeaders {
 		t.Error("SOIREE_TRUST_PROXY_HEADERS=true was not read")
 	}
-	if !c.SMTP.Enabled() || c.SMTP.Port != "465" {
+	if !c.SMTP.Enabled() || c.SMTP.Port != DefaultSMTPPort {
 		t.Errorf("SMTP = %+v, want enabled on the default implicit-TLS port", c.SMTP)
 	}
 

@@ -19,6 +19,20 @@ import (
 type Config struct {
 	ListenAddr string
 
+	// MetricsAddr is a listener of its own, carrying /metrics and nothing else.
+	//
+	// A separate port rather than a path on the public listener because the
+	// ingress route has no path constraint: anything the main listener serves
+	// is world-readable. The exposition carries no personal data, but
+	// soiree_build_info hands out the exact version and commit, which is free
+	// reconnaissance. A second port is the shape a ServiceMonitor expects
+	// anyway, and it is the only version of "private" that does not depend on
+	// somebody remembering to write a path exclusion.
+	//
+	// The probes deliberately stay on the main listener: kubelet reaches the
+	// container's main port, and the deployment manifests already point there.
+	MetricsAddr string
+
 	// DatabaseURL is the PostgreSQL DSN. Empty is a supported configuration
 	// rather than a missing one: with no DSN the binary serves the frontend
 	// alone and the API is not mounted at all, which is exactly what a bare
@@ -64,13 +78,23 @@ type Config struct {
 
 // SMTPConfig is the outgoing mail relay. The zero value means no mail, which
 // is a supported deployment rather than a broken one.
+//
+// This is the environment surface, validated here; the transport it is handed
+// to is internal/mailer, and cmd/soiree maps one onto the other. Port is a
+// number rather than the string the environment carries, so the parse happens
+// once, where the variable it came from can still be named in the error.
 type SMTPConfig struct {
 	Host     string
-	Port     string
+	Port     int
 	Username string
 	Password string
 	From     string
 }
+
+// DefaultSMTPPort is implicit TLS. It matches mailer.DefaultPort, which is the
+// value that actually decides how the connection is made; cmd/soiree's tests
+// pin the two together rather than leaving the pair to drift.
+const DefaultSMTPPort = 465
 
 // Enabled reports whether mail can be sent.
 func (s SMTPConfig) Enabled() bool { return s.Host != "" }
@@ -118,6 +142,7 @@ func (c Config) ClientJSON() (string, error) {
 func Load() (Config, error) {
 	c := Config{
 		ListenAddr:        env("SOIREE_LISTEN_ADDR", ":8080"),
+		MetricsAddr:       env("SOIREE_METRICS_ADDR", ":9090"),
 		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		EventName:         env("SOIREE_EVENT_NAME", "A Celebration"),
 		Tagline:           env("SOIREE_EVENT_TAGLINE", ""),
@@ -160,6 +185,15 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("SOIREE_EVENT_DATE must be RFC3339 with a timezone (e.g. 2027-02-21T00:00:00Z), got %q", c.EventDate)
 		}
 		c.EventDate = t.UTC().Format(time.RFC3339)
+	}
+
+	// The whole point of the second listener is that the public one cannot
+	// reach it. Exact string equality only: :8080 and 0.0.0.0:8080 are the same
+	// socket and this will not catch that, but the case worth catching is the
+	// operator who set one variable and forgot the other, and the alternative
+	// is a bind failure at startup that names a port without saying why.
+	if c.MetricsAddr == c.ListenAddr {
+		return Config{}, fmt.Errorf("SOIREE_METRICS_ADDR must differ from SOIREE_LISTEN_ADDR, or /metrics is served on the public port after all; both are %q", c.ListenAddr)
 	}
 
 	if len(c.Currency) != 3 {
@@ -215,7 +249,7 @@ func (c *Config) loadAccounts() error {
 
 	c.SMTP = SMTPConfig{
 		Host:     strings.TrimSpace(os.Getenv("SOIREE_SMTP_HOST")),
-		Port:     strings.TrimSpace(env("SOIREE_SMTP_PORT", "465")),
+		Port:     DefaultSMTPPort,
 		Username: os.Getenv("SOIREE_SMTP_USER"),
 		Password: os.Getenv("SOIREE_SMTP_PASSWORD"),
 		From:     strings.TrimSpace(os.Getenv("SOIREE_SMTP_FROM")),
@@ -234,8 +268,12 @@ func (c *Config) loadAccounts() error {
 		return nil
 	}
 
-	if _, err := strconv.Atoi(c.SMTP.Port); err != nil {
-		return fmt.Errorf("SOIREE_SMTP_PORT must be a port number, got %q", c.SMTP.Port)
+	if v := strings.TrimSpace(os.Getenv("SOIREE_SMTP_PORT")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("SOIREE_SMTP_PORT must be a port number, got %q", v)
+		}
+		c.SMTP.Port = n
 	}
 	if c.SMTP.From == "" {
 		return fmt.Errorf("SOIREE_SMTP_FROM is required when SOIREE_SMTP_HOST is set")
