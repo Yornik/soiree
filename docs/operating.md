@@ -172,12 +172,18 @@ curl -b cookies.txt -X POST https://soiree.example.test/api/v1/users \
 
 The server decides, and the page only reflects it.
 
-| | reads the plan | writes the plan | manages accounts |
+| | reads the plan and its files | writes the plan, adds and removes files | manages accounts, reads the activity |
 |---|---|---|---|
 | no session | no — `401` | no | no |
 | `viewer` | yes | no — `403 read_only` | no |
 | `editor` | yes | yes | no — `403 forbidden` |
 | `admin` | yes | yes | yes |
+
+The activity screen — every change, who made it, the value before and after —
+sits with account management rather than with the plan, deliberately. Each
+entry names an account, and the list of accounts is an admin's to read; open to
+editors, the feed would hand that list out through a second door, annotated
+with what each person did and when.
 
 The guard wraps the whole `/api/v1` subtree rather than each route, so the
 event stream and any route added later are covered by being there. A role is
@@ -186,9 +192,10 @@ disabling somebody takes effect on their next click rather than at their next
 sign-in.
 
 Every write records who made it: `updatedBy` on the row, and the actor in the
-append-only change history. Deleting an account blanks that id everywhere it
-appears — the history keeps *what* changed and loses *who* — so prefer the
-status `disabled`, which keeps both.
+append-only change history, which is what the activity screen reads. Deleting an
+account blanks that id everywhere it appears — the history keeps *what* changed
+and loses *who*, and the activity screen then says "a deleted account" — so
+prefer the status `disabled`, which keeps both.
 
 A session lasts seven days idle and thirty days at most. When one ends under an
 open page, the page stops asking, keeps the person's edits in the browser, shows

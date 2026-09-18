@@ -232,10 +232,10 @@ Measured transfer at 1.0.0, brotli:
 
 | | |
 |---|---|
-| HTML shell | 4.3 kB (the three flags are inline SVG, so they cost no request) |
-| Stylesheet | 9.4 kB |
+| HTML shell | 4.4 kB (the three flags are inline SVG, so they cost no request) |
+| Stylesheet | 9.5 kB |
 | Planner script | 44 kB (`defer`, does not block paint) |
-| Accounts script | 22 kB (`defer`, does not block paint; three languages) |
+| Accounts script | 25 kB (`defer`, does not block paint; three languages) |
 | Display font | 33 kB (`font-display: swap`, does not block paint) |
 | **First paint** | **~14 kB** |
 
@@ -297,6 +297,11 @@ What works end to end:
   is served as is decided by the server from a short allow-list — images and
   PDF may open in the browser, everything else is saved — never by the type a
   file claims.
+- **Activity**, for admins: every change to the plan, newest first — who, when,
+  which line or task, and each value before and after, in the reader's
+  language and with amounts as the planner shows them. It is a screen over the
+  change history the server has kept all along, and a row that has since been
+  deleted still has its name there.
 - **The release, very small,** at the foot of the screens a signed-in person
   can open. The public page still does not name its build.
 - **The API is described** in [`api/openapi.yaml`](api/openapi.yaml), and the

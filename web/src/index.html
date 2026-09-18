@@ -459,6 +459,16 @@
     <p class="empty-note" id="peopleEmpty" data-i18n-auth="people.empty" hidden>No accounts yet.</p>
   </section>
 
+  <!-- ACTIVITY (admins only; the server refuses everybody else) -->
+  <section class="auth-panel" id="panelActivity" hidden>
+    <ol class="activity-list" id="activityList"></ol>
+    <p class="empty-note" id="activityEmpty" data-i18n-auth="act.empty" hidden>Nothing has changed yet.</p>
+    <p class="auth-msg" id="activityMsg" role="status" aria-live="polite"></p>
+    <div class="auth-acts">
+      <button class="ghost-btn" type="button" id="activityMore" data-i18n-auth="act.more" hidden>Show older</button>
+    </div>
+  </section>
+
   <!-- YOUR ACCOUNT -->
   <section class="auth-panel" id="panelAccount" hidden>
     <section class="auth-block" id="passkeySection" hidden>
