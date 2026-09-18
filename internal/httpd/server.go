@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -43,6 +44,11 @@ type Server struct {
 
 	// auth is the accounts surface, nil when the deployment has no database.
 	auth *Auth
+
+	// live is the change fan-out behind GET /api/v1/events, nil for the same
+	// reason store is: no database, no live sync, no route. It holds no
+	// connection until the first client subscribes. See sse.go.
+	live *changeHub
 
 	// robots is rendered once from the configuration, like the shell.
 	robots *Asset
@@ -77,6 +83,12 @@ func New(cfg config.Config, srcFS fs.FS, opts ...Option) (*Server, error) {
 	s := &Server{cfg: cfg, assets: assets, metrics: NewMetrics(Version, Commit)}
 	for _, opt := range opts {
 		opt(s)
+	}
+	// Built here rather than in routeAPI so that it is built exactly once per
+	// Server — its subscriber gauge registers on this server's registry, and
+	// Handler() may be called more than once.
+	if s.store != nil {
+		s.live = newChangeHub(s.store, s.metrics, slog.Default())
 	}
 
 	if err := s.renderManifest(srcFS); err != nil {

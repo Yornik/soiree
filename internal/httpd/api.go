@@ -75,6 +75,7 @@ type apiError struct {
 func (s *Server) routeAPI(mux *http.ServeMux) {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /plan", s.servePlan)
+	api.HandleFunc("GET /events", s.serveEvents)
 
 	// The currency is read once here rather than per request: it comes from the
 	// environment and cannot change while the process runs. It is what turns
@@ -88,6 +89,9 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	register(api, noteEntity(s.store, currency))
 	register(api, phaseEntity(s.store, currency))
 	register(api, programmeEntity(s.store, currency))
+	api.HandleFunc("PATCH /settings", patchSettings(s.store, currency))
+
+	s.routePush(api)
 
 	mux.Handle(apiPrefix, noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), api)))
 }

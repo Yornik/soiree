@@ -173,6 +173,12 @@
       'd.notplanner': 'That file does not look like planner data.',
       'd.unreadable': 'Could not read that file.',
       'd.confirm': 'Replace everything currently in this planner with the imported data?',
+      'd.merged': 'Someone else was editing the same line. Both sets of changes have been kept.',
+      'd.overtaken': 'Someone else had just changed the line you removed. It is gone.',
+      'd.gone': 'Someone else removed the line you were editing. Your copy is still here, but only in this browser.',
+      'd.offline': 'Your changes are not reaching the server. Still trying — they are safe in this browser meanwhile.',
+      'd.online': 'Back in touch with the server. Everything is saved.',
+      'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
       'ar.reopen': 'Reopen for editing',
       'ar.open': 'Reopened for editing. Close it again once everything is settled.',
@@ -278,6 +284,12 @@
       'd.notplanner': 'Dat bestand lijkt geen plannergegevens te bevatten.',
       'd.unreadable': 'Dat bestand kon niet gelezen worden.',
       'd.confirm': 'Alles wat nu in deze planner staat vervangen door de geïmporteerde gegevens?',
+      'd.merged': 'Iemand anders bewerkte dezelfde regel. Beide wijzigingen zijn bewaard.',
+      'd.overtaken': 'Iemand anders had de regel die je verwijderde net gewijzigd. Hij is nu weg.',
+      'd.gone': 'Iemand anders heeft de regel die jij aan het bewerken was verwijderd. Jouw versie staat er nog, maar alleen in deze browser.',
+      'd.offline': 'Je wijzigingen bereiken de server niet. Er wordt opnieuw geprobeerd — ondertussen staan ze veilig in deze browser.',
+      'd.online': 'Weer verbinding met de server. Alles is opgeslagen.',
+      'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
       'ar.reopen': 'Heropenen om te bewerken',
       'ar.open': 'Weer opengesteld. Sluit de planner zodra alles is afgerekend.',
@@ -382,6 +394,12 @@
       'd.notplanner': 'Berkas itu sepertinya bukan data perencana.',
       'd.unreadable': 'Berkas itu tidak bisa dibaca.',
       'd.confirm': 'Ganti semua isi perencana ini dengan data yang diimpor?',
+      'd.merged': 'Orang lain sedang mengubah baris yang sama. Kedua perubahan tetap tersimpan.',
+      'd.overtaken': 'Orang lain baru saja mengubah baris yang kamu hapus. Baris itu sudah hilang.',
+      'd.gone': 'Orang lain menghapus baris yang sedang kamu ubah. Salinanmu masih ada, tetapi hanya di browser ini.',
+      'd.offline': 'Perubahanmu belum sampai ke server. Masih dicoba lagi — sementara ini aman tersimpan di browser.',
+      'd.online': 'Terhubung lagi dengan server. Semuanya tersimpan.',
+      'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
       'ar.reopen': 'Buka lagi untuk diubah',
       'ar.open': 'Dibuka lagi untuk diubah. Tutup lagi setelah semuanya beres.',
@@ -504,6 +522,93 @@
   }
 
   /* ------------------------------------------------------------------
+   * MONEY ARITHMETIC
+   * ------------------------------------------------------------------
+   * The page works in major units as plain numbers, because that is what an
+   * <input type="number"> gives back. Arithmetic does not: every sum below
+   * accumulates whole minor units as integers and converts once at the end.
+   * Adding major-unit floats drifts — 45.33 × 40 is 1813.1999999999998 — and a
+   * budget is the one place a cent per line is not acceptable. It also rides
+   * into the export, which is the copy people keep.
+   *
+   * MINOR_UNIT_EXPONENT mirrors internal/store/money.go and must stay
+   * mirrored. It is NOT ISO 4217 and it is not what Intl reports: IDR is
+   * treated as zero-decimal here, because the sen has not circulated in
+   * decades and no Indonesian price carries one. Intl says 2. Deriving the
+   * exponent from Intl would therefore disagree with the server on precisely
+   * the currency this is deployed with, and every figure would be out by a
+   * factor of a hundred the moment it crossed the wire.
+   * ------------------------------------------------------------------ */
+  var MINOR_UNIT_EXPONENT = {
+    IDR: 0, // see above — deliberately not the ISO 4217 value
+
+    // Zero-decimal per ISO 4217.
+    BIF: 0, CLP: 0, DJF: 0, GNF: 0, ISK: 0, JPY: 0,
+    KMF: 0, KRW: 0, PYG: 0, RWF: 0, UGX: 0, UYI: 0,
+    VND: 0, VUV: 0, XAF: 0, XOF: 0, XPF: 0,
+
+    // Three-decimal per ISO 4217.
+    BHD: 3, IQD: 3, JOD: 3, KWD: 3, LYD: 3, OMR: 3, TND: 3,
+
+    // Four-decimal per ISO 4217.
+    CLF: 4
+  };
+
+  var MONEY_EXP = (function () {
+    var code = String(CONFIG.currency || 'EUR').trim().toUpperCase();
+    // hasOwnProperty rather than a truthiness test: an exponent of 0 is the
+    // interesting case, and `||` would send every zero-decimal currency back
+    // to the two-decimal default.
+    return Object.prototype.hasOwnProperty.call(MINOR_UNIT_EXPONENT, code)
+      ? MINOR_UNIT_EXPONENT[code]
+      : 2;
+  })();
+  var MINOR = Math.pow(10, MONEY_EXP);
+
+  function toMinor(n) {
+    var v = Number(n);
+    if (!isFinite(v)) return 0;
+    return Math.round(v * MINOR);
+  }
+  function toMajor(minor) { return minor / MINOR; }
+
+  /* Money on the wire is a decimal string in *major* units with exactly the
+   * currency's number of places — "250.50", "750000". A JSON number is a 400,
+   * and so is a string with more places than the currency has.
+   *
+   * Formatted from the integer rather than with String(n) or toFixed on the
+   * float: String(45.33 * 1) is "45.330000000000005", which is rejected, and
+   * toFixed would round a value that had already drifted. These digits came
+   * out of an integer and go back into one, which is the whole point of
+   * counting in minor units in the first place. Mirrors store.FormatMajor. */
+  function formatMinor(minor) {
+    if (MONEY_EXP === 0) return String(minor);
+    var sign = minor < 0 ? '-' : '';
+    var mag = Math.abs(minor);
+    var frac = String(mag % MINOR);
+    while (frac.length < MONEY_EXP) frac = '0' + frac;
+    return sign + String(Math.floor(mag / MINOR)) + '.' + frac;
+  }
+
+  /* The other direction, and exact for the same reason: the digits go into an
+   * integer before anything divides. Mirrors store.ParseMajor, except that a
+   * value this cannot read is 0 rather than an error — the server is the one
+   * that gets to refuse, and a figure that fails to arrive must not take the
+   * page down with it. */
+  function readMajor(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : 0;
+    var str = String(v == null ? '' : v).trim();
+    if (!/^[+-]?\d+(\.\d+)?$/.test(str)) return 0;
+    var neg = str.charAt(0) === '-';
+    if (neg || str.charAt(0) === '+') str = str.slice(1);
+    var parts = str.split('.');
+    var frac = (parts[1] || '').slice(0, MONEY_EXP);
+    while (frac.length < MONEY_EXP) frac += '0';
+    var minor = Number(parts[0] + frac);
+    return toMajor(neg ? -minor : minor);
+  }
+
+  /* ------------------------------------------------------------------
    * PERSISTENCE ADAPTER
    * ------------------------------------------------------------------
    * Every read and write of planner data goes through Store. Nothing else in
@@ -513,11 +618,23 @@
    *   Store.read()       -> state object, or null if nothing saved yet
    *   Store.write(state) -> persist the whole state object
    *
-   * save() is debounced, so the write path is already async-shaped: making
-   * these methods return promises does not require touching the ~24 call
-   * sites that mutate state. Note there is no conflict resolution here —
-   * last write wins — so a multi-user backend wants per-field writes or a
-   * revision check.
+   * save() is debounced, so the write path is already async-shaped: that is
+   * what lets the shared backend below hang off Store.write without touching
+   * any of the ~28 call sites that mutate state.
+   *
+   * Two modes, decided once at startup by asking the origin whether it has a
+   * database (see connect()):
+   *
+   *   no API — localStorage is the planner. One browser, one copy, no network
+   *            after the probe. A self-hoster without Postgres, and `docker
+   *            run` with no arguments, both land here and both work.
+   *   API    — the server is the planner. localStorage stays as the cached
+   *            copy that paints before the plan arrives, plus the handful of
+   *            fields that have no column behind them.
+   *
+   * localStorage is written synchronously in both modes and first in both
+   * modes. pagehide has no time to wait on a promise, and the whole point of
+   * a deferred write is that the round trip is not on the interaction path.
    * ------------------------------------------------------------------ */
   var Store = {
     key: STORAGE_KEY,
@@ -529,12 +646,22 @@
     },
     write: function (s) {
       try { localStorage.setItem(this.key, JSON.stringify(s)); } catch (e) { /* storage unavailable */ }
+      // A no-op until the probe has found an API, so the local-only
+      // deployment never touches the network again after it.
+      Sync.push();
     }
   };
 
   var state;
+  // Whether this browser arrived holding a planner somebody actually built,
+  // as opposed to a blank one or generated demo data. It is the difference
+  // between "this is a cached copy of the server's plan" and "this is the only
+  // copy in existence", and adopt() has to know which it is looking at.
+  var hadSavedCopy = false;
   try {
-    state = Store.read() || (CONFIG.demoData ? demoState() : emptyState());
+    var saved = Store.read();
+    hadSavedCopy = saved !== null;
+    state = saved || (CONFIG.demoData ? demoState() : emptyState());
   } catch (e) {
     state = emptyState();
   }
@@ -566,6 +693,685 @@
     state.notes.forEach(function (n) { if (!n.id) n.id = uid('n'); });
   })();
 
+  /* ==================================================================
+   * THE SHARED BACKEND
+   * ==================================================================
+   * Everything from here to "Saving" is the API half of Store. It is inert
+   * until connect() finds a database, and it never reshapes `state` — the
+   * page renders from the same object either way, which is what keeps the
+   * export, the import and every render path mode-agnostic.
+   *
+   * The model is a shadow: a private copy of every row as the server last
+   * confirmed it. A write is the difference between `state` and the shadow,
+   * which is how 28 mutation sites that say nothing about what they changed
+   * still turn into per-field PATCHes carrying a revision. It also makes the
+   * retry free — a write that fails simply does not advance the shadow, so
+   * the next pass computes the same difference again.
+   * ================================================================== */
+
+  var API_BASE = '/api/v1';
+
+  var apiMode = false;     // the origin answered /plan: there is a database
+  var dirty = false;       // something was edited before the plan arrived
+  var shadow = null;       // rows as the server last confirmed them
+  var idMap = {};          // this browser's optimistic ids -> the server's uuids
+  var blocked = {};        // writes the server refused, parked until they change
+
+  // Backoff for a write that got no answer. Doubling from a second, capped,
+  // because the common cause is a tunnel or a train and neither is helped by
+  // hammering.
+  var RETRY_BASE_MS = 1000;
+  var RETRY_MAX_MS = 30000;
+  // One failed write is a blip. Two in a row is worth telling somebody about,
+  // because from here on their edits exist in one browser only.
+  var FAILURES_BEFORE_NOTICE = 2;
+  // A ceiling on reconcile-and-retry rounds inside one attempt. The three-way
+  // merge below terminates on its own, so reaching this means somebody else is
+  // rewriting the same rows about as fast as we are. It books a retry rather
+  // than reporting success: stopping with work still queued and saying nothing
+  // is exactly the silent loss the retry exists to prevent.
+  var MAX_PASSES = 8;
+
+  /* ---------- Fields ----------
+   * Each field knows three things: how to compare it (canon), how to put it on
+   * the wire, and how to read one off it. Comparison is on the canonical form
+   * rather than the raw value so that 45.3 and "45.30" are the same money and
+   * two sponsor lists in different orders are the same attribution.
+   */
+  function textField(name) {
+    return {
+      name: name,
+      canon: function (r) { return String(r[name] == null ? '' : r[name]); },
+      wire: function (r) { return String(r[name] == null ? '' : r[name]); },
+      read: function (v) { return v == null ? '' : String(v); },
+      copy: function (v) { return v; }
+    };
+  }
+  function moneyField(name) {
+    return {
+      name: name,
+      canon: function (r) { return toMinor(r[name]); },
+      wire: function (r) { return formatMinor(toMinor(r[name])); },
+      read: function (v) { return readMajor(v); },
+      copy: function (v) { return v; }
+    };
+  }
+  function numberField(name) {
+    return {
+      name: name,
+      canon: function (r) { return Number(r[name]) || 0; },
+      wire: function (r) { return Number(r[name]) || 0; },
+      read: function (v) { return Number(v) || 0; },
+      copy: function (v) { return v; }
+    };
+  }
+  function boolField(name) {
+    return {
+      name: name,
+      canon: function (r) { return !!r[name]; },
+      wire: function (r) { return !!r[name]; },
+      read: function (v) { return !!v; },
+      copy: function (v) { return v; }
+    };
+  }
+  // A plain calendar date, never an instant: the column is a `date` and the
+  // API wants "2030-01-15". An empty field goes as null rather than "", which
+  // is not a date and is a 400.
+  function dateField(name) {
+    return {
+      name: name,
+      canon: function (r) { return r[name] || ''; },
+      wire: function (r) { return r[name] || null; },
+      read: function (v) { return v == null ? '' : String(v); },
+      copy: function (v) { return v; }
+    };
+  }
+  // A list of ids, order-insensitive, read through the optimistic-id map so a
+  // row still holding a local sponsor id compares equal to the shadow entry
+  // that already holds the server's uuid for it.
+  function idsField(name) {
+    return {
+      name: name,
+      canon: function (r) { return (r[name] || []).map(mapId).slice().sort().join(','); },
+      wire: function (r) { return (r[name] || []).map(mapId); },
+      read: function (v) { return Array.isArray(v) ? v.slice() : []; },
+      copy: function (v) { return (v || []).slice(); }
+    };
+  }
+
+  function mapId(id) {
+    return Object.prototype.hasOwnProperty.call(idMap, id) ? idMap[id] : id;
+  }
+
+  /* ---------- Collections ----------
+   * The order matters and is the send order: a budget line tagged with a
+   * sponsor that was added in the same debounce window has to reach a server
+   * that already knows that sponsor, or the attribution is a foreign key
+   * violation and the whole line is a 400.
+   *
+   * `phases` and `programme` are in the plan and are not here. This page has
+   * no interface for either, and a client must not delete rows it cannot draw.
+   */
+  var COLLECTIONS = [
+    {
+      key: 'sponsors', route: 'sponsors', container: 'sponsorGrid',
+      fields: [textField('code'), textField('name')],
+      render: function () { renderSponsors(); renderBudgetTable(); renderSplit(); }
+    },
+    {
+      key: 'budgetItems', route: 'budget-items', container: 'budgetBody',
+      fields: [
+        textField('item'), moneyField('unit'), numberField('qty'),
+        moneyField('paid'), textField('note'), idsField('sponsors')
+      ],
+      render: function () { renderBudgetTable(); renderBudgetTotals(); renderOverview(); }
+    },
+    {
+      key: 'tasks', route: 'tasks', container: 'tasksBody',
+      fields: [textField('name'), textField('owner'), dateField('due'), textField('status')],
+      render: function () { renderTasksTable(); renderOverview(); }
+    },
+    {
+      key: 'notes', route: 'notes', container: 'watchList',
+      fields: [textField('text')],
+      render: function () { renderNotes(); }
+    }
+  ];
+
+  /* The plan-wide knobs. A singleton: one row behind a boolean primary key,
+   * so there is no id in its URL, nothing to POST and nothing to DELETE. The
+   * fields sit at the top of `state` rather than in a row of their own, which
+   * is why this descriptor is not in the list above — everything else about
+   * it, revision included, is the same. */
+  var SETTINGS = {
+    key: 'settings', route: 'settings', singleton: true, container: 'panel-budget',
+    fields: [
+      moneyField('ceiling'), numberField('inflationPct'),
+      numberField('fxRate'), boolField('splitEvenly')
+    ],
+    render: function () { renderSettingsInputs(); renderBudgetTotals(); renderOverview(); }
+  };
+
+  function fieldNamed(coll, name) {
+    for (var i = 0; i < coll.fields.length; i++) {
+      if (coll.fields[i].name === name) return coll.fields[i];
+    }
+    return null;
+  }
+
+  function findRow(list, id) {
+    for (var i = 0; i < (list || []).length; i++) {
+      if (list[i] && list[i].id === id) return list[i];
+    }
+    return null;
+  }
+
+  /* ---------- Wire <-> page ---------- */
+
+  function rowFromWire(coll, w) {
+    var row = {};
+    if (w && w.id) row.id = w.id;
+    if (w && typeof w.position === 'number') row.position = w.position;
+    coll.fields.forEach(function (f) { row[f.name] = f.read(w ? w[f.name] : null); });
+    return row;
+  }
+
+  function cloneRow(coll, row) {
+    var out = { id: row.id, position: row.position };
+    coll.fields.forEach(function (f) { out[f.name] = f.copy(row[f.name]); });
+    return out;
+  }
+
+  /* Every row in the plan becomes a row on the page, including the child rows
+   * of a broken-down quote. This page has no notion of a parent and a
+   * breakdown, so a plan loaded by cmd/soiree-import — where a caterer's
+   * per-dish sheet is child rows under one line — reads its headline figures
+   * high, because the parent and its children are both counted.
+   *
+   * Do not fix that by filtering parentId out here. The shadow would still
+   * hold those rows, so the very next difference would be a DELETE for every
+   * child in the breakdown, and the import would be destroyed by the act of
+   * looking at it. Teaching the page about parents is the fix, and it is a
+   * change to the page rather than to this function. */
+  function stateFromPlan(plan) {
+    var s = emptyState();
+    var wire = plan.settings || {};
+    SETTINGS.fields.forEach(function (f) { s[f.name] = f.read(wire[f.name]); });
+    COLLECTIONS.forEach(function (c) {
+      s[c.key] = (plan[c.key] || []).map(function (w) { return rowFromWire(c, w); });
+    });
+    return s;
+  }
+
+  function shadowFromPlan(plan) {
+    var wire = plan.settings || {};
+    var sh = { settings: { row: rowFromWire(SETTINGS, wire), revision: Number(wire.revision) || 0 } };
+    COLLECTIONS.forEach(function (c) {
+      var byId = {};
+      (plan[c.key] || []).forEach(function (w) {
+        if (!w || !w.id) return;
+        byId[w.id] = { row: rowFromWire(c, w), revision: Number(w.revision) || 0 };
+      });
+      sh[c.key] = byId;
+    });
+    return sh;
+  }
+
+  // The server's answer to a write is the row as it now stands, so it is also
+  // the new agreed version. Stored as its own object: a shadow that shared
+  // references with `state` would diff to nothing forever, because every edit
+  // site mutates its row in place.
+  function shadowPut(coll, wireRow) {
+    var entry = { row: rowFromWire(coll, wireRow), revision: Number(wireRow.revision) || 0 };
+    if (coll.singleton) shadow.settings = entry;
+    else shadow[coll.key][wireRow.id] = entry;
+  }
+
+  function shadowEntry(coll, id) {
+    return coll.singleton ? shadow.settings : shadow[coll.key][id];
+  }
+
+  function liveRow(coll, id) {
+    return coll.singleton ? state : findRow(state[coll.key], id);
+  }
+
+  /* ---------- The difference ---------- */
+
+  function changedFields(coll, row, base) {
+    var out = [];
+    coll.fields.forEach(function (f) {
+      if (f.canon(row) !== f.canon(base)) out.push(f.name);
+    });
+    return out;
+  }
+
+  function opKey(op) { return op.coll.key + ':' + op.id + ':' + op.kind; }
+
+  // What a refused write looked like, so that repeating it is recognisable and
+  // changing it afterwards is too.
+  function opSignature(op) {
+    if (op.kind === 'delete') return 'delete';
+    var row = liveRow(op.coll, op.id);
+    if (!row) return 'gone';
+    return op.coll.fields.map(function (f) { return String(f.canon(row)); }).join('');
+  }
+
+  function planOps() {
+    var creates = [], updates = [], deletes = [];
+
+    COLLECTIONS.forEach(function (c) {
+      var present = {};
+      (state[c.key] || []).forEach(function (row) {
+        if (!row || !row.id) return;
+        present[row.id] = true;
+        var known = shadow[c.key][row.id];
+        if (!known) {
+          creates.push({ kind: 'create', coll: c, id: row.id });
+          return;
+        }
+        var changed = changedFields(c, row, known.row);
+        if (changed.length) updates.push({ kind: 'update', coll: c, id: row.id, fields: changed });
+      });
+      // A row the shadow has and the page does not was removed here. There is
+      // no third possibility: adopt() guarantees the page starts holding every
+      // row the server had, so "absent" can only mean "deleted", never "not
+      // fetched yet".
+      Object.keys(shadow[c.key]).forEach(function (id) {
+        if (!present[id]) deletes.push({ kind: 'delete', coll: c, id: id });
+      });
+    });
+
+    var settings = changedFields(SETTINGS, state, shadow.settings.row);
+    if (settings.length) {
+      updates.push({ kind: 'update', coll: SETTINGS, id: null, fields: settings });
+    }
+
+    return creates.concat(updates).concat(deletes).filter(function (op) {
+      return blocked[opKey(op)] !== opSignature(op);
+    });
+  }
+
+  // POST does not allocate one, and an omitted position is 0 — which puts
+  // every new row at the top of the list, in the order they were typed.
+  function nextPosition(coll) {
+    var max = -1;
+    Object.keys(shadow[coll.key]).forEach(function (id) {
+      var p = shadow[coll.key][id].row.position;
+      if (typeof p === 'number' && p > max) max = p;
+    });
+    return max + 1;
+  }
+
+  /* ---------- Requests ----------
+   * Never rejects: a refusal and an unreachable origin are both answers this
+   * has to act on, and only one of them is worth retrying. status 0 is "no
+   * answer at all".
+   */
+  function api(method, path, body) {
+    var init = {
+      method: method,
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+      // Only while the page is going away, where a normal request is killed
+      // with the document and the last edit before a tab closes never lands.
+      // Read per request rather than latched, so a page that comes back does
+      // not keep spending the keepalive budget.
+      keepalive: document.visibilityState === 'hidden'
+    };
+    if (body !== undefined) {
+      init.headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(body);
+    }
+    return fetch(API_BASE + path, init).then(function (res) {
+      if (res.status === 204) return { status: 204, body: null };
+      return res.text().then(function (txt) {
+        var parsed = null;
+        try { parsed = txt ? JSON.parse(txt) : null; } catch (e) { parsed = null; }
+        return { status: res.status, body: parsed };
+      });
+    }, function () {
+      return { status: 0, body: null };
+    });
+  }
+
+  /* ---------- Writes ---------- */
+
+  function sendCreate(op) {
+    var c = op.coll;
+    var row = liveRow(c, op.id);
+    // Added and removed again inside one debounce window: it never existed on
+    // the server, so there is nothing to create and nothing to delete either.
+    if (!row) return Promise.resolve(true);
+
+    var body = {};
+    c.fields.forEach(function (f) { body[f.name] = f.wire(row); });
+    body.position = nextPosition(c);
+
+    return api('POST', '/' + c.route, body).then(function (res) {
+      if (res.status === 201 && res.body && res.body.id) {
+        adoptServerId(c, op.id, res.body.id);
+        shadowPut(c, res.body);
+        return true;
+      }
+      return writeFailed(op, res);
+    });
+  }
+
+  function sendUpdate(op) {
+    var c = op.coll;
+    var row = liveRow(c, op.id);
+    var known = shadowEntry(c, op.id);
+    if (!row || !known) return Promise.resolve(true);
+
+    // Only the fields that actually differ, plus the revision they were read
+    // at. Sending the whole row would overwrite every column somebody else
+    // touched, which is the behaviour the revision exists to prevent.
+    var body = { revision: known.revision };
+    op.fields.forEach(function (name) {
+      var f = fieldNamed(c, name);
+      if (f) body[name] = f.wire(row);
+    });
+
+    var path = c.singleton ? '/' + c.route : '/' + c.route + '/' + op.id;
+    return api('PATCH', path, body).then(function (res) {
+      if (res.status === 200 && res.body) { shadowPut(c, res.body); return true; }
+      return writeFailed(op, res);
+    });
+  }
+
+  function sendDelete(op) {
+    var c = op.coll;
+    var known = shadowEntry(c, op.id);
+    if (!known) return Promise.resolve(true);
+
+    // The revision travels as a query parameter here rather than in a body,
+    // which is the API's choice and not a detail worth papering over.
+    return api('DELETE', '/' + c.route + '/' + op.id + '?revision=' + known.revision).then(function (res) {
+      // Already gone is the outcome that was asked for.
+      if (res.status === 204 || res.status === 404) {
+        delete shadow[c.key][op.id];
+        return true;
+      }
+      if (res.status === 409 && res.body && res.body.current) {
+        // Somebody edited the row this browser is removing. The removal is
+        // still what its user asked for, so it goes again against the revision
+        // that now stands — but they are told, because the edit that got
+        // overtaken was not theirs. The retry is the next pass, not a
+        // recursive call, so a row being edited continuously cannot spin here.
+        known.revision = Number(res.body.current.revision) || known.revision;
+        known.row = rowFromWire(c, res.body.current);
+        flash(t('d.overtaken'));
+        return true;
+      }
+      return writeFailed(op, res);
+    });
+  }
+
+  function sendOp(op) {
+    if (op.kind === 'create') return sendCreate(op);
+    if (op.kind === 'update') return sendUpdate(op);
+    return sendDelete(op);
+  }
+
+  // false stops the pass and books a retry; true carries on.
+  function writeFailed(op, res) {
+    if (res.status === 409 && res.body && res.body.current) {
+      reconcile(op, res.body.current);
+      return true;
+    }
+    if (res.status >= 400 && res.status < 500) {
+      // The server understood and said no. Sending the identical body again
+      // would only produce the identical refusal, so this row is parked until
+      // it changes. The edit is not lost — it is in `state`, on the screen and
+      // in localStorage — and the person is told it has not left the browser.
+      //
+      // The row is deliberately not removed on a 404. Somebody else deleted
+      // what this person is editing, and throwing their work away to agree
+      // with that is the one outcome worse than the row going out of step.
+      blocked[opKey(op)] = opSignature(op);
+      flash(t(res.status === 404 ? 'd.gone' : 'd.refused'));
+      return true;
+    }
+    return false;
+  }
+
+  /* ---------- Conflicts ----------
+   * A 409 means somebody else wrote this row between the revision we read and
+   * the write we sent. Reconciling is a three-way merge against the shadow,
+   * which is the version *both* edits started from:
+   *
+   *   field unchanged here  -> theirs is simply newer. Take it, on screen too.
+   *   field changed here    -> keep ours. It goes again on the next pass.
+   *
+   * Either way the shadow becomes their row, so the retry carries only the
+   * fields this person actually changed and the merge terminates — when there
+   * is nothing left that differs, the next pass produces no write at all.
+   *
+   * What this must never do is what the obvious version does: set the shadow
+   * to `current` and re-diff. `state` still holds the *old* value of the field
+   * they changed, so the re-diff would send it back and quietly undo them.
+   */
+  function reconcile(op, current) {
+    var c = op.coll;
+    var row = liveRow(c, op.id);
+    var known = shadowEntry(c, op.id);
+    if (!row || !known) return;
+
+    var base = known.row;
+    var theirs = rowFromWire(c, current);
+    var tookTheirs = false;
+
+    c.fields.forEach(function (f) {
+      var mine = f.canon(row);
+      if (mine !== f.canon(base)) return;       // edited here: ours wins, and goes again
+      if (f.canon(theirs) === mine) return;     // nobody changed it
+      row[f.name] = f.copy(theirs[f.name]);
+      tookTheirs = true;
+    });
+
+    known.row = theirs;
+    known.revision = Number(current.revision) || known.revision;
+
+    flash(t('d.merged'));
+    if (tookTheirs) scheduleRefresh(c);
+  }
+
+  /* ---------- Optimistic ids ----------
+   * The page makes an id the moment a row appears, because the row has to be
+   * addressable before any round trip could have answered. The server makes a
+   * uuid on POST. Reconciling the two is a rename, everywhere the old one was
+   * referred to — otherwise a budget line keeps pointing at a sponsor id that
+   * only ever existed in this browser.
+   */
+  function adoptServerId(coll, localId, serverId) {
+    if (!serverId || localId === serverId) return;
+    idMap[localId] = serverId;
+
+    var row = findRow(state[coll.key], localId);
+    if (row) row.id = serverId;
+
+    if (coll.key === 'budgetItems' && state.rowHeights &&
+        Object.prototype.hasOwnProperty.call(state.rowHeights, localId)) {
+      state.rowHeights[serverId] = state.rowHeights[localId];
+      delete state.rowHeights[localId];
+    }
+    if (coll.key === 'sponsors') {
+      state.budgetItems.forEach(function (i) {
+        i.sponsors = (i.sponsors || []).map(mapId);
+      });
+    }
+  }
+
+  /* ---------- Re-rendering from the network ----------
+   * Rebuilding a table takes the caret with it. A reconcile that fires while
+   * somebody is mid-word would move their cursor and detach the element they
+   * are typing into, so a refresh of the table they are inside waits until
+   * they are not.
+   */
+  var pendingRefresh = {};
+
+  function scheduleRefresh(coll) {
+    pendingRefresh[coll.key] = coll;
+    applyRefresh();
+  }
+
+  function applyRefresh() {
+    Object.keys(pendingRefresh).forEach(function (k) {
+      var coll = pendingRefresh[k];
+      var host = document.getElementById(coll.container);
+      if (host && document.activeElement && host.contains(document.activeElement)) return;
+      delete pendingRefresh[k];
+      coll.render();
+    });
+  }
+
+  // After the blur has settled, so activeElement is the element being moved to
+  // rather than the one being left.
+  document.addEventListener('focusout', function () { setTimeout(applyRefresh, 0); });
+
+  /* ---------- The sync loop ----------
+   * One pass at a time, strictly. That is what stops a row whose POST is in
+   * flight from being posted a second time: the shadow only gains the row when
+   * the 201 lands, and nothing else is computing a difference in the meantime.
+   */
+  var Sync = { queued: false, running: false, failures: 0, timer: null };
+
+  Sync.push = function () {
+    if (!apiMode) return;
+    Sync.queued = true;
+    Sync.run();
+  };
+
+  Sync.run = function () {
+    if (!apiMode || Sync.running || Sync.timer || !Sync.queued) return;
+    Sync.queued = false;
+    Sync.running = true;
+    drain(0).then(Sync.done, function () { Sync.done('retry'); });
+  };
+
+  Sync.done = function (outcome) {
+    Sync.running = false;
+    if (outcome === 'done') {
+      if (Sync.failures >= FAILURES_BEFORE_NOTICE) flash(t('d.online'));
+      Sync.failures = 0;
+      setSticky('');
+      if (Sync.queued) Sync.run();
+      return;
+    }
+
+    // 'retry' and 'outrun' are different causes with the same consequence and
+    // the same remedy, so they share a message: in both, edits this person has
+    // made are not on the server, this browser is going to keep trying, and
+    // nothing has been thrown away — the shadow did not advance, so the same
+    // difference is still there to send when the wait is over.
+    Sync.failures++;
+    if (Sync.failures >= FAILURES_BEFORE_NOTICE) setSticky(t('d.offline'));
+    Sync.queued = true;
+    Sync.timer = setTimeout(function () {
+      Sync.timer = null;
+      Sync.run();
+    }, Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, Sync.failures - 1)));
+  };
+
+  // One pass, then look again: a reconcile changes what there is to send, and
+  // a delete that lost a race has a new revision to try.
+  //
+  //   'done'   — nothing left to send
+  //   'retry'  — no answer from the origin
+  //   'outrun' — still not settled after MAX_PASSES rounds of reconciling
+  function drain(pass) {
+    var ops = planOps();
+    if (!ops.length) return Promise.resolve('done');
+    if (pass >= MAX_PASSES) return Promise.resolve('outrun');
+    return runOps(ops, 0).then(function (ok) {
+      return ok ? drain(pass + 1) : 'retry';
+    });
+  }
+
+  function runOps(ops, i) {
+    if (i >= ops.length) return Promise.resolve(true);
+    return sendOp(ops[i]).then(function (ok) {
+      return ok ? runOps(ops, i + 1) : false;
+    });
+  }
+
+  /* ---------- Finding the backend ----------
+   * One request, once. A 404 is the answer for a deployment with no database
+   * and it is final: those paths are never registered, so asking again would
+   * only be a second 404. Anything else that is not an answer might be this
+   * browser being offline on a first visit, which is worth a few more tries.
+   */
+  function connect(attempt) {
+    if (typeof fetch !== 'function' || typeof Promise !== 'function') return;
+    api('GET', '/plan').then(function (res) {
+      if (res.status === 200 && res.body) { adopt(res.body); return; }
+      if (res.status === 404) return;
+      if (attempt < 4) {
+        setTimeout(function () { connect(attempt + 1); },
+          Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, attempt)));
+      }
+    });
+  }
+
+  /* Take the plan the origin sent.
+   *
+   * Normally the server is simply right and what is on screen is a cached
+   * copy of it. Two cases are not normal, and in both the answer is to keep
+   * what this browser is holding and send it up instead:
+   *
+   *   1. Something was typed between the cached copy painting and the plan
+   *      arriving. Discarding those keystrokes because a request happened to
+   *      land after them is not a defensible reason to lose them.
+   *   2. This browser is holding a planner somebody built, and the server has
+   *      none. That is the database being added to a deployment that was
+   *      running without one — and replacing that planner with an empty plan
+   *      destroys the only copy of it, on the first load, with no warning.
+   *
+   * The second is deliberately narrow: only a planner that was actually saved
+   * (not a blank one, and not generated demo data) and only against a plan
+   * with nothing in it at all. The cost of getting it wrong is two browsers
+   * each seeding the same empty database and producing every row twice, which
+   * is visible and can be fixed by hand. The cost of not doing it is silent
+   * destruction of somebody's planner, which cannot.
+   */
+  function adopt(plan) {
+    shadow = shadowFromPlan(plan);
+    apiMode = true;
+
+    var planIsEmpty = COLLECTIONS.every(function (c) {
+      return Object.keys(shadow[c.key]).length === 0;
+    });
+    var holdingRows = COLLECTIONS.some(function (c) {
+      return (state[c.key] || []).length > 0;
+    });
+
+    if (dirty || (hadSavedCopy && holdingRows && planIsEmpty)) {
+      // The rows the server has that this browser has not are taken rather
+      // than deleted: in this window "absent here" means "not fetched yet",
+      // not "removed". That union is what makes the delete rule in planOps
+      // true from here on.
+      COLLECTIONS.forEach(function (c) {
+        var present = {};
+        (state[c.key] || []).forEach(function (r) { if (r && r.id) present[r.id] = true; });
+        Object.keys(shadow[c.key]).forEach(function (id) {
+          if (!present[id]) state[c.key].push(cloneRow(c, shadow[c.key][id].row));
+        });
+      });
+    } else {
+      var next = stateFromPlan(plan);
+      // Per-browser preferences and the one flag with no column behind it.
+      // Column widths are a view of the table, not a fact about the event: one
+      // person dragging a column must not resize it for everybody.
+      next.colWidths = state.colWidths;
+      next.rowHeights = state.rowHeights;
+      next.reopened = state.reopened;
+      state = next;
+    }
+
+    renderAll();
+    Sync.push();
+  }
+
   /* ---------- Saving ----------
    * save() is called on every mutation, including each keystroke. Writing
    * synchronously on every one of those blocks the main thread on a full
@@ -580,6 +1386,10 @@
     Store.write(state);
   }
   function save() {
+    // Noted before the write, not after: connect() needs to know whether this
+    // browser has edits of its own before it decides whether the plan it just
+    // fetched can simply replace what is on screen.
+    dirty = true;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
   }
@@ -641,16 +1451,29 @@
     return fmtSecondaryImpl((Number(n) || 0) / rate);
   }
 
-  function lineTotal(i) { return (Number(i.unit) || 0) * (Number(i.qty) || 0); }
+  // Whole minor units. Qty is not money and can carry three decimals, so the
+  // product is rounded back to a whole minor unit here rather than being
+  // carried as a fraction into every sum downstream.
+  function lineTotalMinor(i) {
+    return Math.round(toMinor(i.unit) * (Number(i.qty) || 0));
+  }
+  function lineTotal(i) { return toMajor(lineTotalMinor(i)); }
 
   function totals() {
     var t = 0, p = 0;
     state.budgetItems.forEach(function (i) {
-      t += lineTotal(i);
-      p += Number(i.paid) || 0;
+      t += lineTotalMinor(i);
+      p += toMinor(i.paid);
     });
-    var buffer = t * (1 + (Number(state.inflationPct) || 0) / 100);
-    return { total: t, paid: p, owing: t - p, forecast: buffer, ceiling: Number(state.ceiling) || 0 };
+    var buffer = Math.round(t * (1 + (Number(state.inflationPct) || 0) / 100));
+    return {
+      total: toMajor(t), paid: toMajor(p), owing: toMajor(t - p),
+      forecast: toMajor(buffer), ceiling: Number(state.ceiling) || 0,
+      // The same figure in minor units, for the callers that go on to divide
+      // it between people and would otherwise start their arithmetic from a
+      // float.
+      totalMinor: t
+    };
   }
 
   /* ---------- Static labels driven by config ---------- */
@@ -1030,14 +1853,15 @@
     syncEmptyState();
   }
 
-  // Amount attributed to one sponsor, shared lines divided evenly.
+  // Amount attributed to one sponsor, shared lines divided evenly. Summed in
+  // minor units and converted once, so a dozen shared lines cannot drift.
   function sponsorShare(id) {
     var sum = 0;
     state.budgetItems.forEach(function (i) {
       var ids = i.sponsors || [];
-      if (ids.indexOf(id) !== -1) sum += lineTotal(i) / ids.length;
+      if (ids.indexOf(id) !== -1) sum += lineTotalMinor(i) / ids.length;
     });
-    return Math.round(sum);
+    return Math.round(toMajor(sum));
   }
 
   document.getElementById('addSponsor').addEventListener('click', function () {
@@ -1063,11 +1887,13 @@
       groups[key] += amount;
     }
 
+    // Every amount below is minor units, so the division between sponsors and
+    // the percentages further down all run on integers.
     if (state.splitEvenly) {
       state.sponsors.forEach(function (sp) { add(sponsorLabel(sp), 0); });
       state.budgetItems.forEach(function (i) {
         var ids = i.sponsors || [];
-        var tot = lineTotal(i);
+        var tot = lineTotalMinor(i);
         if (!ids.length) { add(t('sp.unassigned'), tot); return; }
         ids.forEach(function (id) { add(sponsorLabel(sponsorById(id)), tot / ids.length); });
       });
@@ -1077,18 +1903,18 @@
         var key = codes.length
           ? codes.join(' + ') + (codes.length > 1 ? ' ' + t('sp.shared') : '')
           : t('sp.unassigned');
-        add(key, lineTotal(i));
+        add(key, lineTotalMinor(i));
       });
     }
 
     var list = document.getElementById('splitList');
     list.innerHTML = '';
-    var grand = totals().total;
+    var grand = totals().totalMinor;
     order.sort(function (a, b) { return groups[b] - groups[a]; }).forEach(function (k) {
       var li = document.createElement('li');
       var share = grand ? Math.round((groups[k] / grand) * 100) : 0;
       li.appendChild(cell('span', '', k));
-      li.appendChild(cell('span', 'amt', fmtCur(Math.round(groups[k]))));
+      li.appendChild(cell('span', 'amt', fmtCur(Math.round(toMajor(groups[k])))));
       li.appendChild(cell('span', 'pct', share + '%'));
       list.appendChild(li);
     });
@@ -1125,9 +1951,9 @@
     });
     var loose = 0;
     state.budgetItems.forEach(function (i) {
-      if (!(i.sponsors || []).length) loose += lineTotal(i);
+      if (!(i.sponsors || []).length) loose += lineTotalMinor(i);
     });
-    if (loose) rows.push({ label: t('sp.unassigned'), amount: Math.round(loose) });
+    if (loose) rows.push({ label: t('sp.unassigned'), amount: Math.round(toMajor(loose)) });
 
     var grand = totals().total;
     list.innerHTML = '';
@@ -1663,11 +2489,18 @@
   });
 
   // ---------- Data portability ----------
-  function renderAll() {
+  // Its own function because the settings are a row like any other now: a
+  // reconcile can bring somebody else's ceiling in, and these four controls
+  // are where it has to land.
+  function renderSettingsInputs() {
     ceilingInput.value = state.ceiling || '';
     inflationInput.value = state.inflationPct;
     rateInput.value = state.fxRate || '';
     splitToggle.checked = !!state.splitEvenly;
+  }
+
+  function renderAll() {
+    renderSettingsInputs();
     syncEmptyState();
     renderSponsors();
     applyColWidths();
@@ -1679,10 +2512,39 @@
     applyMode();
   }
 
-  function flash(msg) {
+  /* ---------- The status line ----------
+   * One element, two kinds of message, and a precedence between them so they
+   * cannot erase each other. A flash reports something that just happened and
+   * stops being true a few seconds later. A sticky message is a condition that
+   * is still true — writes are not reaching the server — and has to outlive
+   * every flash, or the one piece of news worth having disappears behind
+   * "Exported soiree-2030-06-12.json".
+   */
+  var FLASH_MS = 6000;
+  var stickyMsg = '';
+  var flashToken = 0;
+  var flashUntil = 0;
+
+  function paintMsg(text) {
     var el = document.getElementById('dataMsg');
-    el.textContent = msg;
-    setTimeout(function () { if (el.textContent === msg) el.textContent = ''; }, 6000);
+    if (el) el.textContent = text;
+  }
+
+  function flash(msg) {
+    paintMsg(msg);
+    flashUntil = Date.now() + FLASH_MS;
+    var mine = ++flashToken;
+    setTimeout(function () {
+      // Only if nothing newer has taken the element in the meantime.
+      if (mine === flashToken) paintMsg(stickyMsg);
+    }, FLASH_MS);
+  }
+
+  function setSticky(msg) {
+    msg = msg || '';
+    if (stickyMsg === msg) return;
+    stickyMsg = msg;
+    if (Date.now() >= flashUntil) paintMsg(stickyMsg);
   }
 
   document.getElementById('exportData').addEventListener('click', function () {
@@ -1727,6 +2589,10 @@
           return;
         }
         if (!window.confirm(t('d.confirm'))) return;
+        // A wholesale replacement is the largest edit this page can make, and
+        // in API mode it is a real one: every row the server holds and this
+        // file does not is removed, and every row in the file is created.
+        dirty = true;
         state = incoming;
         if (!Array.isArray(state.sponsors)) state.sponsors = [];
         if (!Array.isArray(state.notes)) state.notes = [];
@@ -1749,6 +2615,11 @@
   renderCountdown();
   initColGrips();
   renderAll();
+
+  // Paint first, ask second. The cached copy is on screen before this request
+  // is even sent, which is what keeps a 300 ms origin off the first render —
+  // and if the answer is "no database", nothing further is ever sent.
+  connect(0);
 
   // Offline shell. Registered last so it never delays first paint.
   if ('serviceWorker' in navigator) {

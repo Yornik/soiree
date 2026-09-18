@@ -23,37 +23,39 @@
  * it, install libnss3, libnspr4 and libasound2 by hand (that is the whole list
  * on Ubuntu 22.04 with a desktop already present).
  *
- * The tests build and start the real binary — no stub, no mock server. The
- * server is read-only, so all tests share one instance; state lives in
- * localStorage, which Playwright isolates per test.
+ * The tests build and start the real binary — no stub, no mock server.
+ *
+ * Three instances, because there are three deployments worth testing and two
+ * of them are configuration branches no test can reach from inside the page:
+ *
+ *   BASE_URL — the default: an event date, EUR, en-US, and no database. Most
+ *              tests live here, share the one instance, and stay independent
+ *              because their state is in localStorage, which Playwright
+ *              isolates per test.
+ *   ALT_URL  — no event date, Dutch locale, no database.
+ *   API_URL  — the same binary with PostgreSQL behind it, which is the only
+ *              place /api/v1 exists at all. Its tests run serially and reset
+ *              the plan between them, because that state is genuinely shared.
+ *              If Docker is unavailable the launcher starts this instance
+ *              without a database and those tests skip themselves.
  */
 const path = require('path');
 const { defineConfig, devices } = require('@playwright/test');
 
-// Overridable, because a fixed port on a shared machine is a collision waiting
-// to happen.
-const PORT = Number(process.env.SOIREE_E2E_PORT || 8099);
-const BASE_URL = `http://127.0.0.1:${PORT}`;
-
-// A second instance, configured differently: no event date, and a Dutch
-// locale. Two of the three things added here are branches on configuration
-// rather than on anything a test can do from inside the page — "with no event
-// date there is no after" and "the interface language follows the configured
-// locale" — and the only honest way to test a configuration branch is to
-// configure it.
-const ALT_PORT = PORT + 1;
-// Metrics listeners, one per server. Derived from the site ports rather than
-// fixed, so overriding SOIREE_E2E_PORT moves all four together.
-const METRICS_PORT = PORT + 1000;
-const ALT_METRICS_PORT = ALT_PORT + 1000;
-const ALT_URL = `http://127.0.0.1:${ALT_PORT}`;
+const {
+  PORT, ALT_PORT, API_PORT,
+  METRICS_PORT, ALT_METRICS_PORT, API_METRICS_PORT,
+  BASE_URL, ALT_URL, API_URL,
+} = require('./servers');
 
 const repoRoot = path.resolve(__dirname, '..');
 const binary = path.join(__dirname, '.tmp', 'soiree');
-// Its own output path: Playwright starts the two servers in parallel, and two
+// Its own output path per server: Playwright starts them in parallel, and two
 // `go build -o` racing for the same file is a truncated binary waiting to
 // happen.
 const altBinary = path.join(__dirname, '.tmp', 'soiree-alt');
+const apiBinary = path.join(__dirname, '.tmp', 'soiree-api');
+const apiLauncher = path.join(__dirname, 'scripts', 'api-server.js');
 
 module.exports = defineConfig({
   testDir: './tests',
@@ -74,8 +76,9 @@ module.exports = defineConfig({
     ? [['github'], ['html', { open: 'never' }], ['list']]
     : [['list']],
 
-  // Reachable from a test as `altBaseURL` without hardcoding a port twice.
-  metadata: { altBaseURL: ALT_URL },
+  // Reachable from a test without hardcoding a port twice. `./servers` is the
+  // same values for the specs that need one at module scope.
+  metadata: { altBaseURL: ALT_URL, apiBaseURL: API_URL },
 
   use: {
     baseURL: BASE_URL,
@@ -127,6 +130,11 @@ module.exports = defineConfig({
       // and every other test builds the data it needs, so no test depends on
       // seed values it did not write.
       SOIREE_DEMO_DATA: 'false',
+      // Explicitly none. This is the no-database deployment — `docker run`
+      // with no arguments, a self-hoster without PostgreSQL — and an inherited
+      // DATABASE_URL from the developer's shell would quietly turn it into a
+      // different one, with the localStorage tests testing nothing.
+      DATABASE_URL: '',
     },
   }, {
     // Same source, different environment. Built to its own path so the two
@@ -148,6 +156,43 @@ module.exports = defineConfig({
       SOIREE_EVENT_DATE: '',
       SOIREE_CURRENCY: 'EUR',
       SOIREE_LOCALE: 'nl-NL',
+      SOIREE_BUDGET_CEILING: '0',
+      SOIREE_DEMO_DATA: 'false',
+      DATABASE_URL: '',
+    },
+  }, {
+    // The same binary again, with PostgreSQL behind it. The launcher starts a
+    // throwaway container, waits for it, and execs the server; with no Docker
+    // it starts the server without a database instead, so this entry always
+    // answers /healthz and the API specs decide for themselves whether there
+    // is anything to test. See scripts/api-server.js.
+    command: `go build -o ${JSON.stringify(apiBinary)} ./cmd/soiree && exec node ${JSON.stringify(apiLauncher)} ${JSON.stringify(apiBinary)}`,
+    cwd: repoRoot,
+    url: `${API_URL}/healthz`,
+    reuseExistingServer: false,
+    // Longer than the other two: a machine that has never run this may be
+    // pulling the postgres image, and the launcher waits up to three minutes
+    // for the database before giving up and starting without one.
+    timeout: 300_000,
+    // Without this Playwright force-kills the whole process group, and a
+    // SIGKILL cannot be caught — so the launcher never gets to take its
+    // container down and every run leaves a PostgreSQL behind. The other two
+    // servers own nothing but themselves and are fine being killed outright.
+    gracefulShutdown: { signal: 'SIGTERM', timeout: 15_000 },
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: {
+      ...process.env,
+      SOIREE_LISTEN_ADDR: `127.0.0.1:${API_PORT}`,
+      SOIREE_METRICS_ADDR: `127.0.0.1:${API_METRICS_PORT}`,
+      SOIREE_EVENT_NAME: 'Shared Rehearsal Dinner (e2e)',
+      SOIREE_EVENT_TAGLINE: 'Synthetic fixture data',
+      SOIREE_EVENT_DATE: '2030-06-12T19:00:00Z',
+      // EUR rather than the deployment's IDR on purpose. A two-decimal
+      // currency is the one where a wrong wire format is visible: against a
+      // zero-decimal currency every money bug in this file looks like a pass.
+      SOIREE_CURRENCY: 'EUR',
+      SOIREE_LOCALE: 'en-US',
       SOIREE_BUDGET_CEILING: '0',
       SOIREE_DEMO_DATA: 'false',
     },

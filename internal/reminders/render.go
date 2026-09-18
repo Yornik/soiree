@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Yornik/soiree/internal/mailer"
+	"github.com/Yornik/soiree/internal/push"
 	"github.com/Yornik/soiree/internal/store"
 )
 
@@ -39,6 +40,45 @@ func Render(d Digest) (mailer.Message, error) {
 		Text:    renderText(v),
 		HTML:    html,
 	}, nil
+}
+
+// NotificationTag collapses the digest notifications on a device: a second one
+// replaces the first rather than stacking under it.
+//
+// A phone that was switched off for a fortnight should show this week's digest
+// and not last week's as well — the older one is strictly worse information,
+// and two notifications saying nearly the same thing is how somebody learns to
+// swipe both away without reading either.
+const NotificationTag = "soiree-deadlines"
+
+// RenderPush builds the notification form of the digest.
+//
+// Deliberately not the digest. A push payload is a few kilobytes, encrypted end
+// to end, and shown in two lines on a lock screen; the readable version of "six
+// things are due, here they are" does not exist at that size. So this says how
+// much needs attention and how much of it is late — the same clause the mail
+// puts in its subject — and the click opens the planner, where the detail
+// already is and is already current.
+//
+// baseURL may be empty, in which case the click opens the service worker's own
+// scope. That is the correct relative answer rather than a degraded one: the
+// notification came from this origin, so this origin is what it opens.
+func RenderPush(d Digest, baseURL string) push.Notification {
+	return push.Notification{
+		Title: heading(d),
+		Body:  headline(d),
+		URL:   openURL(baseURL),
+		Tag:   NotificationTag,
+	}
+}
+
+// openURL is the page a notification's click opens: the planner itself, since
+// everything the digest alludes to is on it.
+func openURL(baseURL string) string {
+	if baseURL == "" {
+		return "/"
+	}
+	return strings.TrimRight(baseURL, "/") + "/"
 }
 
 type rowView struct {
@@ -118,23 +158,32 @@ func build(d Digest) digestView {
 // subject says the whole story, because on a phone the subject is often the
 // only part that gets read.
 func subject(d Digest) string {
+	if d.EventName != "" {
+		return d.EventName + ": " + headline(d)
+	}
+	return "Deadlines: " + headline(d)
+}
+
+// headline is the digest in one clause: what needs attention and how much of
+// it is already late.
+//
+// Shared by the mail's subject line and the notification's body, so the two
+// channels say the same words about the same week. They have the same reason
+// to be short — a subject line and a lock screen both get about two lines of
+// attention — and keeping one function means neither can drift into describing
+// the digest differently from the other.
+func headline(d Digest) string {
 	overdue := d.Overdue()
 	soon := d.Count() - overdue
 
-	var what string
 	switch {
 	case overdue > 0 && soon > 0:
-		what = fmt.Sprintf("%d overdue, %d coming up", overdue, soon)
+		return fmt.Sprintf("%d overdue, %d coming up", overdue, soon)
 	case overdue > 0:
-		what = fmt.Sprintf("%d overdue", overdue)
+		return fmt.Sprintf("%d overdue", overdue)
 	default:
-		what = fmt.Sprintf("%s to decide in the next %s", count(soon, "item"), count(d.WindowDays, "day"))
+		return fmt.Sprintf("%s to decide in the next %s", count(soon, "item"), count(d.WindowDays, "day"))
 	}
-
-	if d.EventName != "" {
-		return d.EventName + ": " + what
-	}
-	return "Deadlines: " + what
 }
 
 func heading(d Digest) string {
