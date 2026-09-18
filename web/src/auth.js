@@ -29,12 +29,16 @@
  * it is the documented degraded mode, and it is shown once, in the page, and
  * kept nowhere.
  *
- * What this file does NOT do is gate the planner. The plan API is open on the
- * server today — see routeAPI in internal/httpd/api.go, which mounts no
- * authentication middleware — so a page that demanded a sign-in before showing
- * the ledger would be claiming a protection that does not exist. Roles shape
- * what the interface offers; the server is what enforces, and where it does
- * not yet enforce, this is a courtesy and nothing more.
+ * What this file does NOT do is enforce anything. The server does that:
+ * routeAPI in internal/httpd/api.go puts the whole plan subtree behind
+ * RequireWrite, so nobody reads the plan without a session and a viewer writes
+ * nothing, whatever this page offers them. Roles here shape what the interface
+ * shows — a locked planner for a viewer, an accounts screen for an admin — and
+ * a page that got that wrong would be confusing, not unsafe.
+ *
+ * It does tell the planner when the session changes, on `soiree:session`, and
+ * answers `soiree:session-check` when the planner has reason to doubt it. See
+ * "A session that ends while the page is open" in app.js.
  */
 (function () {
   'use strict';
@@ -350,6 +354,44 @@
     });
   }
 
+  /* The planner doubts the session.
+   *
+   * app.js raises this when a request of its own comes back 401, or when its
+   * event stream is refused and it cannot tell why. The answer goes back the
+   * way every other change does, through setSession — so the planner learns
+   * about an ended session from the same event it learns about a sign-out.
+   *
+   * Three answers, and only one of them changes anything:
+   *
+   *   200 — still signed in. The stream was refused for some other reason and
+   *         app.js is already waiting that out. Saying "in" again would make
+   *         it refetch the plan for nothing, so nothing is said.
+   *   401 — the session is gone. Sign-out, and straight to the sign-in screen
+   *         with a line saying why: somebody mid-edit who is shown a login
+   *         form with no explanation assumes they did something wrong.
+   *   anything else — an outage is not a sign-out. probeSession() reads a 500
+   *         as "out" because at load there is nothing to lose by offering the
+   *         door; here there is a signed-in person to wrongly throw out.
+   */
+  var checking = false;
+  var endedNotice = false;
+
+  document.addEventListener('soiree:session-check', function () {
+    if (checking || state === 'unknown' || state === 'none') return;
+    checking = true;
+    request('GET', '/auth/session').then(function (res) {
+      checking = false;
+      if (res.status === 200 && res.body) {
+        if (state !== 'in') setSession('in', res.body);
+        return;
+      }
+      if (res.status !== 401 || state !== 'in') return;
+      endedNotice = true;
+      setSession('out');
+      goto('login');
+    }, function () { checking = false; });
+  });
+
   /* ------------------------------------------------------------------
    * A viewer's planner
    * ------------------------------------------------------------------
@@ -547,7 +589,9 @@
     if (path === 'set-password') { renderSetPassword(); return; }
     if (path === 'login') {
       afterLogin = '';
-      renderLogin('Sign in with the address your invitation was sent to.');
+      renderLogin(endedNotice
+        ? 'Your session has ended. Sign in again — what you changed is still here, and is sent as soon as you are back.'
+        : 'Sign in with the address your invitation was sent to.');
       return;
     }
 
@@ -590,6 +634,7 @@
   function loginSucceeded(who) {
     var next = afterLogin;
     afterLogin = '';
+    endedNotice = false;
     var pw = byId('loginPassword');
     if (pw) pw.value = '';       // out of the DOM the moment it is spent
     setSession('in', who);

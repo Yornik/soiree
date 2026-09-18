@@ -240,14 +240,29 @@ const sessions = new Map();
 
 async function apiSignIn(request, base = API_URL) {
   if (sessions.has(base)) return sessions.get(base);
+  const cookie = await freshSession(request, base);
+  sessions.set(base, cookie);
+  return cookie;
+}
 
+/**
+ * A session nobody else is using, never cached.
+ *
+ * For the specs that END a session. The run shares one login, replayed into
+ * every context, so a spec that signed that one out would leave every spec
+ * after it anonymous — and an anonymous request is answered 401 whether or not
+ * the thing it asked for works, which is a suite that goes green by testing
+ * nothing. A spec that means to destroy a session brings its own.
+ *
+ * Each call is a real login against the real limiters (ten per account per
+ * quarter hour), so this is for the two or three specs that need it and not a
+ * replacement for apiSignIn.
+ */
+async function freshSession(request, base = API_URL) {
   const res = await request.post(`${base}/api/v1/auth/login`, {
     data: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD },
   });
-  if (res.status() === 404) {
-    sessions.set(base, null);
-    return null;
-  }
+  if (res.status() === 404) return null;
   expect(res.status(), 'POST /api/v1/auth/login').toBe(200);
 
   const setCookie = res
@@ -257,9 +272,7 @@ async function apiSignIn(request, base = API_URL) {
     .find((v) => v.startsWith('soiree_session='));
   expect(setCookie, 'login set no session cookie').toBeTruthy();
 
-  const cookie = setCookie.split(';')[0];
-  sessions.set(base, cookie);
-  return cookie;
+  return setCookie.split(';')[0];
 }
 
 /** Headers carrying the session, for a raw request context. */
@@ -381,7 +394,11 @@ async function signInPage(page, base = API_URL) {
   // and self-defeating: the per-IP and per-account limiters are real, every
   // test shares one address and one account, and a suite that logs in fifty
   // times answers 429 to the ones at the end.
-  const cookie = await apiSignIn(page.request, base);
+  await adoptSession(page, await apiSignIn(page.request, base), base);
+}
+
+/** Puts one particular session into a page's cookie jar. */
+async function adoptSession(page, cookie, base = API_URL) {
   if (!cookie) return;
 
   const [name, value] = cookie.split('=');
@@ -409,7 +426,11 @@ async function reloadSharedPlanner(page) {
 }
 
 module.exports = {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  adoptSession,
   apiSignIn,
+  freshSession,
   signInPage,
   apiAuth,
   API_URL,

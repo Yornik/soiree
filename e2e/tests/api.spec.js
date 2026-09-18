@@ -49,6 +49,11 @@ const {
   resetPlan,
   tagLine,
   apiAuth,
+  adoptSession,
+  awaitPlan,
+  freshSession,
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
 } = require('./helpers');
 
 test.use({ baseURL: API_URL });
@@ -521,4 +526,140 @@ test('a planner built before the database existed is carried up, not wiped', asy
   // And nothing was carried up twice.
   await expect(page.locator('#budgetBody tr')).toHaveCount(1);
   await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+});
+
+/*
+ * A session that ends while the page is open.
+ *
+ * Seven idle days, an account disabled by an admin, a sign-out in another tab:
+ * the page is mid-use and the next request it makes is refused. Three things
+ * used to go wrong at once. The refused write was parked like any other 4xx —
+ * and a parked row stays parked until it is edited again, so signing back in
+ * did not send it. Nothing told the person, because nothing told auth.js. And
+ * the event stream went on asking into the same 401 every thirty seconds for
+ * as long as the tab stayed open, which a proxy that counts refusals per
+ * address reads as an attack.
+ *
+ * These two bring their own session and end that one. The run shares a single
+ * login, replayed into every context; signing THAT out would leave every spec
+ * after this anonymous, and an anonymous request is answered 401 whether or
+ * not the thing it asked for works.
+ */
+async function openWithOwnSession(page, request) {
+  const cookie = await freshSession(request);
+  await adoptSession(page, cookie);
+  await awaitPlan(page, () => page.goto('/'));
+  return cookie;
+}
+
+async function endSession(request, cookie) {
+  const res = await request.post(`${API_URL}/api/v1/auth/logout`, { headers: { Cookie: cookie } });
+  expect(res.status(), 'ending the session server-side').toBe(204);
+}
+
+test('a session that ends mid-edit asks for a sign-in, and the edit goes up afterwards', async ({ page, request }) => {
+  const cookie = await openWithOwnSession(page, request);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.paid))
+    .toEqual(['500.00']);
+
+  await endSession(request, cookie);
+
+  // The edit that finds out. Nothing about it is wrong; only who is asking.
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+
+  await expect(page.locator('#authScreen'), 'the sign-in screen should open by itself').toBeVisible();
+  await expect(page.locator('#authLede')).toContainText('Your session has ended');
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+
+  // Refused, so not on the server — and that is the state the old behaviour
+  // left it in for good.
+  expect((await apiPlan(request)).budgetItems.map((i) => i.paid)).toEqual(['500.00']);
+
+  await page.fill('#loginEmail', ADMIN_EMAIL);
+  await page.fill('#loginPassword', ADMIN_PASSWORD);
+  await page.click('#loginSubmit');
+  await expect(page.locator('#authScreen')).toBeHidden();
+
+  // The claim. Nobody touches the row again: signing in is what sends it.
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.paid), {
+      message: 'the edit made while signed out should go up on sign-in, without being edited again',
+    })
+    .toEqual(['750.00']);
+  await expect(budgetRow(page, 0).paid).toHaveValue('750');
+});
+
+test('signing back in merges, and does not write a stale copy over everyone else', async ({ page, request }) => {
+  const cookie = await openWithOwnSession(page, request);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 2, paid: 0 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item).sort())
+    .toEqual(['Flowers', 'Venue deposit']);
+
+  await endSession(request, cookie);
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+  await expect(page.locator('#authScreen')).toBeVisible();
+
+  // While this browser is signed out, somebody else carries on: they change a
+  // field this browser never touched, and delete a row it is still showing.
+  const headers = await apiAuth(request);
+  const before = await apiPlan(request);
+  const venue = before.budgetItems.find((i) => i.item === 'Venue deposit');
+  const flowers = before.budgetItems.find((i) => i.item === 'Flowers');
+  const patched = await request.patch(`${API_URL}/api/v1/budget-items/${venue.id}`, {
+    headers, data: { revision: venue.revision, vendor: 'The Orangery' },
+  });
+  expect(patched.status()).toBe(200);
+  const removed = await request.delete(
+    `${API_URL}/api/v1/budget-items/${flowers.id}?revision=${flowers.revision}`, { headers });
+  expect(removed.status()).toBe(204);
+
+  await page.fill('#loginEmail', ADMIN_EMAIL);
+  await page.fill('#loginPassword', ADMIN_PASSWORD);
+  await page.click('#loginSubmit');
+  await expect(page.locator('#authScreen')).toBeHidden();
+
+  // Ours where we edited, theirs where we did not, and their delete stands.
+  // A browser that let its own copy win would put `vendor` back to empty —
+  // at the current revision, so with no conflict raised — and POST the
+  // flowers back into a budget somebody had just taken them out of.
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.paid, i.vendor]), {
+      message: 'sign-in should merge against the plan as it now stands',
+    })
+    .toEqual([['Venue deposit', '750.00', 'The Orangery']]);
+});
+
+test('once the session has ended the page stops asking', async ({ page, request }) => {
+  const cookie = await openWithOwnSession(page, request);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  await endSession(request, cookie);
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+  await expect(page.locator('#authScreen')).toBeVisible();
+
+  /*
+   * The one place in this suite that waits on a clock, because the claim is
+   * that something does NOT happen and there is no event for that. The window
+   * is longer than the longest first retry the page used to make — the stream
+   * reopened after 2.5 to 7.5 seconds, the write loop after one — so the old
+   * behaviour cannot fit a quiet spell inside it.
+   */
+  const asked = [];
+  const note = (r) => { if (r.url().includes('/api/v1/')) asked.push(`${r.method()} ${new URL(r.url()).pathname}`); };
+  page.on('request', note);
+  await page.waitForTimeout(9000);
+  page.off('request', note);
+
+  expect(asked, 'a signed-out page should not keep asking the API').toEqual([]);
 });

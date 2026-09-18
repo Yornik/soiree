@@ -210,6 +210,7 @@
       'd.offline': 'Your changes are not reaching the server. Still trying — they are safe in this browser meanwhile.',
       'd.online': 'Back in touch with the server. Everything is saved.',
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
+      'd.session': 'Your session has ended. Sign in again — what you changed is safe in this browser and is sent as soon as you are back.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
       'ar.reopen': 'Reopen for editing',
       'ar.open': 'Reopened for editing. Close it again once everything is settled.',
@@ -330,6 +331,7 @@
       'd.offline': 'Je wijzigingen bereiken de server niet. Er wordt opnieuw geprobeerd — ondertussen staan ze veilig in deze browser.',
       'd.online': 'Weer verbinding met de server. Alles is opgeslagen.',
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
+      'd.session': 'Je sessie is verlopen. Meld je opnieuw aan — je wijzigingen staan veilig in deze browser en worden verstuurd zodra je terug bent.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
       'ar.reopen': 'Heropenen om te bewerken',
       'ar.open': 'Weer opengesteld. Sluit de planner zodra alles is afgerekend.',
@@ -449,6 +451,7 @@
       'd.offline': 'Perubahanmu belum sampai ke server. Masih dicoba lagi — sementara ini aman tersimpan di browser.',
       'd.online': 'Terhubung lagi dengan server. Semuanya tersimpan.',
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
+      'd.session': 'Sesimu sudah berakhir. Masuk lagi — perubahanmu aman tersimpan di browser ini dan dikirim begitu kamu kembali.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
       'ar.reopen': 'Buka lagi untuk diubah',
       'ar.open': 'Dibuka lagi untuk diubah. Tutup lagi setelah semuanya beres.',
@@ -1196,6 +1199,15 @@
       reconcile(op, res.body.current);
       return true;
     }
+    if (res.status === 401) {
+      // Not a refusal of this row — a refusal of this browser. Parking the row
+      // would be exactly wrong: nothing about the edit needs to change for it
+      // to be accepted, only who is asking, and a parked row stays parked
+      // until it is edited again. So the pass stops, the shadow does not
+      // advance, and the same difference goes up after the next sign-in.
+      sessionLost();
+      return false;
+    }
     if (res.status >= 400 && res.status < 500) {
       // The server understood and said no. Sending the identical body again
       // would only produce the identical refusal, so this row is parked until
@@ -1326,7 +1338,7 @@
   };
 
   Sync.run = function () {
-    if (!apiMode || Sync.running || Sync.timer || !Sync.queued) return;
+    if (!apiMode || sessionGone || Sync.running || Sync.timer || !Sync.queued) return;
     Sync.queued = false;
     Sync.running = true;
     passes++;
@@ -1343,6 +1355,12 @@
       if (Sync.queued) Sync.run();
       return;
     }
+
+    // No session: there is nothing to wait out. A retry timer here would send
+    // the same write into the same 401 every thirty seconds for as long as the
+    // tab stays open, and a 401 is what the proxy's ban rule counts. The work
+    // stays queued; signing in is what runs it.
+    if (sessionGone) { Sync.queued = true; return; }
 
     // 'retry' and 'outrun' are different causes with the same consequence and
     // the same remedy, so they share a message: in both, edits this person has
@@ -1419,12 +1437,87 @@
     document.dispatchEvent(new CustomEvent('soiree:api', { detail: { available: available } }));
   }
 
-  /* A session arrived after we were refused. Connect properly now.
+  /* ---------- A session that ends while the page is open ----------
+   * connect() above handles a 401 on the first request. This is every 401
+   * after it: seven idle days, an admin disabling the account, a sign-out in
+   * another tab. The page is mid-use when it happens, so three things are
+   * already running that would each keep asking — the write loop, the resync
+   * and the event stream — and each asks into the same refusal on a timer.
    *
-   * Signing in is the one thing that changes the answer to a 401, so this is
-   * the only place a refused probe is retried. */
+   * That is not only wasted requests. The deployment this was written for has
+   * a ban rule at the proxy that counts 401s per address, and one tab left
+   * open over a week is enough of them to lock out a household.
+   *
+   * So: stop all three, say so, and keep every edit. Nothing here touches
+   * `state` or the shadow, which is what makes signing back in free — the
+   * difference is still there to send.
+   */
+  var sessionGone = false;
+
+  // Stop asking. No event: this is also what an ordinary sign-out needs, and
+  // auth.js already knows about that one because it caused it.
+  function haltSync() {
+    if (sessionGone) return false;
+    sessionGone = true;
+    closeLive();
+    if (resyncTimer) { clearTimeout(resyncTimer); resyncTimer = null; }
+    if (Sync.timer) { clearTimeout(Sync.timer); Sync.timer = null; }
+    if (apiMode) setSticky(t('d.session'));
+    return true;
+  }
+
+  // A request of ours was refused for want of a session. That is definitive,
+  // so halt first and tell auth.js second.
+  function sessionLost() {
+    if (haltSync()) doubtSession();
+  }
+
+  /* Ask auth.js to look again.
+   *
+   * It owns the question of who is signed in, and it answers on
+   * `soiree:session` like any other change. Used directly by the one caller
+   * that cannot know: an EventSource reports a refused connection as an error
+   * with no status, so a closed stream may be a 401 or may be the subscriber
+   * cap, and only one of those is a reason to stop. */
+  function doubtSession() {
+    document.dispatchEvent(new CustomEvent('soiree:session-check'));
+  }
+
   document.addEventListener('soiree:session', function (e) {
-    if (e && e.detail && e.detail.signedIn) connect(0);
+    var signedIn = !!(e && e.detail && e.detail.signedIn);
+    if (!signedIn) {
+      // Only once there is something to halt. Before the first plan arrives
+      // this is the ordinary "nobody is signed in yet" and connect() is
+      // already holding.
+      if (apiMode) haltSync();
+      return;
+    }
+
+    // Back. Rows parked by a refusal are released, because who is asking is
+    // exactly what changed: an editor signing in where a viewer was is a
+    // different answer to the same 403. Anything still refused is parked
+    // again on the pass that follows, with one notice rather than none.
+    sessionGone = false;
+    blocked = {};
+    setSticky('');
+
+    // Never signed in on this page before: the ordinary first load.
+    if (!apiMode) { connect(0); return; }
+
+    // Signed in AGAIN, on a page that has been holding a plan — and for as
+    // long as it was signed out, other people kept editing. That makes this a
+    // merge and emphatically not adopt(), for the reason applyPlan() gives:
+    // adopt() lets this browser's copy win. `dirty` has been true since the
+    // first keystroke of this page's life, so adopt() would diff a copy that
+    // may be a week stale against a fresh shadow and PATCH it over everyone —
+    // at the current revision, so without so much as a 409 — and POST back
+    // every row somebody deleted in the meantime.
+    //
+    // The shadow this page still holds is the version both sides started
+    // from, which is exactly what the three-way merge wants: a field edited
+    // here while signed out is kept and sent, everything else is theirs.
+    openLive();
+    scheduleResync();
   });
 
   /* Take the plan the origin sent.
@@ -1522,13 +1615,20 @@
 
   var live = null;        // the EventSource, once there is a database behind us
   var liveWait = 0;       // backoff for a stream that was refused outright
+  var liveTimer = null;   // the pending reopen, so that it can be called off
 
   // Reconnect is normally the browser's job — the server sends `retry: 3000`.
   // This is only for the case the browser will not retry: see onerror.
   var LIVE_RETRY_MS = 5000;
 
+  function closeLive() {
+    if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }
+    if (live) { live.close(); live = null; }
+    liveWait = 0;
+  }
+
   function openLive() {
-    if (!apiMode || live || typeof EventSource !== 'function') return;
+    if (!apiMode || sessionGone || live || typeof EventSource !== 'function') return;
     try { live = new EventSource(API_BASE + '/events'); } catch (e) { live = null; return; }
 
     // Named events. Nothing is ever sent as a default `message`, so onmessage
@@ -1550,7 +1650,16 @@
       live.close();
       live = null;
       liveWait = Math.min(RETRY_MAX_MS, liveWait ? liveWait * 2 : LIVE_RETRY_MS);
-      setTimeout(openLive, liveWait / 2 + Math.random() * liveWait);
+      liveTimer = setTimeout(function () { liveTimer = null; openLive(); },
+        liveWait / 2 + Math.random() * liveWait);
+
+      // The other reason a stream is refused outright is a session that has
+      // ended, and from in here the two look identical. The reopen above stays
+      // booked, because if this was the cap it is still the right thing to do;
+      // if auth.js finds there is no session, haltSync() calls it off before
+      // it fires. One question asked, rather than a 401 every thirty seconds
+      // for as long as the tab is open.
+      doubtSession();
     };
   }
 
@@ -1595,7 +1704,7 @@
   }
 
   function armResync(ms) {
-    if (resyncTimer || resyncing) return;
+    if (sessionGone || resyncTimer || resyncing) return;
     resyncTimer = setTimeout(runResync, ms);
   }
 
@@ -1618,6 +1727,11 @@
       resyncing = false;
       // The same three conditions again, because the answer is what gets
       // merged and a write can have started while it was on its way.
+      if (res.status === 401) {
+        // An answer, not an outage, and asking again will not change it.
+        sessionLost();
+        return;
+      }
       if (res.status === 200 && res.body && passes === mark && !Sync.running && !saveTimer) {
         resyncWait = 0;
         applyPlan(res.body);
