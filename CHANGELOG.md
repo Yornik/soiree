@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.1.0](https://github.com/Yornik/soiree/compare/v1.0.2...v1.1.0) (2026-09-18)
+
+
+### Features
+
+* an activity feed of who changed what, for admins ([fcbfbad](https://github.com/Yornik/soiree/commit/fcbfbad12ef31b44af5771d1212467a8648cb84a))
+* **api:** an activity feed of everything that changed, for admins ([9dc3b59](https://github.com/Yornik/soiree/commit/9dc3b592a7b5e2958613bf5d223d0de4f876b5bc))
+* attach files to budget lines and tasks ([71c63ae](https://github.com/Yornik/soiree/commit/71c63aea7e9b607eb43ebc7aa648c2fd1844b8b8))
+* **attachments:** configuration - all five bucket settings or none ([584b147](https://github.com/Yornik/soiree/commit/584b147a8a84a1a51c2edb86ed53370a830a806a))
+* **attachments:** four routes and a sweeper, with no file passing through ([66cf9a4](https://github.com/Yornik/soiree/commit/66cf9a4c5502e4552f556db4020de4d51a5b2dbf))
+* **attachments:** the schema, and the one S3 routine everything else uses ([ffd4005](https://github.com/Yornik/soiree/commit/ffd4005b28252641304fa4cbd3019291b49c4131))
+* **attachments:** the store - quota, confirmation, and what a cascade forgets ([dc9da58](https://github.com/Yornik/soiree/commit/dc9da585700329e987d4f82fc1c40f1a01cb6f0d))
+* **web:** an activity screen, so an admin can see who changed what ([d190cec](https://github.com/Yornik/soiree/commit/d190cecf6eea473a8bb49ca29963d9b1fb966bd6))
+* **web:** attach files to budget lines and tasks, and get them back ([6ed79e6](https://github.com/Yornik/soiree/commit/6ed79e627938697c1c5c0a50c74598b8a39b0650))
+* **web:** show the release, very small, to somebody signed in ([677ae1a](https://github.com/Yornik/soiree/commit/677ae1a021ccec284ec9b452c032cca2fde9b386))
+
+
+### Bug Fixes
+
+* **attachments:** close response bodies the way the linter and the rest of the code do ([a007db0](https://github.com/Yornik/soiree/commit/a007db089e4aa28765a1a49c54572779f0e9cbcf))
+* **attachments:** the expired-address test cleans up after itself ([d96f59e](https://github.com/Yornik/soiree/commit/d96f59e84d3028b05064f992b7cad4712c6f5f14))
+* **attachments:** the two response bodies the linter had not got to yet ([1671063](https://github.com/Yornik/soiree/commit/16710634dc67dcbb40b2c6b56a0f925473eca1ee))
+* **web:** the whole budget table fits a desktop screen, remove button included ([6527e77](https://github.com/Yornik/soiree/commit/6527e7775a7bc0eb979176f9c2018f6f3c803189))
+* **web:** the whole budget table fits a desktop screen, remove button included ([910fab1](https://github.com/Yornik/soiree/commit/910fab19511a6572f677f9e748a8a98b1869b5bd))
+
 ## [1.0.2](https://github.com/Yornik/soiree/compare/v1.0.1...v1.0.2) (2026-09-18)
 
 
