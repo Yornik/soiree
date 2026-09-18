@@ -1051,6 +1051,50 @@ test('a signed-in load asks for the plan once, not once per thing that wanted it
 });
 
 /* ------------------------------------------------------------------
+ * Activity
+ * ------------------------------------------------------------------ */
+
+test('an admin can see who changed what, and an editor is not shown the door', async ({ page, request, browser }) => {
+  // The editor does the work.
+  const cookie = await openWithOwnSession(page, request, 'linus');
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.paid)).toEqual(['500.00']);
+  await budgetRow(page, 0).paid.fill('750');
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.paid)).toEqual(['750.00']);
+
+  // No link for them, no screen behind the address, and no data behind that.
+  await expect(page.locator('#accountActs button')).toHaveText(['Your account', 'Sign out']);
+  await page.goto('/#/activity');
+  await expect(page.locator('#authNote')).toContainText('it is for admins');
+  await expect(page.locator('#activityList li')).toHaveCount(0);
+  const refused = await request.get(`${API_URL}/api/v1/activity`, { headers: { Cookie: cookie } });
+  expect(refused.status(), 'an editor asking the server directly').toBe(403);
+
+  // The admin reads it.
+  const context = await browser.newContext({ baseURL: API_URL, serviceWorkers: 'block' });
+  const theirs = await context.newPage();
+  try {
+    await openSharedPlanner(theirs);
+    await theirs.locator('#accountActs button', { hasText: 'Activity' }).click();
+    await expect(theirs.locator('#authTitle')).toHaveText('Activity');
+
+    const newest = theirs.locator('#activityList > li').first();
+    await expect(newest.locator('.activity-who')).toHaveText('linus-e2e@example.test');
+    await expect(newest.locator('.activity-what')).toHaveText('Changed budget line “Venue deposit”');
+    // Amounts as the planner shows them, never the minor units they are stored in.
+    await expect(newest.locator('.activity-changes li')).toHaveText(['Paid500.00→750.00']);
+
+    // A new row is one sentence; the dozen fields it was born with are not news.
+    const made = theirs.locator('#activityList > li', { hasText: 'Added budget line' }).first();
+    await expect(made.locator('.activity-what')).toHaveText('Added budget line “Venue deposit”');
+    await expect(made.locator('.activity-changes')).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+/* ------------------------------------------------------------------
  * Attachments
  *
  * Against a real bucket, because the browser talks to it directly and that is
