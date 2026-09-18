@@ -47,7 +47,7 @@ type Config struct {
 
 	EventName string
 	Tagline   string
-	EventDate string // RFC3339, UTC. Empty means no countdown.
+	EventDate string // RFC3339, with the offset it was written in. Empty means no countdown.
 
 	Currency          string
 	Locale            string
@@ -376,7 +376,13 @@ func Load() (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("SOIREE_EVENT_DATE must be RFC3339 with a timezone (e.g. 2027-06-12T00:00:00Z), got %q", c.EventDate)
 		}
-		c.EventDate = t.UTC().Format(time.RFC3339)
+		// Kept in the offset it was written in, deliberately. It used to be
+		// converted to UTC here, which is the same instant and a different
+		// calendar day: an evening that begins at midnight at +09:00 is
+		// 15:00 UTC the day before, so the page announced the wrong date to
+		// everybody, wherever they were. The offset is the only thing that
+		// says which day the event is on, and the page needs it for that.
+		c.EventDate = t.Format(time.RFC3339)
 	}
 
 	// The whole point of the second listener is that the public one cannot

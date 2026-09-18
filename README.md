@@ -66,7 +66,7 @@ exists in the source, which is what lets one public image serve any event.
 |---|---|---|
 | `SOIREE_EVENT_NAME` | `A Celebration` | Page title and hero heading. Also the Relying Party display name shown in a passkey prompt. |
 | `SOIREE_EVENT_TAGLINE` | *(empty)* | Subtitle under the heading |
-| `SOIREE_EVENT_DATE` | *(empty)* | RFC3339 **with a timezone**, e.g. `2027-06-12T00:00:00Z`. Drives the countdown. Omit for no countdown. |
+| `SOIREE_EVENT_DATE` | *(empty)* | RFC3339 **written in the event's own timezone**, e.g. `2027-06-12T19:00:00+09:00`. The date in it is the day everybody is shown, and the offset decides when "today" turns over. Drives the countdown and the archive. Omit for no countdown. |
 | `SOIREE_CURRENCY` | `EUR` | Primary currency, ISO 4217. Decides the minor-unit exponent the API speaks in. |
 | `SOIREE_LOCALE` | `en-US` | Number and date formatting, and the *fallback* language when its primary subtag is one of `en`, `nl` or `id`: what the interface is in for a visitor whose browser asks for none of those, and what a mail is in when nobody chose. A visitor's own browser comes first, a flag they click comes before that, and `?lang=nl` on a link before everything. |
 | `SOIREE_SECONDARY_CURRENCY` | *(unset)* | Optional second readout. Unset hides the column and the rate field. |
@@ -177,6 +177,13 @@ A date without a timezone is rejected at startup rather than accepted. It is a
 real bug, not pedantry: `2027-06-12T00:00:00` is interpreted in the *viewer's*
 timezone, so the countdown silently reads a day differently depending on where
 someone is sitting — which is precisely the situation this app is built for.
+
+Write it in the offset of the place the event is in, not converted to UTC. The
+two name the same instant and different days: `2027-06-12T00:00:00+09:00` is
+the 12th, and the same moment written as `2027-06-11T15:00:00Z` is the 11th.
+The page shows the day as written, and counts the days to it from today *where
+the event is*, so the date and the countdown are the same on every screen — and
+the planner closes the day after the event there, not the day after it in UTC.
 
 ## The API
 

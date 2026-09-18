@@ -77,11 +77,30 @@
     }
   })();
 
-  // Parsed as an instant, not a local wall-clock time. Without an explicit
-  // timezone the countdown silently differs by a day between viewers, which
-  // is visible when the people planning an event are on different continents.
-  var EVENT_DATE = CONFIG.eventDate ? new Date(CONFIG.eventDate) : null;
-  if (EVENT_DATE && isNaN(EVENT_DATE.getTime())) EVENT_DATE = null;
+  /* The event is on a calendar day, in a place. Both are in the configured
+   * string as it was written - "2030-06-12T00:00:00+09:00" is the 12th, at
+   * nine hours ahead of UTC - and neither survives `new Date()`, which keeps
+   * the instant and forgets the rest. Read as an instant, that evening is
+   * 15:00 UTC on the 11th, and a page that formats the instant announces the
+   * 11th to everybody, wherever they are.
+   *
+   * So the day is taken from the text, and "today" is reckoned at the event's
+   * own offset rather than the viewer's: the date and the days to go are then
+   * the same on every screen, and the count turns over when the day turns
+   * over where the event is.
+   */
+  var EVENT = (function () {
+    var m = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(String(CONFIG.eventDate || ''));
+    if (!m) return null;
+    var day = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    if (isNaN(day)) return null;
+    var offset = 0;
+    if (m[4] !== 'Z') {
+      offset = (Number(m[4].slice(1, 3)) * 60 + Number(m[4].slice(4, 6))) * (m[4].charAt(0) === '-' ? -1 : 1);
+    }
+    return { day: day, offsetMinutes: offset };
+  })();
+  var EVENT_DATE = EVENT ? new Date(EVENT.day) : null;
 
   /* ------------------------------------------------------------------
    * INTERFACE LANGUAGE
@@ -2333,10 +2352,13 @@
     // Both matter more now that this figure also decides when the ledger
     // closes: getting it wrong leaves the planner open for a day after the
     // event, or shuts it on the morning of.
-    var now = new Date();
-    var today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    var day = Date.UTC(EVENT_DATE.getUTCFullYear(), EVENT_DATE.getUTCMonth(), EVENT_DATE.getUTCDate());
-    return Math.round((day - today) / 86400000);
+    //
+    // And "today" is today where the event is, not where the reader is or in
+    // UTC: shifting the clock by the event's offset and reading the UTC fields
+    // gives the calendar date there. See EVENT above.
+    var there = new Date(Date.now() + EVENT.offsetMinutes * 60000);
+    var today = Date.UTC(there.getUTCFullYear(), there.getUTCMonth(), there.getUTCDate());
+    return Math.round((EVENT.day - today) / 86400000);
   }
 
   // The day itself is not "after": a planner is at its most useful on the

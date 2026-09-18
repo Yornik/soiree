@@ -110,6 +110,14 @@ inside the `SOIREE_*` de-personalisation boundary.
 reads differently depending on where someone is — the exact failure mode this
 application is most exposed to.
 
+The offset is kept, not normalised away. Until 1.1.1 the loader converted the
+value to UTC, which preserves the instant and loses the day: midnight on the
+12th at +09:00 became 15:00 on the 11th, the page announced the 11th to every
+reader, and the archive would have closed the planner on the morning of the
+event. The event is on a calendar day in a place; the page takes the day from
+the text and reckons "today" at the event's offset, so neither depends on where
+the reader is or on UTC.
+
 ## The `Store` seam
 
 Everything in this section describes `web/src/app.js` as it stands at the 1.0.0
