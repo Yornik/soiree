@@ -323,8 +323,8 @@ constraint drives the design:
 4. **Compression and cache headers in the binary.** No proxy configuration is
    required for either.
 
-Measured at 1.1.0, brotli, from a running server: shell 4.3 kB, stylesheet
-9.4 kB, planner script 44 kB, accounts script 22 kB, font 33 kB. Both scripts
+Measured at 1.1.0, brotli, from a running server: shell 4.4 kB, stylesheet
+9.5 kB, planner script 44 kB, accounts script 25 kB, font 33 kB. Both scripts
 are `defer`, so first paint needs the shell and stylesheet only — about 14 kB.
 
 ### Deliberately excluded

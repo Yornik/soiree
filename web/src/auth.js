@@ -129,6 +129,57 @@
       'people.title': 'People',
       'people.lede': 'Everyone with an account on this planner.',
       'people.notadmin': 'Managing accounts is an admin\'s job. Ask an admin to make the change for you.',
+      'bar.activity': 'Activity',
+      'act.title': 'Activity',
+      'act.lede': 'Every change to the plan, newest first.',
+      'act.notadmin': 'The activity names everybody with an account, so it is for admins. Ask an admin what you want to know.',
+      'login.lede.activity': 'Sign in with an admin account to see what has changed.',
+      'act.empty': 'Nothing has changed yet.',
+      'act.more': 'Show older',
+      'act.failed': 'Could not load the activity. Try again.',
+      'act.s.create': 'Added {e} {l}',
+      'act.s.update': 'Changed {e} {l}',
+      'act.s.delete': 'Removed {e} {l}',
+      'act.e.attachments': 'file',
+      'act.e.budget_items': 'budget line',
+      'act.e.notes': 'note',
+      'act.e.phases': 'phase',
+      'act.e.programme_entries': 'programme entry',
+      'act.e.settings': 'the settings',
+      'act.e.sponsors': 'sponsor',
+      'act.e.tasks': 'task',
+      'act.e.users': 'account',
+      'act.k.system': 'The system',
+      'act.k.import': 'An import',
+      'act.k.unknown': 'Nobody signed in',
+      'act.k.gone': 'A deleted account',
+      'act.none': 'nothing',
+      'act.hidden': 'changed, not shown',
+      'act.items': '{n} chosen',
+      'act.yes': 'yes',
+      'act.no': 'no',
+      'act.f.item': 'Item',
+      'act.f.vendor': 'Vendor',
+      'act.f.unit': 'Unit price',
+      'act.f.qty': 'Quantity',
+      'act.f.paid': 'Paid',
+      'act.f.lockBy': 'Decide by',
+      'act.f.note': 'Remarks',
+      'act.f.name': 'Name',
+      'act.f.owner': 'Owner',
+      'act.f.due': 'Due date',
+      'act.f.status': 'Status',
+      'act.f.code': 'Callsign',
+      'act.f.text': 'Text',
+      'act.f.ceiling': 'Ceiling',
+      'act.f.inflationPct': 'Inflation buffer',
+      'act.f.fxRate': 'Exchange rate',
+      'act.f.splitEvenly': 'Split evenly',
+      'act.f.sponsorIds': 'Cost by',
+      'act.f.position': 'Order',
+      'act.f.email': 'Email',
+      'act.f.role': 'Role',
+      'act.f.passwordHash': 'Password',
       'people.empty': 'No accounts yet.',
       'people.role': 'Role',
       'people.add': 'Add person',
@@ -262,6 +313,57 @@
       'people.title': 'Mensen',
       'people.lede': 'Iedereen met een account op deze planner.',
       'people.notadmin': 'Accounts beheren is het werk van een beheerder. Vraag een beheerder om de wijziging voor je te doen.',
+      'bar.activity': 'Activiteit',
+      'act.title': 'Activiteit',
+      'act.lede': 'Elke wijziging in het plan, de nieuwste eerst.',
+      'act.notadmin': 'De activiteit noemt iedereen met een account en is daarom voor beheerders. Vraag een beheerder wat je wilt weten.',
+      'login.lede.activity': 'Meld je aan met een beheerdersaccount om te zien wat er is gewijzigd.',
+      'act.empty': 'Er is nog niets gewijzigd.',
+      'act.more': 'Ouder tonen',
+      'act.failed': 'De activiteit kon niet worden geladen. Probeer het opnieuw.',
+      'act.s.create': '{e} {l} toegevoegd',
+      'act.s.update': '{e} {l} gewijzigd',
+      'act.s.delete': '{e} {l} verwijderd',
+      'act.e.attachments': 'bestand',
+      'act.e.budget_items': 'budgetpost',
+      'act.e.notes': 'notitie',
+      'act.e.phases': 'fase',
+      'act.e.programme_entries': 'programmaonderdeel',
+      'act.e.settings': 'de instellingen',
+      'act.e.sponsors': 'sponsor',
+      'act.e.tasks': 'taak',
+      'act.e.users': 'account',
+      'act.k.system': 'Het systeem',
+      'act.k.import': 'Een import',
+      'act.k.unknown': 'Niemand aangemeld',
+      'act.k.gone': 'Een verwijderd account',
+      'act.none': 'niets',
+      'act.hidden': 'gewijzigd, niet getoond',
+      'act.items': '{n} gekozen',
+      'act.yes': 'ja',
+      'act.no': 'nee',
+      'act.f.item': 'Post',
+      'act.f.vendor': 'Leverancier',
+      'act.f.unit': 'Prijs per stuk',
+      'act.f.qty': 'Aantal',
+      'act.f.paid': 'Betaald',
+      'act.f.lockBy': 'Beslissen voor',
+      'act.f.note': 'Opmerkingen',
+      'act.f.name': 'Naam',
+      'act.f.owner': 'Eigenaar',
+      'act.f.due': 'Deadline',
+      'act.f.status': 'Status',
+      'act.f.code': 'Roepnaam',
+      'act.f.text': 'Tekst',
+      'act.f.ceiling': 'Plafond',
+      'act.f.inflationPct': 'Inflatiebuffer',
+      'act.f.fxRate': 'Wisselkoers',
+      'act.f.splitEvenly': 'Gelijk verdelen',
+      'act.f.sponsorIds': 'Betaald door',
+      'act.f.position': 'Volgorde',
+      'act.f.email': 'E-mail',
+      'act.f.role': 'Rol',
+      'act.f.passwordHash': 'Wachtwoord',
       'people.empty': 'Nog geen accounts.',
       'people.role': 'Rol',
       'people.add': 'Persoon toevoegen',
@@ -395,6 +497,57 @@
       'people.title': 'Anggota',
       'people.lede': 'Semua orang yang punya akun di perencana ini.',
       'people.notadmin': 'Mengelola akun adalah tugas admin. Minta admin untuk melakukan perubahan itu.',
+      'bar.activity': 'Aktivitas',
+      'act.title': 'Aktivitas',
+      'act.lede': 'Setiap perubahan pada rencana, yang terbaru di atas.',
+      'act.notadmin': 'Aktivitas menyebut semua orang yang punya akun, jadi ini untuk admin. Tanyakan kepada admin apa yang ingin Anda ketahui.',
+      'login.lede.activity': 'Masuk dengan akun admin untuk melihat apa yang berubah.',
+      'act.empty': 'Belum ada perubahan.',
+      'act.more': 'Tampilkan yang lebih lama',
+      'act.failed': 'Aktivitas tidak dapat dimuat. Coba lagi.',
+      'act.s.create': 'Menambahkan {e} {l}',
+      'act.s.update': 'Mengubah {e} {l}',
+      'act.s.delete': 'Menghapus {e} {l}',
+      'act.e.attachments': 'berkas',
+      'act.e.budget_items': 'baris anggaran',
+      'act.e.notes': 'catatan',
+      'act.e.phases': 'fase',
+      'act.e.programme_entries': 'mata acara',
+      'act.e.settings': 'pengaturan',
+      'act.e.sponsors': 'sponsor',
+      'act.e.tasks': 'tugas',
+      'act.e.users': 'akun',
+      'act.k.system': 'Sistem',
+      'act.k.import': 'Impor',
+      'act.k.unknown': 'Tidak ada yang masuk',
+      'act.k.gone': 'Akun yang sudah dihapus',
+      'act.none': 'kosong',
+      'act.hidden': 'diubah, tidak ditampilkan',
+      'act.items': '{n} dipilih',
+      'act.yes': 'ya',
+      'act.no': 'tidak',
+      'act.f.item': 'Item',
+      'act.f.vendor': 'Vendor',
+      'act.f.unit': 'Harga satuan',
+      'act.f.qty': 'Jumlah',
+      'act.f.paid': 'Dibayar',
+      'act.f.lockBy': 'Putuskan sebelum',
+      'act.f.note': 'Keterangan',
+      'act.f.name': 'Nama',
+      'act.f.owner': 'Penanggung jawab',
+      'act.f.due': 'Tenggat',
+      'act.f.status': 'Status',
+      'act.f.code': 'Nama panggilan',
+      'act.f.text': 'Teks',
+      'act.f.ceiling': 'Batas anggaran',
+      'act.f.inflationPct': 'Cadangan inflasi',
+      'act.f.fxRate': 'Kurs',
+      'act.f.splitEvenly': 'Bagi rata',
+      'act.f.sponsorIds': 'Ditanggung oleh',
+      'act.f.position': 'Urutan',
+      'act.f.email': 'Email',
+      'act.f.role': 'Peran',
+      'act.f.passwordHash': 'Kata sandi',
       'people.empty': 'Belum ada akun.',
       'people.role': 'Peran',
       'people.add': 'Tambah orang',
@@ -688,7 +841,7 @@
    * has painted anything.
    * ------------------------------------------------------------------ */
 
-  var AUTH_ROUTES = { login: true, 'set-password': true, admin: true, account: true };
+  var AUTH_ROUTES = { login: true, 'set-password': true, admin: true, account: true, activity: true };
 
   var pendingToken = '';
 
@@ -1062,6 +1215,7 @@
     who.appendChild(make('span', 'account-role', roleWord(user.role)));
 
     if (isAdmin()) acts.appendChild(barButton(t('bar.people'), 'link-btn', 'admin'));
+    if (isAdmin()) acts.appendChild(barButton(t('bar.activity'), 'link-btn', 'activity'));
     acts.appendChild(barButton(t('bar.account'), 'link-btn', 'account'));
     var out = make('button', 'link-btn', t('signout'));
     out.type = 'button';
@@ -1120,7 +1274,7 @@
    * The router
    * ------------------------------------------------------------------ */
 
-  var PANEL_IDS = ['panelLogin', 'panelSetPassword', 'panelAdmin', 'panelAccount', 'panelNote'];
+  var PANEL_IDS = ['panelLogin', 'panelSetPassword', 'panelAdmin', 'panelActivity', 'panelAccount', 'panelNote'];
 
   function showPanel(id, title, lede) {
     each(PANEL_IDS, function (p) { show(byId(p), p === id); });
@@ -1202,10 +1356,12 @@
       // Asked for somewhere that needs an account. Sign in first, then land
       // where they were going rather than back at the planner.
       afterLogin = path;
-      renderLogin(t(path === 'admin' ? 'login.lede.admin' : 'login.lede.account'));
+      renderLogin(t(path === 'admin' ? 'login.lede.admin'
+        : path === 'activity' ? 'login.lede.activity' : 'login.lede.account'));
       return;
     }
     if (path === 'admin') { renderAdmin(); return; }
+    if (path === 'activity') { renderActivity(); return; }
     if (path === 'account') { renderAccount(); return; }
     renderLogin('');
   }
@@ -1373,6 +1529,113 @@
    * ------------------------------------------------------------------ */
 
   var people = [];
+
+  /* Activity: what everybody has been doing, newest first.
+   *
+   * The server has recorded every change since before there was a screen to
+   * show it on; this is that screen. Admins only, and the server enforces it:
+   * every entry names an account, and the list of accounts is theirs to read.
+   *
+   * One sentence per change, in the reader's language, then what moved from
+   * what to what. A new row and a removed row get the sentence alone - the
+   * twelve fields a row is born with are not news. Amounts arrive as the
+   * strings the planner itself shows, so nothing here does arithmetic.
+   */
+  var activityNext = null;
+  var activityLoading = false;
+
+  function renderActivity() {
+    if (!isAdmin()) {
+      showNote(t('act.title'), '', t('act.notadmin'));
+      return;
+    }
+    showPanel('panelActivity', t('act.title'), t('act.lede'));
+    var list = byId('activityList');
+    while (list.firstChild) list.removeChild(list.firstChild);
+    activityNext = null;
+    show(byId('activityEmpty'), false);
+    show(byId('activityMore'), false);
+    say(byId('activityMsg'), '');
+    loadActivity();
+  }
+
+  function loadActivity() {
+    if (activityLoading) return;
+    activityLoading = true;
+    var path = '/activity?limit=50' + (activityNext ? '&before=' + encodeURIComponent(activityNext) : '');
+    request('GET', path).then(function (res) {
+      activityLoading = false;
+      if (res.status === 401) { sessionEnded(); return; }
+      if (res.status !== 200 || !res.body || !Array.isArray(res.body.entries)) {
+        say(byId('activityMsg'), t('act.failed'));
+        return;
+      }
+      var list = byId('activityList');
+      each(res.body.entries, function (entry) { list.appendChild(activityRow(entry)); });
+      activityNext = res.body.nextBefore || null;
+      show(byId('activityMore'), !!activityNext);
+      show(byId('activityEmpty'), !list.firstChild);
+    });
+  }
+
+  function activityRow(entry) {
+    var li = make('li', 'activity');
+
+    var head = make('p', 'activity-head');
+    head.appendChild(make('span', 'activity-who', activityWho(entry.actor || {})));
+    var when = make('time', 'activity-when', activityWhen(entry.at));
+    when.setAttribute('datetime', entry.at || '');
+    head.appendChild(when);
+    li.appendChild(head);
+
+    var noun = STRINGS.en['act.e.' + entry.entity] ? t('act.e.' + entry.entity) : String(entry.entity || '');
+    var label = entry.label ? '“' + entry.label + '”' : '';
+    var sentence = t('act.s.' + entry.action, { e: noun, l: label }).replace(/\s+/g, ' ').trim();
+    li.appendChild(make('p', 'activity-what', sentence.charAt(0).toUpperCase() + sentence.slice(1)));
+
+    if (entry.action === 'update' && entry.changes && entry.changes.length) {
+      var changes = make('ul', 'activity-changes');
+      each(entry.changes, function (c) {
+        var row = make('li', '');
+        row.appendChild(make('span', 'activity-field', activityField(c.field)));
+        row.appendChild(make('span', 'activity-old', activityValue(c.field, c.old)));
+        row.appendChild(make('span', 'activity-arrow', '→'));
+        row.appendChild(make('span', 'activity-new', activityValue(c.field, c['new'])));
+        changes.appendChild(row);
+      });
+      li.appendChild(changes);
+    }
+    return li;
+  }
+
+  function activityWho(actor) {
+    if (actor.email) return actor.email;
+    // An account did this, and the account is gone. The entry outlives it on
+    // purpose; the address does not, also on purpose.
+    if (actor.kind === 'user') return t('act.k.gone');
+    if (actor.kind === 'system' || actor.kind === 'import') return t('act.k.' + actor.kind);
+    return t('act.k.unknown');
+  }
+
+  function activityWhen(at) {
+    var d = new Date(at);
+    if (isNaN(d.getTime())) return '';
+    try { return d.toLocaleString(LANG, { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { return d.toISOString(); }
+  }
+
+  function activityField(field) {
+    return STRINGS.en['act.f.' + field] ? t('act.f.' + field) : String(field);
+  }
+
+  function activityValue(field, value) {
+    if (value === null || value === undefined || value === '') return t('act.none');
+    if (field === 'passwordHash') return t('act.hidden');
+    if (value === true) return t('act.yes');
+    if (value === false) return t('act.no');
+    if (Array.isArray(value)) return value.length ? t('act.items', { n: value.length }) : t('act.none');
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  }
 
   function renderAdmin() {
     if (!isAdmin()) {
@@ -2022,6 +2285,9 @@
   bindAdmin();
   bindPasskeys();
   bindReminders();
+
+  var activityMore = byId('activityMore');
+  if (activityMore) activityMore.addEventListener('click', loadActivity);
 
   var signOutBtn = byId('signOutBtn');
   if (signOutBtn) signOutBtn.addEventListener('click', signOut);

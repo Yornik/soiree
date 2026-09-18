@@ -1364,6 +1364,56 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
 
   ############################################################################
+  # Activity
+  ############################################################################
+
+  /activity:
+    get:
+      tags: [accounts]
+      operationId: listActivity
+      summary: Read what changed, newest first.
+      description: |
+        This is the history of the whole plan. Each write to the plan makes one
+        entry. An entry says who made the change, when, to which row, and the
+        value of each field before and after.
+
+        Only an admin reads this. An entry names an account, and only an admin
+        reads the list of accounts.
+
+        The answer is one page. To read the next page, send the `nextBefore` of
+        this page as `before`. When `nextBefore` is `null`, there is no older
+        entry.
+
+        The values use the same form as the rest of this API. A field name is
+        the name `GET /plan` uses, and an amount is a string in major units.
+
+        An entry stays when its row is deleted, and when the account that made
+        it is deleted. In the second case `actor.id` and `actor.email` become
+        `null`, and `actor.kind` stays `user`.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: The number of entries in one page.
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: before
+          in: query
+          required: false
+          description: |
+            The `id` of an entry. The page holds entries older than this one.
+            Omit it for the newest page.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: One page of entries.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  ############################################################################
   # Attachments
   ############################################################################
 
@@ -1866,6 +1916,87 @@ components:
       format: int32
       description: |
         The order of this row among its siblings. A lower number comes first.
+
+    ########################################################################
+    # Activity
+    ########################################################################
+
+    ActivityPage:
+      type: object
+      required: [entries, nextBefore]
+      additionalProperties: false
+      properties:
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/ActivityEntry' }
+        nextBefore:
+          type: [integer, 'null']
+          format: int64
+          description: |
+            Send this as `before` to read the next page. It is `null` when this
+            page is not full, because then no older entry exists.
+
+    ActivityEntry:
+      type: object
+      description: One change to one row.
+      required: [id, at, entity, entityId, action, label, actor, changes]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: The order of the entries. A larger number is newer.
+        at: { type: string, format: date-time }
+        entity:
+          type: string
+          enum: [attachments, budget_items, notes, phases, programme_entries, settings, sponsors, tasks, users]
+          description: |
+            The table that changed. `users` is here and is not on
+            `GET /events`: an account is not part of the plan.
+        entityId:
+          type: [string, 'null']
+          format: uuid
+          description: The id of the row. It is `null` for `settings`.
+        action:
+          type: string
+          enum: [create, update, delete]
+        label:
+          type: [string, 'null']
+          description: |
+            The name of the row after this change: the item of a budget item,
+            the name of a task, the email of an account. It is the name at that
+            time, and not the name now. It is `null` for `settings`. A long
+            name is cut to 120 characters.
+        actor:
+          type: object
+          required: [id, email, kind]
+          additionalProperties: false
+          properties:
+            id: { type: [string, 'null'], format: uuid }
+            email:
+              type: [string, 'null']
+              description: The address of the account now. It is not the address at that time.
+            kind:
+              type: string
+              description: |
+                `user` for an account. `system` and `import` for the server
+                itself. `unknown` for a write with no session behind it.
+              examples: [user, system, import, unknown]
+        changes:
+          type: array
+          description: |
+            One item for each field that changed, in the order of `field`. On a
+            `create`, each `old` is `null`. On a `delete`, each `new` is
+            `null`. A password is never here: where `passwordHash` has a
+            value, that value is the word `"redacted"`.
+          items:
+            type: object
+            required: [field, old, new]
+            additionalProperties: false
+            properties:
+              field: { type: string, example: paid }
+              old: { description: The value before. Its type is the type of the field. }
+              new: { description: The value after. Its type is the type of the field. }
 
     ########################################################################
     # Attachments
