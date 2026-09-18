@@ -622,6 +622,64 @@ table.budget thead th:first-child { background: var(--tint); z-index: 3; }
   cursor: pointer;
 }
 .sp-pop label:hover { background: var(--rule); }
+/* --- Attachments ---
+   The paperclip sits inside the first cell of a row, over the right-hand end
+   of the name. That column is frozen, so it stays in view however far the
+   table has been scrolled, and the field gives up the width the button takes
+   rather than running underneath it. */
+td.has-files { position: relative; }
+td.has-files textarea, td.has-files input[type="text"] { padding-right: 46px; }
+.files-btn {
+  appearance: none;
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.files-btn:hover, .files-btn:focus-visible, .files-btn[aria-expanded="true"] { opacity: 1; color: var(--ink); }
+.files-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+/* A row that has files says so at full strength; one that has none only offers. */
+.files-btn.has-some { opacity: 1; color: var(--ink); }
+
+.files-pop { width: min(360px, calc(100vw - 16px)); max-height: min(420px, calc(100vh - 16px)); padding: 10px; }
+.files-title { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); padding: 2px 4px 8px; }
+.files-list { list-style: none; margin: 0; padding: 0; }
+.files-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 7px 4px;
+  border-top: 1px solid var(--rule);
+  font-size: 13.5px;
+}
+.files-name { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+a.files-name { text-decoration: underline; text-underline-offset: 2px; }
+.files-meta, .files-dl { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.files-dl { text-decoration: underline; text-underline-offset: 2px; }
+.files-none { padding: 7px 4px; font-size: 13px; color: var(--ink-2); border-top: 1px solid var(--rule); }
+.files-pending progress { grid-column: 1 / -1; width: 100%; height: 6px; accent-color: var(--ink); }
+.files-pending .files-meta { white-space: normal; }
+.files-failed .files-meta { color: var(--rust); }
+.files-foot { padding-top: 8px; }
+.files-foot .pop-note { border-top: 0; margin-top: 2px; }
+.files-add { width: 100%; }
+
 .sp-pop .pop-note {
   font-size: 12px;
   color: var(--ink-2);
@@ -838,6 +896,8 @@ body.is-archived .when-data { display: block; }
   input[type="email"], input[type="password"], select, textarea { min-height: 44px; }
   .toggle-line input, .sp-pop input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; }
   .del-btn { min-width: 44px; min-height: 44px; }
+  .files-btn { min-width: 44px; height: 44px; top: 0; right: 0; justify-content: center; }
+  td.has-files textarea, td.has-files input[type="text"] { padding-right: 50px; }
   .tab-btn { padding: 14px 2px; }
   .pill, .add-row-btn, .ghost-btn { padding: 13px 16px; }
   .by-btn { min-height: 44px; }
@@ -964,6 +1024,8 @@ body.showing-auth #plannerWrap { display: none; }
    from your device" does not arrive looking like a failure. */
 .auth-msg.is-refusal { color: var(--rust); }
 .auth-note-body { margin: 0 0 14px; color: var(--ink-2); max-width: 58ch; }
+/* Small enough to ignore, present enough to read out over the phone. */
+.app-version { margin: 18px 0 0; font-size: 0.6875rem; letter-spacing: 0.02em; color: var(--ink-2); opacity: 0.7; text-align: center; }
 .auth-aside { margin: 22px 0 0; }
 .auth-foot { margin: 34px 0 0; padding-top: 16px; border-top: 1px solid var(--rule); }
 

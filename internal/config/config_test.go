@@ -482,3 +482,96 @@ func TestBootstrapPasswordKeepsItsSpaces(t *testing.T) {
 		t.Errorf("BootstrapPassword = %q, want the spaces kept", c.BootstrapPassword)
 	}
 }
+
+func setBucket(t *testing.T) {
+	t.Helper()
+	t.Setenv("SOIREE_S3_ENDPOINT", "https://s3.example.test")
+	t.Setenv("SOIREE_S3_REGION", "nbg1")
+	t.Setenv("SOIREE_S3_BUCKET", "files")
+	t.Setenv("SOIREE_S3_ACCESS_KEY_ID", "id")
+	t.Setenv("SOIREE_S3_SECRET_ACCESS_KEY", "secret")
+}
+
+// With nothing set the binary still starts, attachments are off, and the page
+// is told nothing about them: the same rule as mail and push, and what a bare
+// `docker run` depends on.
+func TestAttachmentsAreOffByDefault(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Attachments.Enabled() {
+		t.Error("attachments are on with no bucket configured")
+	}
+	if c.Client().Attachments != nil {
+		t.Error("the page is told about attachments that do not exist")
+	}
+	if c.Attachments.MaxBytes != 25<<20 || c.Attachments.TotalBytes != 2048<<20 {
+		t.Errorf("default limits = %d / %d", c.Attachments.MaxBytes, c.Attachments.TotalBytes)
+	}
+}
+
+// A bucket with no secret would start, draw the control, and fail every upload
+// in somebody's hand. It has to fail here instead, and say which variable.
+func TestAHalfConfiguredBucketIsRefused(t *testing.T) {
+	setBucket(t)
+	t.Setenv("SOIREE_S3_SECRET_ACCESS_KEY", "")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("a bucket with no secret was accepted")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "SOIREE_S3_SECRET_ACCESS_KEY missing") {
+		t.Errorf("the error does not name what is missing: %v", err)
+	}
+}
+
+// The page learns the limit, and only on a deployment where an upload could
+// work: a file's record is a database row, so a bucket alone is not enough.
+func TestThePageIsToldTheLimitOnlyWhenUploadsCanWork(t *testing.T) {
+	setBucket(t)
+	t.Setenv("SOIREE_ATTACHMENT_MAX_MB", "10")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Attachments.Enabled() {
+		t.Fatal("attachments are off with a whole bucket configured")
+	}
+	if c.Client().Attachments != nil {
+		t.Error("no database, and the page is still offered attachments")
+	}
+
+	c.DatabaseURL = "postgres://example.test/soiree"
+	got := c.Client().Attachments
+	if got == nil || got.MaxBytes != 10<<20 {
+		t.Fatalf("client attachments = %+v, want maxBytes %d", got, 10<<20)
+	}
+
+	// And nothing that identifies the bucket reaches the page.
+	js, err := c.ClientJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"s3.example.test", "files", "secret", "nbg1"} {
+		if strings.Contains(js, leak) {
+			t.Errorf("client config contains %q: %s", leak, js)
+		}
+	}
+}
+
+func TestAttachmentLimitsAreValidated(t *testing.T) {
+	for name, env := range map[string][2]string{
+		"not a number":          {"SOIREE_ATTACHMENT_MAX_MB", "lots"},
+		"zero":                  {"SOIREE_ATTACHMENT_MAX_MB", "0"},
+		"negative total":        {"SOIREE_ATTACHMENTS_TOTAL_MB", "-1"},
+		"one file over the lot": {"SOIREE_ATTACHMENT_MAX_MB", "4096"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(env[0], env[1])
+			if _, err := Load(); err == nil {
+				t.Errorf("%s=%s was accepted", env[0], env[1])
+			}
+		})
+	}
+}

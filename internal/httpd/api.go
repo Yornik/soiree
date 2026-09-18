@@ -76,6 +76,7 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /plan", s.servePlan)
 	api.HandleFunc("GET /events", s.serveEvents)
+	api.HandleFunc("GET /version", serveVersion)
 
 	// The currency is read once here rather than per request: it comes from the
 	// environment and cannot change while the process runs. It is what turns
@@ -90,6 +91,9 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	register(api, phaseEntity(s.store, currency))
 	register(api, programmeEntity(s.store, currency))
 	api.HandleFunc("PATCH /settings", patchSettings(s.store, currency))
+	if s.files != nil {
+		s.files.route(api)
+	}
 
 	// Everything above is guarded as one subtree rather than per route.
 	//
@@ -131,6 +135,19 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	push := http.NewServeMux()
 	s.routePush(push)
 	mux.Handle(apiPrefix+"push/", noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), push)))
+}
+
+// serveVersion says which release is running, to somebody signed in.
+//
+// Inside the guard on purpose. The public page does not name its build, for the
+// reason /metrics is on a port of its own: "which version is this?" is the
+// first thing anybody probing a deployment wants to know, and the only people
+// with a use for the answer are the ones who can report a problem with it.
+// The release, not the commit: that is what a person quotes in a bug report.
+func serveVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, struct {
+		Version string `json:"version"`
+	}{Version})
 }
 
 // withActor names whoever is signed in as the author of anything they change.

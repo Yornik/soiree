@@ -295,13 +295,13 @@ async function freshSession(request, base = API_URL, who = { email: ADMIN_EMAIL,
 // to be last, which is what happened. Specs that belong together share a name.
 const editors = new Set();
 
-async function ensureEditor(request, base = API_URL, name = 'grace') {
+async function ensureEditor(request, base = API_URL, name = 'grace', role = 'editor') {
   const EDITOR = { email: `${name}-e2e@example.test`, password: 'a-second-long-password' };
   if (editors.has(base + name)) return EDITOR;
 
   const headers = await apiAuth(request, base);
   const made = await request.post(`${base}/api/v1/users`, {
-    headers, data: { email: EDITOR.email, role: 'editor' },
+    headers, data: { email: EDITOR.email, role },
   });
   // 409: a server left running from an earlier run already has it.
   if (made.status() !== 409) {

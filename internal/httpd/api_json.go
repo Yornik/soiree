@@ -380,6 +380,10 @@ type planJSON struct {
 	Programme   []programmeJSON  `json:"programme"`
 	Tasks       []taskJSON       `json:"tasks"`
 	Notes       []noteJSON       `json:"notes"`
+	// Always present, and empty on a deployment with no bucket: a client that
+	// reads the plan should not have to know whether files are switched on to
+	// know what shape to expect.
+	Attachments []attachmentJSON `json:"attachments"`
 }
 
 func encodePlan(currency string, p store.Plan) planJSON {
@@ -391,6 +395,10 @@ func encodePlan(currency string, p store.Plan) planJSON {
 		Programme:   make([]programmeJSON, 0, len(p.Programme)),
 		Tasks:       make([]taskJSON, 0, len(p.Tasks)),
 		Notes:       make([]noteJSON, 0, len(p.Notes)),
+		Attachments: make([]attachmentJSON, 0, len(p.Attachments)),
+	}
+	for _, a := range p.Attachments {
+		out.Attachments = append(out.Attachments, encodeAttachment(a))
 	}
 	for _, v := range p.Phases {
 		out.Phases = append(out.Phases, encodePhase(v))

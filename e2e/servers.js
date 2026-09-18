@@ -26,6 +26,11 @@ const API_METRICS_PORT = API_PORT + 1000;
 // The throwaway PostgreSQL the API instance talks to, published on loopback.
 const PG_PORT = Number(process.env.SOIREE_E2E_PG_PORT || PORT + 2000);
 
+// And the throwaway bucket its attachments go to. The browser talks to this one
+// directly, which is the point of the design and the reason it is a real S3
+// server rather than a stub: a stub cannot refuse a body of the wrong length.
+const S3_PORT = Number(process.env.SOIREE_E2E_S3_PORT || PORT + 3000);
+
 // The first admin, seeded into the API instance by SOIREE_BOOTSTRAP_*. The
 // plan API is behind a session, so anything reaching it directly — a raw
 // request context rather than a page — has to sign in like a browser would.
@@ -42,6 +47,8 @@ module.exports = {
   ALT_METRICS_PORT,
   API_METRICS_PORT,
   PG_PORT,
+  S3_PORT,
+  S3_URL: `http://127.0.0.1:${S3_PORT}`,
   BASE_URL: `http://127.0.0.1:${PORT}`,
   ALT_URL: `http://127.0.0.1:${ALT_PORT}`,
   API_URL: `http://127.0.0.1:${API_PORT}`,

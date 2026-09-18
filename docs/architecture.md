@@ -323,9 +323,9 @@ constraint drives the design:
 4. **Compression and cache headers in the binary.** No proxy configuration is
    required for either.
 
-Measured at 1.0.0, brotli: shell 4.3 kB, stylesheet 8.8 kB, planner script
-39 kB, accounts script 22 kB, font 33 kB. Both scripts are `defer`, so first
-paint needs the shell and stylesheet only — about 13 kB.
+Measured at 1.1.0, brotli, from a running server: shell 4.3 kB, stylesheet
+9.4 kB, planner script 44 kB, accounts script 22 kB, font 33 kB. Both scripts
+are `defer`, so first paint needs the shell and stylesheet only — about 14 kB.
 
 ### Deliberately excluded
 
@@ -1306,6 +1306,98 @@ channel is allowed to do that to the other. A push failure never fails the run �
 it has already been mailed — and mail failing does not release the claim if any
 device was reached, because releasing it asserts that this period reached
 nobody.
+
+### Attachments
+
+Files on budget lines and tasks. The bytes are in an S3 bucket and never pass
+through this process; what soiree holds is the record, and what it does is sign.
+
+```
+browser                         soiree                          bucket
+   │  POST /attachments            │                               │
+   │  {parent, name, size, type} ─▶│ quota under an advisory lock  │
+   │                               │ row: 'uploading'              │
+   │◀─ 201 {attachment, upload} ───│ sign PUT for exactly `size`   │
+   │                                                               │
+   │  PUT <signed address>  ──────────────────────────────────────▶│ refuses any
+   │◀─ 200 ────────────────────────────────────────────────────────│ other length
+   │                               │                               │
+   │  POST …/{id}/complete ───────▶│ HEAD ────────────────────────▶│
+   │                               │◀─ size ───────────────────────│
+   │◀─ 200 ────────────────────────│ row: 'ready'; change_log;     │
+   │                               │ NOTIFY → every open page      │
+   │  GET …/{id}/content ─────────▶│ session? allow-list?          │
+   │◀─ 303 Location: <signed GET> ─│ sign GET, 60 s, disposition   │
+   │  GET <signed address> ───────────────────────────────────────▶│
+```
+
+**Why direct.** The likely origin is a small machine behind a home connection,
+and the people using it may be on the far side of the world. Proxying would
+carry every photograph across that uplink twice, and would not survive it
+anyway: `ReadTimeout` is 30 s and a reverse proxy in front typically allows 60,
+neither of which is a 25 MB upload from a phone. A direct upload passes through
+neither, so there is no chunking protocol to get wrong. It also puts downloads
+on the bucket's origin, where a hostile file cannot reach this site's session
+cookie at all.
+
+**Why no SDK.** All four operations are one algorithm — Signature Version 4 in
+its query-string form. The browser is given the PUT and GET addresses; the
+server calls the HEAD and DELETE addresses itself over `net/http`. That is one
+signing routine (`internal/objstore`, about a hundred lines of `crypto/hmac`),
+checked against the signature AWS publishes for its own example, against ~15
+modules of SDK for four calls.
+
+**What is signed, and why each.** `Content-Length`, so the bucket refuses a body
+of any other size and the quota is decided before the upload rather than
+discovered after it — the integration test shows a bucket storing eleven bytes
+to an address meant for ten the moment the length is left out of the signature.
+`Content-Type`, so the stored object carries what was declared. On download,
+`response-content-disposition` and `response-content-type`, so whoever holds the
+address cannot turn "save this" into "render this". How a file is served comes
+from a five-entry allow-list in the handler (JPEG, PNG, WebP, GIF, PDF may open
+inline); the type a file was stored with never picks its own treatment, and SVG
+is absent because it is a document format that runs script.
+
+**Two systems that do not commit together.** A row can exist with no object (an
+upload somebody abandoned) and an object can outlive its row (a delete that
+reached Postgres and not the bucket). Neither can be prevented, so both are made
+harmless:
+
+- `status` is `uploading` until the server has seen the object at its declared
+  size. Only `ready` rows are in the plan. `uploading` rows still count toward
+  the quota — otherwise the cap is a race anybody wins by starting ten uploads
+  before finishing one — and the sweeper removes them after an hour.
+- An `AFTER DELETE` trigger writes each removed row's object key into
+  `attachment_garbage` in the same transaction. Deleting a budget line cascades
+  to its attachments inside Postgres, where no application code runs and the
+  server never learns which rows went; the trigger is how the objects are still
+  found. The server drains the queue at start and hourly, and a key leaves only
+  once its object is confirmed gone. `ObjectKey` therefore exists twice, in Go
+  and in the trigger, and a test holds the two together.
+
+**Not knowing is not the same as knowing it failed.** When the bucket does not
+answer, `complete` says 503 and keeps the row, so the same request works once it
+is back and the page retries by itself. When the bucket says there is nothing
+there, or something of another size, the row and the object both go.
+
+**History.** A file is recorded when it is confirmed and when it is removed —
+including when its parent is removed, which both delete paths record in Go
+because a cascade is invisible to the change log. The uploader is *not* written
+into the entry: its actor already says who, and a second copy of their id inside
+the JSON would be the one that outlives the deletion of their account.
+
+**In the page** attachments are deliberately not part of `state`. A file exists
+on the server or it does not exist: there is nothing to edit offline, nothing to
+merge, nothing to cache. The list arrives with every plan read and is replaced,
+and a change notice for `attachments` — which has no revision to compare — means
+"read the plan again". They are a collection of their own in `GET /plan` rather
+than a list on each row, because a row is sent back whole on an edit and the API
+refuses fields it does not know.
+
+**Not done.** Nothing scans a file. There is no resumable upload: a dropped
+connection starts that file again, which the 25 MB default keeps tolerable.
+Export and the database backup carry records, never bytes. The subject-access
+tooling in `privacy.go` does not look at file names.
 
 ### Build and supply chain (track 6)
 

@@ -1126,6 +1126,35 @@
     each(PANEL_IDS, function (p) { show(byId(p), p === id); });
     setText(byId('authTitle'), title);
     setText(byId('authLede'), lede || '');
+    drawVersion();
+  }
+
+  /* Which release this is, very small, under every screen somebody signed in
+   * can open. It is what a person needs to quote when they report a problem,
+   * and the people who can report one are the ones who can sign in - so the
+   * server only tells them, and this asks once per page, not once per screen.
+   * No translation: it is a name and a number.
+   */
+  var appVersion = '';
+  var versionAsked = false;
+
+  function drawVersion() {
+    var el = byId('appVersion');
+    if (!el) return;
+    // Emptied as well as hidden, so the page behind a sign-in screen does not
+    // go on saying what the last person to use this browser was told.
+    if (!user) { setText(el, ''); show(el, false); return; }
+    if (appVersion) { setText(el, appVersion); show(el, true); return; }
+    if (versionAsked) return;
+    // Once, whatever the answer. An older server has no such route, and asking
+    // it again on every screen would not change that.
+    versionAsked = true;
+    request('GET', '/version').then(function (res) {
+      var v = res.status === 200 && res.body && res.body.version ? String(res.body.version) : '';
+      if (!v) return;
+      appVersion = 'soiree ' + (/^[0-9]/.test(v) ? 'v' + v : v);
+      drawVersion();
+    });
   }
 
   function showNote(title, lede, line) {

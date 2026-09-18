@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/Yornik/soiree/internal/config"
@@ -296,5 +297,27 @@ func TestAnyoneSignedInMaySubscribe(t *testing.T) {
 	}
 	if len(notifiable) != 0 {
 		t.Errorf("a viewer's device is in the digest's audience: %+v", notifiable)
+	}
+}
+
+// Which release is running is for people who can sign in, and nobody else: it
+// is the first thing anybody probing a deployment asks.
+func TestTheVersionIsToldOnlyToSomebodySignedIn(t *testing.T) {
+	f := newPushFixture(t)
+	f.seed(t, "viewer@example.test", store.RoleViewer, "correct horse battery staple")
+
+	if rec := f.do(t, http.MethodGet, "/api/v1/version", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("with no session: %d %s, want 401", rec.Code, rec.Body)
+	}
+
+	old := Version
+	Version = "1.2.3"
+	t.Cleanup(func() { Version = old })
+
+	// The least privileged account there is. It is a read.
+	cookie := f.login(t, "viewer@example.test", "correct horse battery staple")
+	rec := f.do(t, http.MethodGet, "/api/v1/version", nil, cookie)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"version":"1.2.3"}` {
+		t.Fatalf("signed in: %d %s", rec.Code, rec.Body)
 	}
 }

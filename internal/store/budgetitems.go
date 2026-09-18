@@ -178,6 +178,16 @@ func (s *Store) DeleteBudgetItem(ctx context.Context, id uuid.UUID, revision int
 		if err != nil {
 			return struct{}{}, err
 		}
+		// The files on every line of the subtree go too, by cascade. Read them
+		// while they are still there; see lockAttachmentsOf.
+		ids := make([]uuid.UUID, len(doomed))
+		for i, item := range doomed {
+			ids[i] = item.ID
+		}
+		files, err := lockAttachmentsOf(ctx, tx, attachmentsOfBudgetItems, ids)
+		if err != nil {
+			return struct{}{}, err
+		}
 		tag, err := tx.Exec(ctx, `DELETE FROM budget_items WHERE id = $1 AND revision = $2`, id, revision)
 		if err != nil {
 			return struct{}{}, fmt.Errorf("budget_items: %w", err)
@@ -190,7 +200,7 @@ func (s *Store) DeleteBudgetItem(ctx context.Context, id uuid.UUID, revision int
 				return struct{}{}, err
 			}
 		}
-		return struct{}{}, nil
+		return struct{}{}, recordAttachmentsLost(ctx, tx, files, actor)
 	})
 	if err == nil {
 		return nil

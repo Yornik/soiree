@@ -150,6 +150,17 @@ tags:
     description: The programme and the tasks.
   - name: notes
     description: The free notes on the plan.
+  - name: attachments
+    description: |
+      Files on budget items and on tasks.
+
+      An attachment is one file. It belongs to one budget item or to one task.
+      The file is not in this API: it is in an object store, and the browser
+      sends it there and gets it from there. This API gives the browser the
+      addresses, and keeps the record.
+
+      These paths are routes where the deployment has an object store. Without
+      one, they answer `404`, and `attachments` in the plan is an empty list.
   - name: push
     description: |
       Receive the digest on a phone.
@@ -804,6 +815,33 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /version:
+    get:
+      tags: [plan]
+      operationId: getVersion
+      summary: Read which release is running.
+      description: |
+        The answer is the release, for example `1.1.0`. It is not the commit.
+        A build with no release set answers `dev`.
+
+        Every role reads it. A request with no session gets `401`: the public
+        page does not name its build.
+      responses:
+        '200':
+          description: The release.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [version]
+                properties:
+                  version:
+                    type: string
+                    example: 1.1.0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /events:
     get:
       tags: [plan]
@@ -1326,6 +1364,184 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
 
   ############################################################################
+  # Attachments
+  ############################################################################
+
+  /attachments:
+    post:
+      tags: [attachments]
+      operationId: beginAttachment
+      summary: Start an upload.
+      description: |
+        This is the first of three steps.
+
+        1. Call this. The answer holds an address (`upload.url`) and the
+           headers to send.
+        2. Send the file to that address with `PUT`. Send the headers exactly
+           as given. Do not send the session cookie: the address is in the
+           object store, and not in this API.
+        3. Call `POST /attachments/{id}/complete`.
+
+        The address accepts one body of exactly `size` bytes and of exactly
+        `contentType`. The object store refuses any other body. The address
+        stops working at `upload.expiresAt`.
+
+        Name one parent: `budgetItemId` or `taskId`, and not both.
+
+        The server cleans `name`. It removes a directory part and characters
+        that do not show. The answer holds the name as stored.
+
+        The attachment counts against the total size from this moment. It is
+        not in the plan until step 3 succeeds. The server removes an upload
+        that is not completed within one hour.
+
+        A viewer cannot call this.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachmentBegin'
+      responses:
+        '201':
+          description: The attachment as recorded, and where to send the file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentBegun'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: |
+            The file does not fit in the space that remains. The code is
+            `quota_exceeded`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '413':
+          description: |
+            The file is larger than one file can be on this deployment. The
+            code is `payload_too_large`. The page configuration holds the limit
+            (`attachments.maxBytes`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+  /attachments/{id}/complete:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [attachments]
+      operationId: completeAttachment
+      summary: Confirm an upload.
+      description: |
+        Call this after the `PUT` succeeds. Send no body.
+
+        The server asks the object store for the file. If the file is there
+        and has the size you declared, the attachment is ready: it is in the
+        plan, in the change history, and on `GET /events`.
+
+        If no file is there, or the size is different, the server deletes the
+        attachment and the file. Start again with `POST /attachments`.
+
+        If the object store does not answer, nothing is deleted. Call this
+        again.
+
+        A second call for an attachment that is ready gives the same answer.
+      responses:
+        '200':
+          description: The attachment, ready.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Attachment' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            No file arrived, or the file has a different size. The code is
+            `upload_incomplete`. The attachment is deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+        '503':
+          description: |
+            The object store did not answer. The code is `storage_unavailable`.
+            The attachment is kept. Call again after `Retry-After` seconds.
+          headers:
+            Retry-After:
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiError' }
+
+  /attachments/{id}/content:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [attachments]
+      operationId: getAttachmentContent
+      summary: Get the file.
+      description: |
+        The answer is a redirect to the file in the object store. The address
+        in `Location` works for one minute and needs no session. An ordinary
+        link to this path downloads the file.
+
+        The browser saves the file under its name. It does not show the file.
+
+        With `inline=1`, the browser shows the file, if the attachment is
+        `viewable`. For an attachment that is not `viewable`, `inline=1` does
+        nothing: the browser saves the file. The server decides this. The type
+        the file was stored with does not.
+
+        Every role reads a file. An attachment that is not ready answers `404`.
+      parameters:
+        - name: inline
+          in: query
+          required: false
+          description: Send `1` to show a `viewable` file in the browser.
+          schema:
+            type: string
+            enum: ['1']
+      responses:
+        '303':
+          description: Go to `Location` for the file.
+          headers:
+            Location:
+              description: The file in the object store. It works for one minute.
+              schema: { type: string, format: uri }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /attachments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    delete:
+      tags: [attachments]
+      operationId: deleteAttachment
+      summary: Delete an attachment.
+      description: |
+        This deletes the record and the file.
+
+        It takes no `revision`. An attachment is added or deleted, and never
+        changed, so it has no revision to be stale.
+
+        When you delete a budget item or a task, its attachments go with it.
+        You do not delete them first.
+
+        A viewer cannot call this.
+      responses:
+        '204':
+          description: Deleted.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  ############################################################################
   # Web push
   ############################################################################
 
@@ -1652,6 +1868,108 @@ components:
         The order of this row among its siblings. A lower number comes first.
 
     ########################################################################
+    # Attachments
+    ########################################################################
+
+    Attachment:
+      type: object
+      description: |
+        One file on a budget item or on a task. Exactly one of `budgetItemId`
+        and `taskId` holds an id. The other is `null`.
+      required: [id, budgetItemId, taskId, name, contentType, size, viewable, uploadedBy, createdAt]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
+        budgetItemId: { type: [string, 'null'], format: uuid }
+        taskId: { type: [string, 'null'], format: uuid }
+        name:
+          type: string
+          description: The file name, as the server cleaned it.
+        contentType:
+          type: string
+          description: |
+            The type the uploader gave. It is `application/octet-stream` when
+            the uploader gave none. It does not decide how the file is served:
+            see `viewable`.
+          example: application/pdf
+        size:
+          type: integer
+          format: int64
+          description: The length of the file in bytes.
+        viewable:
+          type: boolean
+          description: |
+            `true` if `GET /attachments/{id}/content?inline=1` shows the file
+            in the browser. This is `true` for JPEG, PNG, WebP and GIF images
+            and for PDF. It is `false` for every other type.
+        uploadedBy:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The account that uploaded the file. It is `null` after that
+            account is deleted.
+        createdAt: { type: string, format: date-time }
+
+    AttachmentBegin:
+      type: object
+      description: |
+        What you send to start an upload. An unknown field is a `400`.
+      required: [name, size]
+      additionalProperties: false
+      properties:
+        budgetItemId:
+          type: [string, 'null']
+          format: uuid
+          description: The budget item. Send this or `taskId`, and not both.
+        taskId:
+          type: [string, 'null']
+          format: uuid
+          description: The task. Send this or `budgetItemId`, and not both.
+        name:
+          type: string
+          description: The file name. The server cleans it.
+        size:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The length of the file in bytes. It must be exact.
+        contentType:
+          type: string
+          description: |
+            The type of the file. Send what the browser reports. An empty
+            value is stored as `application/octet-stream`.
+
+    AttachmentBegun:
+      type: object
+      required: [attachment, upload]
+      additionalProperties: false
+      properties:
+        attachment: { $ref: '#/components/schemas/Attachment' }
+        upload:
+          type: object
+          description: Where to send the file, and how.
+          required: [url, method, headers, expiresAt]
+          additionalProperties: false
+          properties:
+            url:
+              type: string
+              format: uri
+              description: |
+                An address in the object store. It is a secret until it
+                expires: a person who holds it can send the file.
+            method:
+              type: string
+              enum: [PUT]
+            headers:
+              type: object
+              description: |
+                Send each of these exactly as given. They are part of the
+                signature of the address.
+              additionalProperties: { type: string }
+              example: { Content-Type: application/pdf }
+            expiresAt: { type: string, format: date-time }
+
+    ########################################################################
     # Errors
     ########################################################################
 
@@ -1671,6 +1989,9 @@ components:
             - not_found
             - stale_revision
             - payload_too_large
+            - quota_exceeded
+            - upload_incomplete
+            - storage_unavailable
             - conflict
             - internal
             - unauthenticated
@@ -1715,7 +2036,7 @@ components:
       type: object
       description: |
         The whole plan in one object. `GET /plan` returns this.
-      required: [settings, phases, sponsors, budgetItems, programme, tasks, notes]
+      required: [settings, phases, sponsors, budgetItems, programme, tasks, notes, attachments]
       properties:
         settings: { $ref: '#/components/schemas/Settings' }
         phases:
@@ -1736,6 +2057,14 @@ components:
         notes:
           type: array
           items: { $ref: '#/components/schemas/Note' }
+        attachments:
+          type: array
+          description: |
+            Every attachment that is ready, for every budget item and every
+            task, oldest first. Find the attachments of a row by
+            `budgetItemId` or `taskId`. The list is empty on a deployment with
+            no object store.
+          items: { $ref: '#/components/schemas/Attachment' }
 
     ChangeNotice:
       type: object
@@ -1747,7 +2076,7 @@ components:
       properties:
         entity:
           type: string
-          enum: [budget_items, notes, phases, programme_entries, settings, sponsors, tasks]
+          enum: [attachments, budget_items, notes, phases, programme_entries, settings, sponsors, tasks]
           description: |
             The table that changed. These are the names of the tables, with an
             underscore. They are not the names of the paths, which use a
@@ -1767,7 +2096,8 @@ components:
           description: |
             The revision the row now has. On a `delete` it is the last
             revision of the row. It is `null` for a row that carries no
-            revision.
+            revision. An attachment carries none, so for `attachments` it is
+            always `null`: read the plan again.
 
     Settings:
       type: object

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Yornik/soiree/internal/config"
 	"github.com/Yornik/soiree/internal/migrate"
+	"github.com/Yornik/soiree/internal/objstore"
 	"github.com/Yornik/soiree/internal/pgtest"
 	"github.com/Yornik/soiree/internal/store"
 	"github.com/Yornik/soiree/web"
@@ -134,8 +135,26 @@ func newFullServer(t *testing.T) (http.Handler, *Auth, *store.Store) {
 		t.Fatalf("enable passkeys: %v", err)
 	}
 
-	return s.WithAuth(a).Handler(), a, st
+	// Files too, so their documented routes are routes. A bucket that holds
+	// nothing is enough for "does this path exist?", and keeps this file's
+	// tests off the network; what the routes do is attachments_test.go's job,
+	// against a real one.
+	files := NewAttachments(st, emptyBucket{}, 1<<20, 1<<24, nil)
+
+	return s.WithAuth(a).WithAttachments(files).Handler(), a, st
 }
+
+// emptyBucket signs nothing and holds nothing.
+type emptyBucket struct{}
+
+func (emptyBucket) PresignPut(string, int64, string, time.Duration) objstore.Upload {
+	return objstore.Upload{URL: "https://bucket.example.test/upload", Headers: map[string]string{}}
+}
+func (emptyBucket) PresignGet(string, time.Duration, string, string) string {
+	return "https://bucket.example.test/download"
+}
+func (emptyBucket) Head(context.Context, string) (int64, error) { return 0, objstore.ErrNotFound }
+func (emptyBucket) Delete(context.Context, string) error        { return nil }
 
 func TestEveryDocumentedRouteExists(t *testing.T) {
 	h, a, st := newFullServer(t)
@@ -269,6 +288,60 @@ func TestEveryCollectionIsDocumented(t *testing.T) {
 			if _, ok := doc.Paths[want]; !ok {
 				t.Errorf("collection %q has no %q in api/openapi.yaml", c, want)
 			}
+		}
+	}
+}
+
+// A collection added to GET /plan and not to the specification passed every
+// test in this file, which is how this one came to exist: `attachments` was in
+// the plan for a day before it was in the document, and nothing noticed. The
+// plan's keys and the Plan schema's properties have to be the same set.
+func TestEveryKeyOfThePlanIsDocumented(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "api", "openapi.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Components struct {
+			Schemas map[string]struct {
+				Required   []string             `yaml:"required"`
+				Properties map[string]yaml.Node `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse the specification: %v", err)
+	}
+	schema := doc.Components.Schemas["Plan"]
+	if len(schema.Properties) == 0 {
+		t.Fatal("api/openapi.yaml has no Plan schema, or it has no properties")
+	}
+
+	encoded, err := json.Marshal(encodePlan("EUR", store.Plan{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onWire map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &onWire); err != nil {
+		t.Fatal(err)
+	}
+
+	required := map[string]bool{}
+	for _, r := range schema.Required {
+		required[r] = true
+	}
+	for key := range onWire {
+		if _, ok := schema.Properties[key]; !ok {
+			t.Errorf("GET /plan carries %q, which Plan in api/openapi.yaml does not describe", key)
+		}
+		// Every key is always present, empty or not, so every key is required.
+		if !required[key] {
+			t.Errorf("GET /plan always carries %q, and Plan does not list it as required", key)
+		}
+	}
+	for key := range schema.Properties {
+		if _, ok := onWire[key]; !ok {
+			t.Errorf("Plan in api/openapi.yaml describes %q, which GET /plan does not carry", key)
 		}
 	}
 }
@@ -513,6 +586,7 @@ func TestTheChangeFrameIsAsDocumented(t *testing.T) {
 	// a hyphen, and that is the other thing a reader would guess wrong.
 	announced := map[string]bool{}
 	for _, e := range []string{
+		store.EntityAttachments,
 		store.EntityBudgetItems, store.EntityNotes, store.EntityPhases,
 		store.EntityProgrammeEntries, store.EntitySettings, store.EntitySponsors, store.EntityTasks,
 	} {
