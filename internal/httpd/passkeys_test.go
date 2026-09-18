@@ -25,8 +25,10 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +77,11 @@ type softAuthenticator struct {
 	backupEligible bool
 	backupState    bool
 	userVerified   bool
+
+	// clientExtensions is what the browser reports as clientExtensionResults.
+	// Nil is the empty object every browser sends when it has nothing to say;
+	// the interesting values are the ones a browser sends without being asked.
+	clientExtensions map[string]any
 }
 
 func newSoftAuthenticator(t *testing.T, credID string) *softAuthenticator {
@@ -213,6 +220,7 @@ func (s *softAuthenticator) register(t *testing.T, challenge, origin string) jso
 		"rawId":                   b64(s.credID),
 		"type":                    "public-key",
 		"authenticatorAttachment": "platform",
+		"clientExtensionResults":  s.extensionResults(),
 		"response": map[string]any{
 			"clientDataJSON":     b64(clientData(t, "webauthn.create", challenge, origin)),
 			"attestationObject":  b64(attestation),
@@ -242,6 +250,7 @@ func (s *softAuthenticator) assert(t *testing.T, challenge, origin string, userH
 		"rawId":                   b64(s.credID),
 		"type":                    "public-key",
 		"authenticatorAttachment": "platform",
+		"clientExtensionResults":  s.extensionResults(),
 		"response": map[string]any{
 			"clientDataJSON":    b64(cd),
 			"authenticatorData": b64(ad),
@@ -249,6 +258,13 @@ func (s *softAuthenticator) assert(t *testing.T, challenge, origin string, userH
 			"userHandle":        b64(userHandle),
 		},
 	})
+}
+
+func (s *softAuthenticator) extensionResults() map[string]any {
+	if s.clientExtensions == nil {
+		return map[string]any{}
+	}
+	return s.clientExtensions
 }
 
 // b64 is the one encoding the whole protocol uses on the wire: base64url,
@@ -1078,6 +1094,167 @@ func TestPasskeyLoginRefusesAForgedSignature(t *testing.T) {
 	real.signCount = 1
 	if rec := f.loginWithPasskey(t, real, handle); rec.Code != http.StatusOK {
 		t.Fatalf("the real authenticator was refused too: status %d, body %s", rec.Code, rec.Body)
+	}
+}
+
+// Browsers report extension outputs nobody asked for, and the ceremony has to
+// survive them.
+//
+// This is the one that locked Safari out. WebKit puts `appid: false` on every
+// assertion that comes from a security key, requested or not, and the library's
+// default is to fail the whole ceremony over an unrequested output — after the
+// signature has verified. Password managers do the same at registration with
+// `credProps`. This server asks for no extensions and reads none, so both are
+// noise, and noise must not be a refusal.
+func TestPasskeyCeremoniesSurviveExtensionOutputsNobodyAskedFor(t *testing.T) {
+	f := newPasskeyFixture(t)
+	f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)
+	cookie := f.login(t, "ada@example.test", goodPassword)
+
+	// Registered plainly, so that the assertion below is the first thing here
+	// to carry an output, and a refusal of it cannot hide behind a refused
+	// registration.
+	device := newSoftAuthenticator(t, "ada-key")
+	_, handle := f.registerPasskey(t, cookie, device, "Ada's key")
+
+	device.clientExtensions = map[string]any{"appid": false}
+	device.signCount = 1
+	if rec := f.loginWithPasskey(t, device, handle); rec.Code != http.StatusOK {
+		t.Fatalf("an assertion carrying WebKit's unrequested `appid: false` was refused: status %d, body %s",
+			rec.Code, rec.Body)
+	}
+
+	// Ignored means ignored, not trusted. `appid: true` asks the verifier to
+	// accept the hash of a legacy U2F AppID in place of the RP ID's; there is no
+	// AppID here, the authenticator data still carries the RP ID's hash, and the
+	// login stands or falls on that alone.
+	device.clientExtensions = map[string]any{"appid": true}
+	device.signCount = 2
+	if rec := f.loginWithPasskey(t, device, handle); rec.Code != http.StatusOK {
+		t.Fatalf("`appid: true` on a credential that is not a U2F one changed the outcome: status %d, body %s",
+			rec.Code, rec.Body)
+	}
+
+	// And at registration, where registerPasskey fails the test on a refusal.
+	manager := newSoftAuthenticator(t, "ada-password-manager")
+	manager.clientExtensions = map[string]any{"credProps": map[string]any{"rk": true}}
+	f.registerPasskey(t, cookie, manager, "Ada's password manager")
+}
+
+// The page asks for a challenge every time the sign-in screen is drawn, so that
+// a tap finds one waiting. Looking at the screen must not spend the allowance
+// for using it: only login/finish is an attempt.
+func TestPasskeyLoginBeginDoesNotSpendLoginAttempts(t *testing.T) {
+	f := newPasskeyFixture(t)
+	f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)
+
+	var limited bool
+	for range passkeyBeginIPBurst + 2 {
+		rec := f.do(t, http.MethodPost, "/api/v1/auth/passkeys/login/begin", nil, nil)
+		if rec.Code == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Error("login/begin is a public endpoint that writes a row, and it was never limited")
+	}
+
+	// More begins than the login bucket holds, and the password still works.
+	if passkeyBeginIPBurst <= loginIPBurst {
+		t.Fatalf("this test needs more begins (%d) than the login bucket holds (%d)", passkeyBeginIPBurst, loginIPBurst)
+	}
+	f.login(t, "ada@example.test", goodPassword)
+}
+
+// A refusal tells the caller nothing, so the log has to tell the operator
+// everything — and a failure that happens on somebody else's phone is only ever
+// going to be diagnosed from this line.
+func TestPasskeyRefusalsAreLoggedWithTheStepThatFailed(t *testing.T) {
+	f := newPasskeyFixture(t)
+	var logged bytes.Buffer
+	f.a.log = slog.New(slog.NewJSONHandler(&logged, nil))
+
+	ada := f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)
+	cookie := f.login(t, "ada@example.test", goodPassword)
+	device := newSoftAuthenticator(t, "ada-phone")
+	_, handle := f.registerPasskey(t, cookie, device, "phone")
+
+	// lastLine is the most recent refusal, decoded, with the buffer cleared so
+	// the next case reads only its own.
+	lastLine := func(t *testing.T, msg string) map[string]any {
+		t.Helper()
+		var found map[string]any
+		for _, line := range bytes.Split(bytes.TrimSpace(logged.Bytes()), []byte("\n")) {
+			var entry map[string]any
+			if err := json.Unmarshal(line, &entry); err == nil && entry["msg"] == msg {
+				found = entry
+			}
+		}
+		if found == nil {
+			t.Fatalf("no %q line was logged; the log holds:\n%s", msg, logged.String())
+		}
+		if bytes.Contains(logged.Bytes(), []byte("ada@example.test")) {
+			t.Errorf("the log names the person:\n%s", logged.String())
+		}
+		logged.Reset()
+		return found
+	}
+
+	// A synced passkey that stops claiming to be one. Backup eligibility is
+	// fixed for the life of a credential, so the library refuses the assertion;
+	// this is the failure a server that stored the flag wrongly at registration
+	// would produce for every Apple passkey, on every login.
+	device.signCount = 1
+	device.backupEligible = false
+	if rec := f.loginWithPasskey(t, device, handle); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a changed backup-eligible flag logged in: status %d", rec.Code)
+	}
+	entry := lastLine(t, "passkey login refused")
+	if entry["step"] != "verify" {
+		t.Errorf("step = %v, want verify", entry["step"])
+	}
+	if got, _ := entry["err"].(string); !strings.Contains(got, "Backup Eligible") {
+		t.Errorf("err = %q, want it to name the backup-eligible flag", got)
+	}
+	device.backupEligible = true
+
+	// Another origin: the library's own sentence is "Error validating origin",
+	// and which origin is only in the part Error() leaves out.
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/passkeys/login/begin", nil, nil)
+	opts := decodeTestBody[requestOptions](t, rec)
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/passkeys/login/finish", map[string]any{
+		"credential": device.assert(t, opts.PublicKey.Challenge, "https://elsewhere.example.test", handle),
+	}, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("an assertion from another origin logged in: status %d", rec.Code)
+	}
+	entry = lastLine(t, "passkey login refused")
+	if got, _ := entry["detail"].(string); !strings.Contains(got, "elsewhere.example.test") {
+		t.Errorf("detail = %q, want the origin that was presented", got)
+	}
+
+	// A challenge this server never issued.
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/passkeys/login/finish", map[string]any{
+		"credential": device.assert(t, b64([]byte("never-issued-by-this-server-0000")), passkeyOrigin, handle),
+	}, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("an unknown challenge logged in: status %d", rec.Code)
+	}
+	if entry = lastLine(t, "passkey login refused"); entry["step"] != "challenge" {
+		t.Errorf("step = %v, want challenge", entry["step"])
+	}
+
+	// Registration's refusals used to be silent on two of their three paths.
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/passkeys/register/finish", map[string]any{
+		"credential": map[string]any{"id": "AAAA", "rawId": "AAAA", "type": "public-key"},
+	}, cookie)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("an unparseable registration = %d, want 400", rec.Code)
+	}
+	entry = lastLine(t, "passkey registration refused")
+	if entry["step"] != "parse" || entry["user"] != ada.ID.String() {
+		t.Errorf("logged %v, want step parse for Ada's account id", entry)
 	}
 }
 
