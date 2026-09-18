@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0](https://github.com/Yornik/soiree/compare/v0.4.0...v1.0.0) (2026-09-18)
+
+
+### Features
+
+* **accounts:** a person has a language, and is written to in it ([5ec0107](https://github.com/Yornik/soiree/commit/5ec01076ca4e3a3206863d1890b2a898a6320aa3))
+* **web:** a switch for reminders that is still there afterwards ([48a171a](https://github.com/Yornik/soiree/commit/48a171af2cd62c87174c697ce95c55c4e0798ebe))
+* **web:** live sync, a theme toggle, and deadline notifications ([5a8812f](https://github.com/Yornik/soiree/commit/5a8812f9170110cdfe0ca6fe24b4e851b64afae9))
+* **web:** signing out takes the plan off that browser ([921b17d](https://github.com/Yornik/soiree/commit/921b17db9abb9f54e22b8c13464fc2c6f1f75366))
+* **web:** the accounts screens speak the planner's three languages ([16767a9](https://github.com/Yornik/soiree/commit/16767a99b6a046b084a7748192eff24dac5b62ff))
+* **web:** the accounts surface gets an interface ([101da4a](https://github.com/Yornik/soiree/commit/101da4a14d1bd4d084a4734f2f76feb2ae1aded6))
+
+
+### Bug Fixes
+
+* **api:** correct what the specification still had wrong, and pin it ([6ad1f52](https://github.com/Yornik/soiree/commit/6ad1f526f1508e5169ee76d8027aa960420f2e41))
+* **api:** require a session for the plan, and record who changed what ([f45a7f6](https://github.com/Yornik/soiree/commit/f45a7f623e33366d5d8f724a7f92f51de500c1ec))
+* **auth:** hash four passwords at a time, not as many as are asked for ([886279b](https://github.com/Yornik/soiree/commit/886279b281b0afc168ec39bb1aa0cb7f16acd6a3))
+* **deps:** update module github.com/fxamacker/cbor/v2 to v2.9.4 ([#13](https://github.com/Yornik/soiree/issues/13)) ([f0a81ac](https://github.com/Yornik/soiree/commit/f0a81acc0f9e3e71493a58be02bf4986f51ab4d0))
+* **e2e:** sign the browser in, and let the planner notice ([aa96015](https://github.com/Yornik/soiree/commit/aa96015771259acd0cadfc25d9d6ca78afbd7fa1))
+* **language:** ask the reader, and store nothing about it on an account ([2a40cd4](https://github.com/Yornik/soiree/commit/2a40cd4d9b8b7783984cfbce456c44648ab4bead))
+* **privacy:** the event's real date was in the source, and the check missed it ([5770c73](https://github.com/Yornik/soiree/commit/5770c73963f0ee32db5f79feb3fb9b66a101bc2b))
+* **web:** a copy edited while signed out is merged, not pushed over the plan ([f02013f](https://github.com/Yornik/soiree/commit/f02013ff659ac7f1e01adbb9e2a335c28e77a717))
+* **web:** a session that ends mid-use is noticed, survived, and merged ([89ac26e](https://github.com/Yornik/soiree/commit/89ac26e81724437feace24b6857fa47123f6d682))
+* **web:** a set-password link does not survive leaving the panel ([9ae6c3c](https://github.com/Yornik/soiree/commit/9ae6c3c72a2ac4468dd0792eec05dd9fd365565d))
+
+
+### Miscellaneous Chores
+
+* release 1.0.0 ([d5a678c](https://github.com/Yornik/soiree/commit/d5a678c89e75fe418dab293cc2a828a4051ed894))
+
 ## [0.4.0](https://github.com/Yornik/soiree/compare/v0.3.0...v0.4.0) (2026-09-18)
 
 
