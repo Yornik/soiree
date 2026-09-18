@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.0](https://github.com/Yornik/soiree/compare/v1.1.1...v1.2.0) (2026-09-18)
+
+
+### Features
+
+* **web:** tasks and budget lines show their state, and shares are drawn ([cbef915](https://github.com/Yornik/soiree/commit/cbef9150bccbdea5034b16657f7bca5c547620f7))
+* **web:** the run-up - a new look for the whole planner ([ca58577](https://github.com/Yornik/soiree/commit/ca5857762aaa4962054484e50fbbd2e124fd6373))
+* **web:** the run-up - a new look, and an overview built around the date ([79b32e1](https://github.com/Yornik/soiree/commit/79b32e1ef419d612bb6d2810fb0a0760490cb371))
+* **web:** the typeface at every size, and icons a phone will accept ([a75f498](https://github.com/Yornik/soiree/commit/a75f49863bc1efb57e9522f508931bf29f7dc650))
+
 ## [1.1.1](https://github.com/Yornik/soiree/compare/v1.1.0...v1.1.1) (2026-09-18)
 
 
