@@ -132,6 +132,15 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	// property of where the routes live rather than a path exception inside the
 	// middleware — the thing RequireWrite's own comment warns turns into an
 	// unguarded route later.
+	// The activity feed is an exact path rather than part of the subtree above,
+	// because its rule is stricter than the subtree's: admins only. Go's mux
+	// prefers the more specific pattern, so this is what answers a GET; any
+	// other method falls through to the subtree, which has no such route.
+	if s.auth != nil {
+		mux.Handle("GET "+apiPrefix+"activity",
+			noStore(s.auth.RequireRole(store.RoleAdmin)(http.HandlerFunc(s.serveActivity))))
+	}
+
 	push := http.NewServeMux()
 	s.routePush(push)
 	mux.Handle(apiPrefix+"push/", noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), push)))
