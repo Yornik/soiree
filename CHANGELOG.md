@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/Yornik/soiree/compare/v1.0.0...v1.0.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **web:** a 401 ends the session at once, without asking again ([aac6945](https://github.com/Yornik/soiree/commit/aac69452f2cbd5acdf86830b469403af7b2640fa))
+* **web:** a 401 ends the session at once, without asking again ([a23f9cb](https://github.com/Yornik/soiree/commit/a23f9cba56e416f9c49cb5f494e343da3c2a884d))
+
 ## [1.0.0](https://github.com/Yornik/soiree/compare/v0.4.0...v1.0.0) (2026-09-18)
 
 
