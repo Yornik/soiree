@@ -211,6 +211,25 @@
       'k.empty': 'No tasks yet. Add the first one below.',
       'k.nofilter': 'No tasks with that status.',
       'k.del': 'Remove task',
+      'f.open': 'Files on this row: {n}',
+      'f.title': 'Files',
+      'f.none': 'No files yet.',
+      'f.add': 'Add files',
+      'f.limit': 'Up to {a} per file.',
+      'f.wait': 'This row is still being saved. Try again in a moment.',
+      'f.download': 'Download',
+      'f.del': 'Remove {a}',
+      'f.confirmdel': 'Remove {a}? This cannot be undone.',
+      'f.sending': 'Uploading… {n}%',
+      'f.checking': 'Checking…',
+      'f.retry': 'Try again',
+      'f.toolarge': 'Too large. The limit is {a}.',
+      'f.empty': 'This file is empty.',
+      'f.full': 'There is no room left for this file.',
+      'f.readonly': 'You can view files, not add them.',
+      'f.network': 'The upload did not get through. Check the connection.',
+      'f.failed': 'The upload failed.',
+      'f.delfailed': 'Could not remove the file.',
       'aria.filter': 'Filter tasks by status',
       'd.export': 'Export data (JSON)',
       'd.import': 'Import data…',
@@ -332,6 +351,25 @@
       'k.empty': 'Nog geen taken. Voeg hieronder de eerste toe.',
       'k.nofilter': 'Geen taken met die status.',
       'k.del': 'Taak verwijderen',
+      'f.open': 'Bestanden bij deze regel: {n}',
+      'f.title': 'Bestanden',
+      'f.none': 'Nog geen bestanden.',
+      'f.add': 'Bestanden toevoegen',
+      'f.limit': 'Maximaal {a} per bestand.',
+      'f.wait': 'Deze regel wordt nog opgeslagen. Probeer het zo nog eens.',
+      'f.download': 'Downloaden',
+      'f.del': '{a} verwijderen',
+      'f.confirmdel': '{a} verwijderen? Dit kan niet ongedaan worden gemaakt.',
+      'f.sending': 'Uploaden… {n}%',
+      'f.checking': 'Controleren…',
+      'f.retry': 'Opnieuw proberen',
+      'f.toolarge': 'Te groot. De limiet is {a}.',
+      'f.empty': 'Dit bestand is leeg.',
+      'f.full': 'Er is geen ruimte meer voor dit bestand.',
+      'f.readonly': 'Je kunt bestanden bekijken, niet toevoegen.',
+      'f.network': 'De upload is niet aangekomen. Controleer de verbinding.',
+      'f.failed': 'De upload is mislukt.',
+      'f.delfailed': 'Het bestand kon niet worden verwijderd.',
       'aria.filter': 'Taken filteren op status',
       'd.export': 'Gegevens exporteren (JSON)',
       'd.import': 'Gegevens importeren…',
@@ -452,6 +490,25 @@
       'k.empty': 'Belum ada tugas. Tambahkan yang pertama di bawah.',
       'k.nofilter': 'Tidak ada tugas dengan status itu.',
       'k.del': 'Hapus tugas',
+      'f.open': 'Berkas di baris ini: {n}',
+      'f.title': 'Berkas',
+      'f.none': 'Belum ada berkas.',
+      'f.add': 'Tambah berkas',
+      'f.limit': 'Maksimal {a} per berkas.',
+      'f.wait': 'Baris ini masih disimpan. Coba lagi sebentar.',
+      'f.download': 'Unduh',
+      'f.del': 'Hapus {a}',
+      'f.confirmdel': 'Hapus {a}? Ini tidak bisa dibatalkan.',
+      'f.sending': 'Mengunggah… {n}%',
+      'f.checking': 'Memeriksa…',
+      'f.retry': 'Coba lagi',
+      'f.toolarge': 'Terlalu besar. Batasnya {a}.',
+      'f.empty': 'Berkas ini kosong.',
+      'f.full': 'Tidak ada ruang lagi untuk berkas ini.',
+      'f.readonly': 'Anda dapat melihat berkas, tidak menambahkannya.',
+      'f.network': 'Unggahan tidak sampai. Periksa koneksi.',
+      'f.failed': 'Unggahan gagal.',
+      'f.delfailed': 'Berkas tidak dapat dihapus.',
       'aria.filter': 'Saring tugas menurut status',
       'd.export': 'Ekspor data (JSON)',
       'd.import': 'Impor data…',
@@ -1661,6 +1718,9 @@
     Sync.queued = false;
     Sync.failures = 0;
     forgotten = true;
+    // File names are as much the plan as anything in it.
+    attachments = [];
+    uploads = [];
 
     setSticky('');
     renderAll();
@@ -1749,6 +1809,7 @@
    * destruction of somebody's planner, which cannot.
    */
   function adopt(plan) {
+    takeAttachments(plan);
     shadow = shadowFromPlan(plan);
     apiMode = true;
 
@@ -1900,6 +1961,10 @@
     try { n = JSON.parse(raw); } catch (e) { return; }
     if (!n || !n.entity || !shadow) return;
 
+    // A file has no revision to compare and is not one of the collections the
+    // merge knows: somebody added or removed one, so read the list again.
+    if (n.entity === 'attachments') { scheduleResync(); return; }
+
     var c = BY_ENTITY[n.entity];
     if (n.action === 'delete') {
       // No revision test, deliberately. `phases` is not drawn here and is acted
@@ -2006,6 +2071,7 @@
    *                              stands. not in the shadow? somebody added it.
    */
   function applyPlan(plan) {
+    takeAttachments(plan);
     var touched = {};
 
     COLLECTIONS.forEach(function (c) {
@@ -2749,6 +2815,10 @@
     openPop = null;
     openBtn = null;
 
+    if (filesView && filesView.pop === pop) {
+      filesView.input.remove();
+      filesView = null;
+    }
     pop.remove();
     if (btn) {
       btn.setAttribute('aria-expanded', 'false');
@@ -2756,6 +2826,7 @@
     }
   }
   document.addEventListener('click', function (e) {
+    if (pickingFiles) return;
     if (openPop && !openPop.contains(e.target) && !e.target.classList.contains('by-btn')) closePop();
   });
   window.addEventListener('resize', function () { closePop(); });
@@ -2829,6 +2900,415 @@
     var codes = itemCodes(item);
     btn.textContent = codes.length ? codes.join(' · ') : t('sp.unassigned');
     btn.classList.toggle('none', !codes.length);
+  }
+
+
+  /* ---------- Attachments ----------
+   * Files on a budget line or a task: a quote, a receipt, a floor plan.
+   *
+   * The bytes never touch this origin. The server hands out an address in an
+   * object store, signed for one file of one size; the browser sends the file
+   * there itself and then tells the server, which goes and looks. A download
+   * is an ordinary link that the server turns into a redirect.
+   *
+   * None of this is part of `state`, and that is the design rather than an
+   * omission. A file exists on the server or it does not exist: there is
+   * nothing to edit offline, nothing to merge, and nothing to put in this
+   * browser's storage. The list comes in with every plan read and is simply
+   * replaced.
+   *
+   * The control sits in the first cell of the row, beside the name, because
+   * that column is frozen: whatever else has scrolled away, whether a line has
+   * a quote attached is still in view.
+   */
+  var FILES = (CONFIG.attachments && Number(CONFIG.attachments.maxBytes) > 0)
+    ? { maxBytes: Number(CONFIG.attachments.maxBytes) } : null;
+  var attachments = [];
+  var uploads = [];        // in flight or failed: { key, name, size, sent, phase, error, file, id, final }
+  var filesView = null;    // the open list, so a plan read can redraw it: { key, draw }
+  var pickingFiles = false;
+
+  function fileKey(kind, id) { return kind + ':' + id; }
+  function filesOf(kind, id) {
+    var field = kind === 'task' ? 'taskId' : 'budgetItemId';
+    return attachments.filter(function (a) { return a[field] === id; });
+  }
+  // Only once the plan has come from the server: before that this browser does
+  // not know whether there is a server, and afterwards it may have lost it.
+  function filesOffered() { return !!FILES && apiMode && !sessionGone; }
+  function canChangeFiles() {
+    return (sessionRole === 'admin' || sessionRole === 'editor') &&
+      !document.body.classList.contains('is-archived');
+  }
+
+  function takeAttachments(plan) {
+    attachments = (plan && Array.isArray(plan.attachments)) ? plan.attachments.slice() : [];
+    refreshFileCounts();
+    if (filesView) filesView.draw();
+  }
+
+  function fmtBytes(n) {
+    var units = ['B', 'kB', 'MB', 'GB'];
+    var v = Number(n) || 0, i = 0;
+    while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
+    var digits = (i === 0 || v >= 100) ? 0 : 1;
+    var text;
+    try { text = v.toLocaleString(LANG, { maximumFractionDigits: digits }); } catch (e) { text = v.toFixed(digits); }
+    return text + ' ' + units[i];
+  }
+
+  function clipIcon() {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '15');
+    svg.setAttribute('height', '15');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    var path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', 'M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.9-8.9a3.7 3.7 0 0 1 5.2 5.2l-8.9 8.9a1.8 1.8 0 0 1-2.6-2.6l8.3-8.2');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.8');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function addFilesButton(td, kind, row) {
+    if (!filesOffered()) return;
+    td.classList.add('has-files');
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'files-btn';
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('data-files-kind', kind);
+    // Read at click time, not captured: the id is this browser's own until the
+    // row's first save lands, and the server's from then on.
+    btn.appendChild(clipIcon());
+    var count = document.createElement('span');
+    count.className = 'files-count';
+    btn.appendChild(count);
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      openFiles(btn, kind, row);
+    });
+    td.appendChild(btn);
+    setFileCount(btn, kind, row.id);
+  }
+
+  function setFileCount(btn, kind, id) {
+    var n = filesOf(kind, id).length;
+    btn.setAttribute('data-files-id', id);
+    btn.classList.toggle('has-some', n > 0);
+    btn.setAttribute('aria-label', t('f.open', { n: n }));
+    btn.title = t('f.open', { n: n });
+    btn.querySelector('.files-count').textContent = n > 0 ? String(n) : '';
+  }
+
+  // Counts only, without rebuilding a table somebody may be typing in.
+  function refreshFileCounts() {
+    Array.prototype.forEach.call(document.querySelectorAll('.files-btn'), function (btn) {
+      setFileCount(btn, btn.getAttribute('data-files-kind'), mapId(btn.getAttribute('data-files-id')));
+    });
+  }
+
+  function openFiles(btn, kind, row) {
+    closePop();
+    var pop = document.createElement('div');
+    pop.className = 'sp-pop files-pop';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', t('f.title'));
+
+    var key = function () { return fileKey(kind, row.id); };
+    var onServer = function () { return SERVER_ID.test(String(row.id)); };
+
+    var title = document.createElement('div');
+    title.className = 'files-title';
+    title.textContent = t('f.title');
+    pop.appendChild(title);
+
+    var list = document.createElement('ul');
+    list.className = 'files-list';
+    pop.appendChild(list);
+
+    var foot = document.createElement('div');
+    foot.className = 'files-foot';
+    pop.appendChild(foot);
+
+    // Outside the popup on purpose. Opening the system's file chooser takes
+    // focus away from the page, and an input inside a popup that closes when
+    // focus leaves would be removed while somebody is still choosing.
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.className = 'sr-only';
+    input.tabIndex = -1;
+    input.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(input);
+    function donePicking() { setTimeout(function () { pickingFiles = false; }, 0); }
+    input.addEventListener('change', function () {
+      var chosen = Array.prototype.slice.call(input.files || []);
+      input.value = '';
+      donePicking();
+      chosen.forEach(function (file) { startUpload(kind, row, file); });
+      if (openPop === pop) pop.focus();
+    });
+    input.addEventListener('cancel', donePicking);
+
+    function draw() {
+      // Redrawing removes whatever was focused inside the list - the button
+      // that was just pressed, usually - and an element removed while focused
+      // fires focusout with nowhere to go, which is this popup's cue to close.
+      // So pressing "remove" shut the list it was pressed in. Park the focus
+      // on the popup itself first.
+      if (pop.contains(document.activeElement) && document.activeElement !== pop) pop.focus();
+      list.textContent = '';
+      var files = filesOf(kind, row.id);
+      var mine = uploads.filter(function (u) { return u.key === key(); });
+
+      if (!files.length && !mine.length) {
+        var none = document.createElement('li');
+        none.className = 'files-none';
+        none.textContent = t('f.none');
+        list.appendChild(none);
+      }
+      files.forEach(function (a) { list.appendChild(fileRow(a)); });
+      mine.forEach(function (u) { list.appendChild(uploadRow(u)); });
+
+      foot.textContent = '';
+      if (!canChangeFiles()) {
+        if (sessionRole === 'viewer') note(foot, t('f.readonly'));
+        return;
+      }
+      if (!onServer()) { note(foot, t('f.wait')); return; }
+      var add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'add-row-btn files-add';
+      add.textContent = t('f.add');
+      add.addEventListener('click', function () {
+        pickingFiles = true;
+        input.click();
+      });
+      foot.appendChild(add);
+      note(foot, t('f.limit', { a: fmtBytes(FILES.maxBytes) }));
+    }
+
+    function note(parent, text) {
+      var n = document.createElement('div');
+      n.className = 'pop-note';
+      n.textContent = text;
+      parent.appendChild(n);
+    }
+
+    function fileRow(a) {
+      var li = document.createElement('li');
+      li.className = 'files-row';
+      var href = API_BASE + '/attachments/' + encodeURIComponent(a.id) + '/content';
+
+      var link = document.createElement('a');
+      link.className = 'files-name';
+      link.textContent = a.name;
+      // What the server will show opens beside the planner; everything else is
+      // a download, and says so by not pretending to be a page.
+      if (a.viewable) {
+        link.href = href + '?inline=1';
+        link.target = '_blank';
+        link.rel = 'noopener';
+      } else {
+        link.href = href;
+      }
+      li.appendChild(link);
+
+      var meta = document.createElement('span');
+      meta.className = 'files-meta';
+      meta.textContent = fmtBytes(a.size);
+      li.appendChild(meta);
+
+      if (a.viewable) {
+        var dl = document.createElement('a');
+        dl.className = 'files-dl';
+        dl.href = href;
+        dl.textContent = t('f.download');
+        li.appendChild(dl);
+      }
+
+      if (canChangeFiles()) {
+        li.appendChild(delButton(t('f.del', { a: a.name }), function () {
+          // Some browsers move focus when their own dialog opens, and this
+          // list closes when focus leaves it.
+          pickingFiles = true;
+          var sure = window.confirm(t('f.confirmdel', { a: a.name }));
+          pickingFiles = false;
+          if (!sure) return;
+          api('DELETE', '/attachments/' + encodeURIComponent(a.id)).then(function (res) {
+            // Gone already is gone: somebody else removed it first.
+            if (res.status !== 204 && res.status !== 404) {
+              if (res.status === 401) { sessionLost(); return; }
+              flash(t('f.delfailed'));
+              return;
+            }
+            attachments = attachments.filter(function (x) { return x.id !== a.id; });
+            refreshFileCounts();
+            draw();
+          });
+        }));
+      }
+      return li;
+    }
+
+    function uploadRow(u) {
+      var li = document.createElement('li');
+      li.className = 'files-row files-pending';
+      var name = document.createElement('span');
+      name.className = 'files-name';
+      name.textContent = u.name;
+      li.appendChild(name);
+
+      var status = document.createElement('span');
+      status.className = 'files-meta';
+      status.setAttribute('role', 'status');
+      li.appendChild(status);
+
+      if (u.phase === 'failed') {
+        li.classList.add('files-failed');
+        status.textContent = u.error;
+        if (!u.final) {
+          var again = document.createElement('button');
+          again.type = 'button';
+          again.className = 'link-btn';
+          again.textContent = t('f.retry');
+          again.addEventListener('click', function () { sendUpload(kind, row, u); });
+          li.appendChild(again);
+        }
+        li.appendChild(delButton(t('f.del', { a: u.name }), function () {
+          uploads = uploads.filter(function (x) { return x !== u; });
+          draw();
+        }));
+      } else if (u.phase === 'checking') {
+        status.textContent = t('f.checking');
+      } else {
+        var pct = u.size ? Math.min(100, Math.floor((u.sent / u.size) * 100)) : 0;
+        status.textContent = t('f.sending', { n: pct });
+        var bar = document.createElement('progress');
+        bar.max = 100;
+        bar.value = pct;
+        li.appendChild(bar);
+      }
+      return li;
+    }
+
+    pop.tabIndex = -1;
+    pop.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.stopPropagation(); closePop(true); }
+    });
+    pop.addEventListener('focusout', function (e) {
+      if (pickingFiles) return;
+      if (!pop.contains(e.relatedTarget)) closePop(false);
+    });
+
+    document.body.appendChild(pop);
+    draw();
+    var r = btn.getBoundingClientRect();
+    var top = r.bottom + 4;
+    if (top + pop.offsetHeight > window.innerHeight - 8) top = Math.max(8, r.top - pop.offsetHeight - 4);
+    var left = Math.min(r.left, window.innerWidth - pop.offsetWidth - 8);
+    pop.style.top = top + 'px';
+    pop.style.left = Math.max(8, left) + 'px';
+
+    openPop = pop;
+    openBtn = btn;
+    btn.setAttribute('aria-expanded', 'true');
+    filesView = { pop: pop, draw: draw, input: input };
+    pop.focus();
+  }
+
+  function redrawFiles() { if (filesView) filesView.draw(); }
+
+  function startUpload(kind, row, file) {
+    var u = { key: fileKey(kind, row.id), name: file.name, size: file.size, sent: 0,
+      phase: 'sending', error: '', file: file, id: null, final: false };
+    uploads.push(u);
+    // Refused here, before anything is asked of anybody: the server would say
+    // the same, after a round trip from the far side of the world.
+    if (file.size === 0) { failUpload(u, t('f.empty'), true); return; }
+    if (file.size > FILES.maxBytes) { failUpload(u, t('f.toolarge', { a: fmtBytes(FILES.maxBytes) }), true); return; }
+    sendUpload(kind, row, u);
+  }
+
+  function failUpload(u, message, final) {
+    u.phase = 'failed';
+    u.error = message;
+    u.final = !!final;
+    redrawFiles();
+  }
+
+  function sendUpload(kind, row, u) {
+    u.phase = 'sending';
+    u.sent = 0;
+    u.error = '';
+    u.key = fileKey(kind, row.id);
+    redrawFiles();
+
+    var body = { name: u.name, size: u.size, contentType: u.file.type || '' };
+    body[kind === 'task' ? 'taskId' : 'budgetItemId'] = row.id;
+
+    api('POST', '/attachments', body).then(function (res) {
+      if (res.status !== 201 || !res.body || !res.body.upload) {
+        if (res.status === 401) { sessionLost(); failUpload(u, t('f.failed')); return; }
+        if (res.status === 413) { failUpload(u, t('f.toolarge', { a: fmtBytes(FILES.maxBytes) }), true); return; }
+        if (res.status === 409) { failUpload(u, t('f.full'), true); return; }
+        if (res.status === 403) { failUpload(u, t('f.readonly'), true); return; }
+        failUpload(u, res.status === 0 ? t('f.network') : t('f.failed'));
+        return;
+      }
+      u.id = res.body.attachment.id;
+      var up = res.body.upload;
+
+      // XMLHttpRequest and not fetch, for one reason: fetch cannot report how
+      // much of a body has been sent, and on a slow connection a bar that
+      // moves is the difference between waiting and giving up.
+      var xhr = new XMLHttpRequest();
+      xhr.open(up.method || 'PUT', up.url);
+      Object.keys(up.headers || {}).forEach(function (name) { xhr.setRequestHeader(name, up.headers[name]); });
+      xhr.upload.onprogress = function (e) {
+        if (!e.lengthComputable) return;
+        u.sent = e.loaded;
+        redrawFiles();
+      };
+      xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) { confirmUpload(u, 0); return; }
+        failUpload(u, t('f.failed'));
+      };
+      xhr.onerror = function () { failUpload(u, t('f.network')); };
+      xhr.onabort = xhr.onerror;
+      xhr.send(u.file);
+    });
+  }
+
+  function confirmUpload(u, attempt) {
+    u.phase = 'checking';
+    redrawFiles();
+    api('POST', '/attachments/' + encodeURIComponent(u.id) + '/complete').then(function (res) {
+      if (res.status === 200 && res.body) {
+        uploads = uploads.filter(function (x) { return x !== u; });
+        if (!attachments.some(function (a) { return a.id === res.body.id; })) attachments.push(res.body);
+        refreshFileCounts();
+        redrawFiles();
+        return;
+      }
+      // The file store did not answer, or the request did not arrive. The
+      // file is there and the server has said it will keep the record, so ask
+      // again rather than send the whole file a second time.
+      if ((res.status === 503 || res.status === 0) && attempt < 5) {
+        setTimeout(function () { confirmUpload(u, attempt + 1); }, 2000 * (attempt + 1));
+        return;
+      }
+      if (res.status === 401) sessionLost();
+      failUpload(u, res.status === 0 ? t('f.network') : t('f.failed'));
+    });
   }
 
   // ---------- Resizing the budget grid ----------
@@ -3024,6 +3504,8 @@
         renderOverview();
       }));
 
+      addFilesButton(tdItem, 'budget', item);
+
       tr.appendChild(tdItem);
       tr.appendChild(tdUnit);
       tr.appendChild(tdQty);
@@ -3149,6 +3631,8 @@
         renderTasksTable();
         renderOverview();
       }));
+
+      addFilesButton(tdName, 'task', task);
 
       tr.appendChild(tdName);
       tr.appendChild(tdOwner);

@@ -1049,3 +1049,173 @@ test('a signed-in load asks for the plan once, not once per thing that wanted it
   release();
   await expect(page.locator('body')).not.toHaveClass(/showing-auth/);
 });
+
+/* ------------------------------------------------------------------
+ * Attachments
+ *
+ * Against a real bucket, because the browser talks to it directly and that is
+ * the part a stub cannot stand in for: the preflight, the signed headers, the
+ * redirect to a download. The launcher starts one beside the database; a
+ * machine that could not gets a server with attachments off, and these skip.
+ * ------------------------------------------------------------------ */
+
+const QUOTE = Buffer.from('%PDF-1.7\n% a caterer\'s quote, or near enough\n'.repeat(40));
+
+async function attachmentsOn(page) {
+  return page.evaluate(() => {
+    const el = document.getElementById('soiree-config');
+    try { return !!JSON.parse(el.textContent).attachments; } catch (e) { return false; }
+  });
+}
+
+/** A budget line that the server already has, which is when files can be added. */
+async function savedLine(page, request, item) {
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item, unit: 100, qty: 1, paid: 0 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+}
+
+async function openFiles(page, row = 0) {
+  await page.locator('#budgetBody .files-btn').nth(row).click();
+  await expect(page.locator('.files-pop')).toBeVisible();
+}
+
+test('a file goes up from one browser, arrives live in another, and comes back down intact', async ({ page, request, browser }) => {
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await savedLine(page, request, 'Catering');
+
+  // Somebody else, already looking at the same plan.
+  const elsewhere = await browser.newContext({ baseURL: API_URL, serviceWorkers: 'block', acceptDownloads: true });
+  const other = await elsewhere.newPage();
+  try {
+    // Both plan reads that opening the page causes have to be over before the
+    // upload: the one that adopts the plan, and the one the server asks for
+    // when the live stream opens. Otherwise that second read delivers the file
+    // and this passes with the change notice ignored entirely - which it did,
+    // the first time it was checked against a page that ignores the notice.
+    let planReads = 0;
+    other.on('response', (res) => {
+      if (res.url().endsWith('/api/v1/plan') && res.status() === 200) planReads += 1;
+    });
+    await openSharedPlanner(other);
+    await gotoTab(other, 'budget');
+    await expect(other.locator('#budgetBody .files-btn')).toHaveCount(1);
+    await expect(other.locator('#budgetBody .files-count')).toHaveText('');
+    await expect.poll(() => planReads, { message: 'the adopt and the post-subscribe resync' }).toBeGreaterThanOrEqual(2);
+    await other.evaluate(() => new Promise((done) => setTimeout(done, 100)));
+
+    await openFiles(page);
+    await expect(page.locator('.files-none')).toBeVisible();
+    await page.setInputFiles('body > input[type=file]', { name: 'Quote – café.pdf', mimeType: 'application/pdf', buffer: QUOTE });
+
+    // On the uploader's screen, and on the server.
+    await expect(page.locator('.files-row a.files-name')).toHaveText('Quote – café.pdf');
+    await expect(page.locator('#budgetBody .files-count')).toHaveText('1');
+    const listed = (await apiPlan(request)).attachments;
+    expect(listed.map((a) => [a.name, a.size, a.viewable])).toEqual([['Quote – café.pdf', QUOTE.length, true]]);
+
+    // And on the other screen, with nobody reloading anything.
+    await expect(other.locator('#budgetBody .files-count')).toHaveText('1');
+
+    // Down again, byte for byte, under its own name.
+    await openFiles(other);
+    const [download] = await Promise.all([
+      other.waitForEvent('download'),
+      other.locator('.files-row .files-dl').click(),
+    ]);
+    expect(download.suggestedFilename()).toBe('Quote – café.pdf');
+    const saved = await fs.readFile(await download.path());
+    expect(saved.equals(QUOTE), 'the downloaded bytes are the uploaded bytes').toBe(true);
+  } finally {
+    await elsewhere.close();
+  }
+});
+
+test('a file over the limit is refused on the spot, and nothing is asked of the server', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await savedLine(page, request, 'Venue');
+
+  const asked = [];
+  page.on('request', (req) => { if (req.url().includes('/api/v1/attachments')) asked.push(req.method()); });
+
+  await openFiles(page);
+  // The test server allows 1 MB a file.
+  await page.setInputFiles('body > input[type=file]', {
+    name: 'scan.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(1024 * 1024 + 1, 1),
+  });
+  await expect(page.locator('.files-failed .files-meta')).toContainText('Too large');
+  // Refused for good, not offered again.
+  await expect(page.locator('.files-failed .link-btn')).toHaveCount(0);
+  expect(asked, 'requests to /attachments').toEqual([]);
+  expect((await apiPlan(request)).attachments).toEqual([]);
+});
+
+test('a file can be removed, and removing a line takes its files with it', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await savedLine(page, request, 'Band');
+
+  await openFiles(page);
+  await page.setInputFiles('body > input[type=file]', [
+    { name: 'rider.pdf', mimeType: 'application/pdf', buffer: QUOTE },
+    { name: 'stage plot.png', mimeType: 'image/png', buffer: Buffer.from('not really a png') },
+  ]);
+  await expect(page.locator('.files-row a.files-name')).toHaveCount(2);
+  await expect(page.locator('#budgetBody .files-count')).toHaveText('2');
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('.files-row', { hasText: 'rider.pdf' }).locator('.del-btn').click();
+  await expect(page.locator('.files-row a.files-name')).toHaveText(['stage plot.png']);
+  await expect.poll(async () => (await apiPlan(request)).attachments.map((a) => a.name)).toEqual(['stage plot.png']);
+
+  // The line goes, and the file it still had goes with it.
+  await page.keyboard.press('Escape');
+  await page.locator('#budgetBody .del-cell .del-btn').first().click();
+  await expect.poll(async () => {
+    const plan = await apiPlan(request);
+    return [plan.budgetItems.length, plan.attachments.length];
+  }).toEqual([0, 0]);
+});
+
+test('a viewer can open the files and is offered no way to add or remove one', async ({ page, request, browser }) => {
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await savedLine(page, request, 'Flowers');
+  await openFiles(page);
+  await page.setInputFiles('body > input[type=file]', { name: 'florist.pdf', mimeType: 'application/pdf', buffer: QUOTE });
+  await expect(page.locator('#budgetBody .files-count')).toHaveText('1');
+
+  const viewer = await ensureEditor(request, API_URL, 'vera', 'viewer');
+  const context = await browser.newContext({ baseURL: API_URL, serviceWorkers: 'block' });
+  const theirs = await context.newPage();
+  try {
+    await adoptSession(theirs, await freshSession(request, API_URL, viewer));
+    await awaitPlan(theirs, () => theirs.goto('/'));
+    await gotoTab(theirs, 'budget');
+    await theirs.locator('#budgetBody .files-btn').first().click();
+
+    const pop = theirs.locator('.files-pop');
+    await expect(pop.locator('a.files-name')).toHaveText('florist.pdf');
+    await expect(pop.locator('.files-add')).toHaveCount(0);
+    await expect(pop.locator('.del-btn')).toHaveCount(0);
+    await expect(pop).toContainText('You can view files, not add them.');
+
+    // Not merely hidden: the server says the same to anybody who asks anyway.
+    const id = (await apiPlan(request)).attachments[0].id;
+    const refused = await theirs.request.delete(`${API_URL}/api/v1/attachments/${id}`);
+    expect(refused.status()).toBe(403);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a deployment with no bucket draws no paperclip at all', async ({ page }) => {
+  const { BASE_URL } = require('../servers');
+  await page.goto(BASE_URL + '/');
+  await page.locator('.tab-btn[data-tab="budget"]').click();
+  await page.click('#addBudgetRow');
+  await expect(page.locator('#budgetBody .del-cell .del-btn')).toHaveCount(1);
+  await expect(page.locator('.files-btn')).toHaveCount(0);
+});
