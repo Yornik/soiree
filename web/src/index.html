@@ -22,7 +22,18 @@
 <script type="application/json" id="soiree-config">{{ .ConfigJSON }}</script>
 </head>
 <body>
-<div class="wrap">
+<div class="wrap" id="plannerWrap">
+
+  <!-- Who is signed in, and the way in for everyone who is not.
+       auth.js draws this only once the server has said there are accounts to
+       sign in to: a deployment with no database answers 404 from
+       /api/v1/auth/session, and a door that is not there should not be drawn.
+       It sits above the masthead because it identifies the reader, not the
+       event. -->
+  <div class="account-bar" id="accountBar" hidden>
+    <p class="account-who" id="accountWho"></p>
+    <div class="account-acts" id="accountActs"></div>
+  </div>
 
   <!-- Masthead. The event identifies the page on the left; the deadline is
        the one figure that applies to every tab, so it sits in the corner the
@@ -291,6 +302,157 @@
   </div>
 
 </div>
+
+<!-- THE ACCOUNTS SCREEN
+     Signing in, choosing a password, and an admin's view of who has an
+     account. One screen with five panels rather than five documents: this is
+     a single page, and the link in an invitation mail has to land somewhere
+     that is already loaded. auth.js decides which panel from the URL
+     fragment (#/login, #/set-password, #/admin, #/account) and hides the
+     whole thing otherwise.
+
+     The fragment is not decoration. A set-password link carries its token
+     there — #/set-password?token=… — because a fragment is never sent to a
+     server, so the one-time secret stays out of every access log and out of
+     the Referer header. auth.js takes it out of the URL before anything
+     else. -->
+<div class="auth-wrap" id="authScreen" hidden>
+  <header class="auth-head">
+    <p class="auth-event">{{ .EventName }}</p>
+    <h1 class="auth-title" id="authTitle">Sign in</h1>
+    <p class="auth-lede" id="authLede"></p>
+  </header>
+
+  <!-- SIGN IN -->
+  <section class="auth-panel" id="panelLogin" hidden>
+    <form class="auth-form" id="loginForm" novalidate>
+      <div class="auth-field">
+        <label for="loginEmail">Email</label>
+        <input type="email" id="loginEmail" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="auth-field">
+        <label for="loginPassword">Password</label>
+        <input type="password" id="loginPassword" autocomplete="current-password">
+      </div>
+      <p class="auth-msg" id="loginMsg" role="status" aria-live="polite"></p>
+      <div class="auth-acts">
+        <button class="solid-btn" type="submit" id="loginSubmit">Sign in</button>
+        <!-- Shown only where the server mounted the passkey routes; the
+             config block says whether it did. -->
+        <button class="ghost-btn" type="button" id="loginPasskey" hidden>Use a passkey</button>
+      </div>
+    </form>
+    <p class="auth-aside">
+      <button class="link-btn" type="button" id="loginForgot">Email me a link to set a new password</button>
+    </p>
+  </section>
+
+  <!-- CHOOSE A PASSWORD -->
+  <section class="auth-panel" id="panelSetPassword" hidden>
+    <form class="auth-form" id="setPasswordForm" novalidate>
+      <div class="auth-field">
+        <label for="newPassword">New password</label>
+        <input type="password" id="newPassword" autocomplete="new-password">
+        <p class="auth-hint">At least 12 characters. Length is what makes a password
+           hard to guess, so a short sentence beats a short scramble.</p>
+      </div>
+      <div class="auth-field">
+        <label for="newPassword2">Type it again</label>
+        <input type="password" id="newPassword2" autocomplete="new-password">
+      </div>
+      <p class="auth-msg" id="setPasswordMsg" role="status" aria-live="polite"></p>
+      <div class="auth-acts">
+        <button class="solid-btn" type="submit" id="setPasswordSubmit">Set password</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- PEOPLE (admin only; every route behind it is admin-only at the server
+       too, checked per request against the role as it stands in the
+       database) -->
+  <section class="auth-panel" id="panelAdmin" hidden>
+    <form class="auth-form auth-form-row" id="createUserForm" novalidate>
+      <div class="auth-field">
+        <label for="newUserEmail">Email</label>
+        <input type="email" id="newUserEmail" autocomplete="off"
+               autocapitalize="none" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="auth-field">
+        <label for="newUserRole">Role</label>
+        <select id="newUserRole">
+          <option value="viewer">Viewer</option>
+          <option value="editor" selected>Editor</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      <button class="solid-btn" type="submit" id="createUserSubmit">Add person</button>
+    </form>
+    <p class="auth-roles">A viewer reads the ledger. An editor changes it. An admin
+       also decides who has an account.</p>
+
+    <p class="auth-msg" id="adminMsg" role="status" aria-live="polite"></p>
+
+    <!-- The documented degraded mode: with no SMTP configured the server hands
+         the set-password link back to the admin who asked for it, because
+         there is no other way for it to reach the person it belongs to. Shown
+         once, here, and kept nowhere. -->
+    <div class="auth-link-out" id="adminLinkOut" hidden>
+      <p class="auth-link-lede" id="adminLinkLede"></p>
+      <input type="text" id="adminLinkValue" readonly aria-label="Set-password link">
+      <div class="auth-acts">
+        <button class="ghost-btn" type="button" id="adminLinkCopy">Copy link</button>
+        <button class="link-btn" type="button" id="adminLinkDismiss">Done</button>
+      </div>
+    </div>
+
+    <ul class="people" id="peopleList"></ul>
+    <p class="empty-note" id="peopleEmpty" hidden>No accounts yet.</p>
+  </section>
+
+  <!-- YOUR ACCOUNT -->
+  <section class="auth-panel" id="panelAccount" hidden>
+    <section class="auth-block" id="passkeySection" hidden>
+      <h2>Passkeys</h2>
+      <p class="auth-note-body">A passkey signs you in with the fingerprint reader or
+         screen lock on a device you already have. It never leaves that device,
+         and it cannot be phished or reused anywhere else.</p>
+      <ul class="passkey-list" id="passkeyList"></ul>
+      <p class="empty-note" id="passkeyEmpty">No passkeys on this account yet.</p>
+      <form class="auth-form auth-form-row" id="passkeyForm" novalidate>
+        <div class="auth-field">
+          <label for="passkeyLabel">Name this device</label>
+          <input type="text" id="passkeyLabel" maxlength="64" placeholder="Phone">
+        </div>
+        <button class="add-row-btn" type="submit" id="passkeyAdd">Add a passkey</button>
+      </form>
+      <p class="auth-msg" id="passkeyMsg" role="status" aria-live="polite"></p>
+    </section>
+    <div class="auth-acts auth-acts-parted">
+      <button class="ghost-btn" type="button" id="signOutBtn">Sign out</button>
+    </div>
+  </section>
+
+  <!-- Anything with one sentence to say and nothing to fill in. -->
+  <section class="auth-panel" id="panelNote" hidden>
+    <p class="auth-note-body" id="authNote"></p>
+    <div class="auth-acts">
+      <button class="solid-btn" type="button" id="authNoteAct" hidden>Sign in</button>
+    </div>
+  </section>
+
+  <p class="auth-foot">
+    <button class="link-btn" type="button" data-auth-goto="">Back to the planner</button>
+  </p>
+</div>
+
 <script src="{{ .Asset "app.js" }}" defer></script>
+<!-- Two files, not one: the planner and the accounts surface share a page but
+     nothing else, and this one has to be loadable on a deployment that has no
+     accounts at all. Both are ordinary same-origin scripts, which is all the
+     CSP here permits — there is no inline script anywhere in this document,
+     and the configuration above is a data block rather than an executable
+     one for exactly that reason. -->
+<script src="{{ .Asset "auth.js" }}" defer></script>
 </body>
 </html>

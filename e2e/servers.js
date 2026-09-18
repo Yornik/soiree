@@ -37,4 +37,13 @@ module.exports = {
   BASE_URL: `http://127.0.0.1:${PORT}`,
   ALT_URL: `http://127.0.0.1:${ALT_PORT}`,
   API_URL: `http://127.0.0.1:${API_PORT}`,
+  // The same instance as API_URL, reached by name rather than by address.
+  //
+  // It is a second URL rather than a second server because of one rule in the
+  // WebAuthn specification: a relying party id is a domain, and an IP address
+  // is not one. A deployment reached at 127.0.0.1 gets password login and
+  // nothing else — see config.loadPasskeys — so the accounts spec drives this
+  // origin, which the API instance is also configured with as its base URL.
+  // Both names resolve to the same loopback listener and the same database.
+  AUTH_URL: `http://localhost:${API_PORT}`,
 };

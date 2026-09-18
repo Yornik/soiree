@@ -367,7 +367,10 @@ body.is-empty .when-data { display: none; }
 .field input { width: 180px; border-color: var(--rule-mid); background: var(--raise); }
 .field input.narrow { width: 104px; }
 
-input[type="text"], input[type="number"], input[type="date"], select, textarea {
+/* email and password join the list rather than taking a treatment of their
+   own: a field is a field, and the accounts screen is the same document. */
+input[type="text"], input[type="number"], input[type="date"],
+input[type="email"], input[type="password"], select, textarea {
   font: inherit;
   font-size: 14px;
   color: var(--ink);
@@ -782,7 +785,8 @@ body.is-archived .when-data { display: block; }
    usable with a thumb, and a narrow viewport is a phone whatever the pointer
    emulation claims. */
 @media (pointer: coarse), (max-width: 720px) {
-  input[type="text"], input[type="number"], input[type="date"], select, textarea { min-height: 44px; }
+  input[type="text"], input[type="number"], input[type="date"],
+  input[type="email"], input[type="password"], select, textarea { min-height: 44px; }
   .toggle-line input, .sp-pop input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; }
   .del-btn { min-width: 44px; min-height: 44px; }
   .tab-btn { padding: 14px 2px; }
@@ -794,4 +798,308 @@ body.is-archived .when-data { display: block; }
 
 @media (prefers-reduced-motion: reduce) {
   .gauge-fill { transition: none; }
+}
+
+/* --- ACCOUNTS ---
+   Signing in, choosing a password, and who has an account. Pages from the
+   same book: no new colour, no card, no shadow, no radius beyond the 2px the
+   controls already use. Every value below is a token defined at the top of
+   this file, so both themes are correct for the same reason the ledger is.
+
+   Two meanings are extended rather than invented, which is why no new hue was
+   needed. An account's status is a position in the same sequence money
+   already moves through: gold is committed — promised and not yet settled —
+   which is exactly an invitation outstanding; jade is paid, which is an
+   account that has been through the door and is active. An account with no
+   access is quiet ink, not rust: it is a decision somebody made on purpose,
+   not a problem. Rust stays what it was — the thing that needs attention —
+   and is spent here only on removing an account and on a refusal.
+
+   Structure carries the rest: a rule under the heading, a hairline between
+   people, and the ledger's single-over-double rule around the one thing on
+   the screen worth carrying away, which is the set-password link an admin has
+   to pass on by hand. */
+
+/* Panels are shown and hidden with the attribute rather than a class, so this
+   has to outrank the display value each of them carries. */
+[hidden] { display: none !important; }
+
+.auth-wrap {
+  /* Narrower than the planner's 1000px: this is reading and typing, not
+     reconciling six columns of figures against each other. */
+  max-width: 660px;
+  margin: 0 auto;
+  padding: 34px 20px 80px;
+}
+body.showing-auth #plannerWrap { display: none; }
+
+/* An archived ledger greys its own fields and hides its own add buttons. The
+   accounts screen is not that ledger and must not be closed along with it. */
+#authScreen input, #authScreen select { color: var(--ink); }
+#authScreen .add-row-btn { display: inline-block; }
+
+/* --- Who is signed in --- */
+.account-bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 18px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  padding-bottom: 14px;
+}
+.account-who {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0;
+  min-width: 0;
+}
+.account-who:empty { display: none; }
+.account-email { font-weight: 600; min-width: 0; overflow-wrap: break-word; }
+.account-role { font-size: 12px; color: var(--ink-2); }
+.account-acts { display: flex; gap: 18px; flex-wrap: wrap; margin-left: auto; }
+
+/* --- The screen's own head --- */
+.auth-head {
+  padding-bottom: 18px;
+  margin-bottom: 26px;
+  border-bottom: 1px solid var(--rule-ink);
+}
+.auth-event { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.auth-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(26px, 4.4vw, 32px);
+  line-height: 1.08;
+  letter-spacing: -0.012em;
+  margin: 7px 0 0;
+}
+.auth-lede { margin: 10px 0 0; color: var(--ink-2); max-width: 56ch; }
+.auth-lede:empty { display: none; }
+
+/* --- Forms --- */
+.auth-form { margin: 0; }
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 18px;
+  max-width: 26rem;
+}
+.auth-field label { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.auth-field input, .auth-field select {
+  border-color: var(--rule-mid);
+  background: var(--raise);
+}
+.auth-hint { margin: 3px 0 0; font-size: 12px; color: var(--ink-2); max-width: 48ch; }
+.auth-roles { margin: 4px 0 0; font-size: 12px; color: var(--ink-2); max-width: 56ch; }
+
+/* One line for a form that is one line: an address, a role, and the button
+   that acts on both. */
+.auth-form-row { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.auth-form-row .auth-field { margin-bottom: 0; max-width: 18rem; }
+.auth-form-row .auth-field select { min-width: 8rem; }
+
+.auth-acts { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.auth-acts-parted { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--rule); }
+
+/* A message about what just happened, or did not. Empty means silent: an
+   element reserving a line for news that has not arrived is a gap nobody can
+   read. */
+.auth-msg { margin: 14px 0 0; font-size: 13.5px; color: var(--ink-2); max-width: 56ch; }
+.auth-msg:empty { display: none; }
+/* Rust is spent on a refusal and on nothing else here, so "follow the prompt
+   from your device" does not arrive looking like a failure. */
+.auth-msg.is-refusal { color: var(--rust); }
+.auth-note-body { margin: 0 0 14px; color: var(--ink-2); max-width: 58ch; }
+.auth-aside { margin: 22px 0 0; }
+.auth-foot { margin: 34px 0 0; padding-top: 16px; border-top: 1px solid var(--rule); }
+
+/* --- Buttons ---
+   The ledger already has two: dashed adds something new, a solid outline acts
+   on what is there. The accounts screen needs a third — the one action a
+   screen exists for, which is a filled button — and takes it from the only
+   filled control the page already has, the active filter pill: paper on ink.
+   And a fourth that is not a button at all to look at, for the several small
+   things beside each account. */
+.solid-btn {
+  appearance: none;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 2px;
+  cursor: pointer;
+  margin-top: 12px;
+}
+.solid-btn:hover { background: transparent; color: var(--ink); }
+.solid-btn:disabled { opacity: 0.45; cursor: default; }
+.solid-btn:disabled:hover { background: var(--ink); color: var(--paper); }
+.auth-form-row .solid-btn { margin-top: 0; }
+
+.link-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--rule-mid);
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  cursor: pointer;
+  text-align: left;
+}
+.link-btn:hover { color: var(--ink); border-bottom-color: var(--ink); }
+.link-btn.danger:hover { color: var(--rust); border-bottom-color: var(--rust); }
+.link-btn:disabled { opacity: 0.45; cursor: default; }
+.link-btn:disabled:hover { color: var(--ink-2); border-bottom-color: var(--rule-mid); }
+
+/* --- The set-password link, when there is no mail to send it by ---
+   Closed by the same single-over-double rule the totals row uses, because it
+   means the same thing here: this is the figure to take away. */
+.auth-link-out {
+  margin: 20px 0 0;
+  padding: 14px 0 16px;
+  border-top: 2px solid var(--rule-ink);
+  border-bottom: 3px double var(--ink);
+}
+.auth-link-lede { margin: 0 0 10px; font-size: 13px; color: var(--ink-2); max-width: 58ch; }
+.auth-link-out input {
+  width: 100%;
+  font-size: 13px;
+  border-color: var(--rule-mid);
+  background: var(--raise);
+}
+.auth-link-out .auth-acts { margin-top: 12px; }
+
+/* --- People --- */
+.people {
+  list-style: none;
+  margin: 24px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--rule-ink);
+}
+.person {
+  display: grid;
+  /* The address column keeps a floor, so a row of controls cannot squeeze it
+     to nothing and push the address out from under itself; the controls wrap
+     onto a second line instead. */
+  grid-template-columns: minmax(11rem, 1fr) auto;
+  column-gap: 20px;
+  align-items: baseline;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.person:last-child { border-bottom: 0; }
+.person-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; min-width: 0; }
+/* A long address wraps inside its own column rather than pushing the page
+   sideways. */
+.person-email { font-weight: 600; min-width: 0; overflow-wrap: break-word; }
+.person-you { font-size: 12px; color: var(--ink-2); }
+.person-meta {
+  grid-column: 1;
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.person-status { font-weight: 600; }
+.status-invited { color: var(--gold); }
+.status-active { color: var(--jade); }
+.status-disabled { color: var(--ink-2); }
+.person-added { font-variant-numeric: tabular-nums; }
+.person-acts {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.person-role {
+  width: auto;
+  min-width: 7rem;
+  font-size: 13px;
+  border-color: var(--rule-mid);
+  background: var(--raise);
+}
+.person-role-fixed { font-size: 12px; color: var(--ink-2); }
+
+/* --- Passkeys --- */
+.passkey-list { list-style: none; margin: 16px 0 0; padding: 0; border-top: 1px solid var(--rule); }
+.passkey {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 20px;
+  align-items: baseline;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.passkey-label { font-weight: 600; min-width: 0; overflow-wrap: break-word; }
+.passkey-meta, .passkey-used { grid-column: 1; font-size: 12px; color: var(--ink-2); }
+.passkey-meta { margin-top: 3px; }
+.passkey-used { font-variant-numeric: tabular-nums; }
+.passkey .link-btn { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
+#passkeyForm { margin-top: 20px; }
+#passkeySection h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 19px;
+  margin: 0 0 10px;
+}
+
+/* --- A viewer's planner ---
+   Read-only, not disabled: a figure somebody cannot change is still one they
+   have to be able to read, select and copy. The controls that only make sense
+   if you can write are taken out of the page rather than left to be pressed.
+
+   This is a courtesy, not a protection. The plan API is open on the server
+   today, and the interface saying so is the honest version of this. */
+body.role-viewer #plannerWrap .add-row-btn,
+body.role-viewer #plannerWrap .del-btn,
+body.role-viewer #plannerWrap .size-tools,
+body.role-viewer #plannerWrap .col-grip,
+body.role-viewer #plannerWrap .row-grip,
+body.role-viewer #plannerWrap .start-steps,
+body.role-viewer #plannerWrap #importData { display: none; }
+body.role-viewer #plannerWrap input:hover,
+body.role-viewer #plannerWrap select:hover,
+body.role-viewer #plannerWrap textarea:hover { border-color: transparent; }
+body.role-viewer #plannerWrap input,
+body.role-viewer #plannerWrap textarea,
+body.role-viewer #plannerWrap select { color: var(--ink-2); }
+body.role-viewer #plannerWrap .by-btn { color: var(--ink-2); cursor: default; }
+body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize: none; }
+
+@media (max-width: 720px) {
+  .auth-wrap { padding: 26px 16px 64px; }
+  /* Same unwinding the budget grid does: the columns go, and each account
+     becomes one entry read top to bottom. */
+  .person, .passkey { grid-template-columns: minmax(0, 1fr); }
+  .person-acts, .passkey .link-btn {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: flex-start;
+    align-self: start;
+    margin-top: 10px;
+  }
+  .auth-form-row { display: block; }
+  .auth-form-row .auth-field { margin-bottom: 18px; max-width: none; }
+}
+
+@media (pointer: coarse), (max-width: 720px) {
+  .solid-btn { padding: 13px 18px; }
+  /* A line of text is not a target. These get one without becoming buttons to
+     look at. */
+  .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
+  .person-role { min-height: 44px; }
 }
