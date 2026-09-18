@@ -217,3 +217,35 @@ test.describe('on the instance with no event date', () => {
     await expect(page.locator('#budgetBody .del-btn').first()).toBeVisible();
   });
 });
+
+// The event is on a calendar day, in a place, and the page has to say the same
+// thing about it to everybody. The server under test is configured for the
+// 12th at +09:00, at 01:00 - an instant that is still the 11th in UTC and in
+// Amsterdam, and the morning of the 11th in Los Angeles.
+for (const timezoneId of ['Asia/Tokyo', 'Europe/Amsterdam', 'America/Los_Angeles']) {
+  test(`the day and the days to go are the same for a reader in ${timezoneId}`, async ({ browser }, testInfo) => {
+    const context = await browser.newContext({ baseURL: testInfo.project.use.baseURL, timezoneId, locale: 'en-US' });
+    const page = await context.newPage();
+    try {
+      // 23:00 on the 11th where the event is: one day to go, for everyone.
+      await openAt(page, '2030-06-11T14:00:00Z');
+      await expect(page.locator('#statDaysLabel')).toHaveText('June 12, 2030');
+      await expect(page.locator('#daysNum')).toHaveText('1');
+      await expect(page.locator('#daysLabel')).toHaveText('day to go');
+    } finally {
+      await context.close();
+    }
+
+    const later = await browser.newContext({ baseURL: testInfo.project.use.baseURL, timezoneId, locale: 'en-US' });
+    const onTheDay = await later.newPage();
+    try {
+      // Ninety minutes on, it is 00:30 on the 12th there. It is still the 11th
+      // in UTC, in Amsterdam and in Los Angeles, and it is the day for all of them.
+      await openAt(onTheDay, '2030-06-11T15:30:00Z');
+      await expect(onTheDay.locator('#statDaysLabel')).toHaveText('June 12, 2030');
+      await expect(onTheDay.locator('#daysNum')).toHaveText('0');
+    } finally {
+      await later.close();
+    }
+  });
+}

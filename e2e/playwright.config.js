@@ -157,7 +157,12 @@ module.exports = defineConfig({
       // the case that catches a countdown rounding hours instead of comparing
       // calendar dates. Formatted with timeZone: 'UTC' in the page, so the
       // date shown beside it is still June 12.
-      SOIREE_EVENT_DATE: '2030-06-12T19:00:00Z',
+      // Written at an offset, and early enough in the day that the same
+      // instant is still the 11th in UTC. Every spec that expects "June 12,
+      // 2030" from this server is thereby also checking that the page shows
+      // the day the event is on, not the UTC date of its instant, which is
+      // what it used to show.
+      SOIREE_EVENT_DATE: '2030-06-12T01:00:00+09:00',
       SOIREE_CURRENCY: 'EUR',
       SOIREE_LOCALE: 'en-US',
       SOIREE_BUDGET_CEILING: '0',

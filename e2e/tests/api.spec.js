@@ -1255,6 +1255,50 @@ test('a viewer can open the files and is offered no way to add or remove one', a
   }
 });
 
+// From the first day live. Somebody looked for the paperclip, in the dark
+// theme, with it on screen, and reported that it was not there. It was drawn
+// at half strength; and on the two lines whose names were long enough to wrap,
+// the textarea's scrollbar was drawn over it, so there it truly could not be
+// seen or pressed.
+test('the paperclip can be seen and pressed, on a line with a long name too, in the dark', async ({ page, request }) => {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Cetak-cetak all sign and the cue cards for the master of ceremonies', unit: 25000, qty: 1, paid: 0 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  const clip = page.locator('#budgetBody .files-btn').first();
+  await expect(clip).toBeVisible();
+
+  // Nothing is drawn over it: whatever is at its centre is the button itself.
+  const onTop = await clip.evaluate((btn) => {
+    const r = btn.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && (hit === btn || btn.contains(hit));
+  });
+  expect(onTop, 'the element at the centre of the paperclip is the paperclip').toBe(true);
+
+  // The field ends before the button begins, scrollbar included.
+  const gap = await page.locator('#budgetBody tr').first().evaluate((tr) => {
+    const field = tr.querySelector('td.has-files textarea').getBoundingClientRect();
+    const btn = tr.querySelector('.files-btn').getBoundingClientRect();
+    return btn.left - field.right;
+  });
+  expect(gap, 'pixels between the end of the name field and the paperclip').toBeGreaterThanOrEqual(0);
+
+  // As visible as the remove button on the same row, which nobody has failed to find.
+  const strength = await page.locator('#budgetBody tr').first().evaluate((tr) => {
+    const look = (el) => { const c = getComputedStyle(el); return { opacity: Number(c.opacity), color: c.color }; };
+    return { clip: look(tr.querySelector('.files-btn')), remove: look(tr.querySelector('.del-cell .del-btn')) };
+  });
+  expect(strength.clip.opacity).toBe(1);
+  expect(strength.clip.color).toBe(strength.remove.color);
+
+  await clip.click();
+  await expect(page.locator('.files-pop')).toBeVisible();
+});
+
 test('a deployment with no bucket draws no paperclip at all', async ({ page }) => {
   const { BASE_URL } = require('../servers');
   await page.goto(BASE_URL + '/');

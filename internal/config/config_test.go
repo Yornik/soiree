@@ -94,14 +94,26 @@ func TestEventDateRequiresTimezone(t *testing.T) {
 	}
 }
 
-func TestEventDateNormalisedToUTC(t *testing.T) {
-	t.Setenv("SOIREE_EVENT_DATE", "2030-01-13T05:30:00+05:30")
-	c, err := Load()
-	if err != nil {
-		t.Fatalf("Load(): %v", err)
-	}
-	if c.EventDate != "2030-01-13T00:00:00Z" {
-		t.Errorf("EventDate = %q, want the UTC equivalent", c.EventDate)
+// The date reaches the page in the offset it was written in. Converting it to
+// UTC keeps the instant and loses the day: midnight on the 13th at +09:00 is
+// 15:00 on the 12th in UTC, and a page handed that announces the 12th.
+func TestEventDateKeepsTheOffsetItWasWrittenIn(t *testing.T) {
+	for written, want := range map[string]string{
+		"2030-01-13T00:00:00+09:00": "2030-01-13T00:00:00+09:00",
+		"2030-01-13T19:30:00-05:00": "2030-01-13T19:30:00-05:00",
+		"2030-01-13T00:00:00Z":      "2030-01-13T00:00:00Z",
+	} {
+		t.Setenv("SOIREE_EVENT_DATE", written)
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load(%q): %v", written, err)
+		}
+		if c.EventDate != want {
+			t.Errorf("EventDate = %q, want %q", c.EventDate, want)
+		}
+		if got := c.Client().EventDate; got != want {
+			t.Errorf("the page is handed %q, want %q", got, want)
+		}
 	}
 }
 
