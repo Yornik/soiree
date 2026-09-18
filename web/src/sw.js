@@ -6,15 +6,16 @@
  * planner keeps working with no connection at all.
  *
  * Rendered from a template: VERSION changes whenever the HTML shell changes,
- * which is what retires the previous cache.
+ * which is what retires the previous cache. Everything outside the two
+ * substitutions reaches the browser byte for byte.
  */
-var VERSION = '{{ .Version }}';
+var VERSION = {{ json .Version }};
 var CACHE = 'soiree-' + VERSION;
 
 /* Content-addressed asset URLs, safe to cache forever. */
 var PRECACHE = [
 {{- range .Assets }}
-  '{{ . }}',
+  {{ json . }},
 {{- end }}
   '/'
 ];

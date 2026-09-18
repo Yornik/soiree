@@ -8,12 +8,14 @@ package httpd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
+	texttemplate "text/template"
 	"time"
 
 	"github.com/Yornik/soiree/internal/config"
@@ -118,12 +120,27 @@ type indexData struct {
 // Asset resolves a logical asset name to its hashed URL from the template.
 func (d indexData) Asset(name string) string { return d.assets.URL(name) }
 
+// literals is what the two templates that are not HTML write their values
+// with. The service worker is a script and the manifest is JSON, and
+// html/template reads both as the text of a page: it rewrote the bare "<" of a
+// `for` loop in the worker to "&lt;", a syntax error that left every browser
+// without a worker, and it wrote an apostrophe in the event's name into the
+// manifest as "&#39;", which is what then stood under the icon on a phone.
+// text/template leaves the file alone, and `json` quotes a value for both:
+// a JSON string is a JavaScript string, and encoding/json escapes <, > and &.
+var literals = texttemplate.FuncMap{
+	"json": func(v any) (string, error) {
+		b, err := json.Marshal(v)
+		return string(b), err
+	},
+}
+
 func (s *Server) renderManifest(srcFS fs.FS) error {
 	raw, err := fs.ReadFile(srcFS, "manifest.webmanifest")
 	if err != nil {
 		return fmt.Errorf("read manifest: %w", err)
 	}
-	tmpl, err := template.New("manifest").Parse(string(raw))
+	tmpl, err := texttemplate.New("manifest").Funcs(literals).Parse(string(raw))
 	if err != nil {
 		return fmt.Errorf("parse manifest: %w", err)
 	}
@@ -171,7 +188,7 @@ func (s *Server) renderServiceWorker(srcFS fs.FS) error {
 	if err != nil {
 		return fmt.Errorf("read sw.js: %w", err)
 	}
-	tmpl, err := template.New("sw").Parse(string(raw))
+	tmpl, err := texttemplate.New("sw").Funcs(literals).Parse(string(raw))
 	if err != nil {
 		return fmt.Errorf("parse sw.js: %w", err)
 	}

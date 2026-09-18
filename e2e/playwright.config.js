@@ -117,10 +117,12 @@ module.exports = defineConfig({
 
   use: {
     baseURL: BASE_URL,
-    // The service worker is a cache in front of the app. Its contents are
-    // checked in the Go tests (TestServiceWorkerPrecachesRealURLs); letting it
-    // install here would put a race between registration and the reload in the
-    // persistence test, for no extra coverage.
+    // The service worker is a cache in front of the app. Letting it install
+    // in every spec would put a race between registration and the reload in
+    // the persistence test, so it is blocked here and run for real in one
+    // place, service-worker.spec.js, in a context of its own. It has to run
+    // somewhere: blocked everywhere, a worker that did not parse shipped in
+    // three releases.
     serviceWorkers: 'block',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

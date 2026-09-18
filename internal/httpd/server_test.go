@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/png"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -532,4 +533,94 @@ func TestThePhoneIconsAreRealAndTheSizeTheyClaim(t *testing.T) {
 		t.Fatal("the page names no apple-touch-icon")
 	}
 	check(touch[1], 180)
+}
+
+// The worker is a script and html/template is for pages: rendered through it,
+// the `<` of a `for` loop became `&lt;`, the file stopped parsing, and no
+// browser had a worker from 1.0.0 to 1.2.0 — no offline shell, no reminders —
+// while every test passed, because none of them read what was served. So:
+// every line of the source that holds no template action is served as written.
+func TestTheServiceWorkerIsServedAsWritten(t *testing.T) {
+	h := newTestServer(t, config.Config{EventName: "X"})
+	res := get(t, h, "/sw.js", nil)
+	served, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	source, err := fs.ReadFile(web.FS(), "sw.js")
+	if err != nil {
+		t.Fatalf("read sw.js: %v", err)
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(served), "\n") {
+		have[line] = true
+	}
+	var operators int
+	for n, line := range strings.Split(string(source), "\n") {
+		if strings.Contains(line, "{{") {
+			continue
+		}
+		if strings.ContainsAny(line, "<>&") {
+			operators++
+		}
+		if !have[line] {
+			t.Errorf("sw.js line %d is not served as written: %q", n+1, line)
+		}
+	}
+	// Without a line that an HTML escaper would touch, this test would pass
+	// over the very mistake it is here for.
+	if operators == 0 {
+		t.Error("sw.js has no line with <, > or & left; this test no longer proves anything")
+	}
+	for _, entity := range []string{"&lt;", "&gt;", "&amp;", "&#"} {
+		if strings.Contains(string(served), entity) {
+			t.Errorf("the served worker contains %q: it was escaped as HTML", entity)
+		}
+	}
+}
+
+// The manifest is JSON, and what it names is what stands under the icon on a
+// phone. An event called "Ada's 90th" has to arrive as that, not as
+// "Ada&#39;s 90th", and a name with a quote or a backslash in it must not
+// cost the site its manifest.
+func TestTheManifestNamesTheEventAsWritten(t *testing.T) {
+	for _, name := range []string{
+		`Ada's 90th`,
+		`Ada & Grace <3`,
+		`The "big" one`,
+		`back\slash`,
+	} {
+		h := newTestServer(t, config.Config{EventName: name})
+		res := get(t, h, "/", nil)
+		page, _ := io.ReadAll(res.Body)
+		_ = res.Body.Close()
+		manifestURL := regexp.MustCompile(`/assets/manifest\.[a-f0-9]+\.webmanifest`).FindString(string(page))
+		if manifestURL == "" {
+			t.Fatal("the page links no manifest")
+		}
+		res = get(t, h, manifestURL, nil)
+		body, _ := io.ReadAll(res.Body)
+		_ = res.Body.Close()
+
+		var manifest struct {
+			Name  string `json:"name"`
+			Icons []struct {
+				Src string `json:"src"`
+			} `json:"icons"`
+		}
+		if err := json.Unmarshal(body, &manifest); err != nil {
+			t.Errorf("event %q: the manifest is not JSON: %v", name, err)
+			continue
+		}
+		if manifest.Name != name {
+			t.Errorf("the manifest names the event %q, want %q", manifest.Name, name)
+		}
+		if len(manifest.Icons) == 0 {
+			t.Errorf("event %q: the manifest lost its icons", name)
+		}
+		for _, icon := range manifest.Icons {
+			if !strings.HasPrefix(icon.Src, "/assets/") {
+				t.Errorf("event %q: icon address %q", name, icon.Src)
+			}
+		}
+	}
 }
