@@ -835,6 +835,56 @@ test('signing out removes this browser\'s copy of the plan, and signing in bring
   await expect(budgetRow(page, 0).paid).toHaveValue('500');
 });
 
+// Found in production on the first day: an admin signed out and back in,
+// imported the whole plan, saw it on screen, and nobody else ever did. Signing
+// out raises a flag so that a signed-out page cannot write its emptied planner
+// back; nothing lowered it on the way back in, and the import takes the one
+// save path that checks it. The file was not sent, and not stored either — the
+// next reload would have taken it off the importer's own screen too.
+test('an import made after signing out and back in reaches the server', async ({ page, request }) => {
+  await openWithOwnSession(page, request, 'linus');
+
+  // On the same page, with no reload in between: that is what kept the flag.
+  await signOutButton(page).click();
+  await expect(page.locator('#authScreen')).toBeVisible();
+  // Count the plan reads that signing in causes, and let them all finish
+  // before importing. There are two: the one that adopts the server's plan,
+  // and one more when the live stream opens and the server says `resync`.
+  // That second read is why this went unnoticed — every merge ends by pushing
+  // whatever is pending, so an import made in the first second after signing
+  // in was rescued by it. One made a minute later, as in production, had
+  // nothing left to rescue it. This test imports in the quiet afterwards.
+  let planReads = 0;
+  page.on('response', (res) => {
+    if (res.url().endsWith('/api/v1/plan') && res.status() === 200) planReads += 1;
+  });
+  await signInThroughTheForm(page, request, 'linus');
+  await gotoTab(page, 'budget');
+  await expect.poll(() => planReads, { message: 'the adopt and the post-subscribe resync' }).toBeGreaterThanOrEqual(2);
+  await page.evaluate(() => new Promise((done) => setTimeout(done, 100)));
+
+  const plan = {
+    budgetItems: [
+      { id: 'b1', item: 'Imported venue', vendor: '', unit: 1200, qty: 1, paid: 300, note: '', sponsors: [] },
+      { id: 'b2', item: 'Imported band', vendor: '', unit: 450, qty: 2, paid: 0, note: '', sponsors: [] },
+    ],
+    tasks: [], sponsors: [], notes: [],
+    ceiling: 0, fxRate: 0, inflationPct: 0, splitEvenly: false,
+  };
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.setInputFiles('#importFile', {
+    name: 'plan.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(plan)),
+  });
+  await expect(budgetRow(page, 0).item).toHaveValue('Imported venue');
+
+  // On screen was never the question. This is.
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item).sort(), { timeout: 10_000 })
+    .toEqual(['Imported band', 'Imported venue']);
+  // And kept in this browser, which the flag also prevented.
+  expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toContain('Imported venue');
+});
+
 test('signing out with changes that never reached the server asks first', async ({ page, request }) => {
   await openWithOwnSession(page, request, 'linus');
   await gotoTab(page, 'budget');
