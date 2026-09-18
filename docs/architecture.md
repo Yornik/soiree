@@ -24,7 +24,7 @@ web/src/                index.html, styles.css, app.js, sw.js, fonts/
 | `/sw.js` | `no-cache` + ETag | Rendered with the precache list. Never cached hard, or a broken worker would pin itself. |
 | `/healthz` | `no-store` | Liveness. |
 | `/readyz` | `no-store` | Readiness. |
-| `/metrics` | `no-store` | Prometheus exposition. |
+| `/metrics` | — | **Not on this listener.** Served on `SOIREE_METRICS_ADDR` instead; a request here is a 404, still counted under `route="metrics"` so a stale scrape target or a path scanner is visible rather than silent. |
 
 ## Startup pipeline
 
@@ -157,7 +157,7 @@ The application is built to be operated, not just run.
 |---|---|
 | `/healthz` | Liveness. Checks nothing downstream on purpose — a liveness probe that fails when the database is down converts an outage into a restart loop. |
 | `/readyz` | Readiness. Identical to liveness while everything is in memory; this is where the database check goes once it lands. |
-| `/metrics` | Prometheus exposition, on a private registry. |
+| `/metrics` | Prometheus exposition, on a private registry — and on a **separate listener** (`SOIREE_METRICS_ADDR`, default `:9090`). The ingress route in front of the site carries no path constraint, so anything on the main listener is world-readable, and `soiree_build_info` would name the running version and commit to anyone who asked. A second port is also the shape a ServiceMonitor expects. The probes stay on the main port, because that is the one kubelet reaches. |
 
 Exported series:
 

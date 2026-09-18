@@ -17,9 +17,10 @@ everyone at once.
 - **Any currency** — primary currency plus an optional second readout, so people
   in different countries can each see a number that means something to them.
 
-Configured entirely by environment variables. No build step, no third-party
-requests, and nothing to run alongside it yet — the database layer exists but
-is not wired in, so today it is a single binary and a browser.
+Configured entirely by environment variables, and no third-party requests ever.
+Run it with a PostgreSQL DSN for the API, accounts and reminders; run it
+without one and it serves the planner alone, storing state in the browser. No
+build step either way.
 
 ```bash
 docker run --rm -p 8080:8080 \
@@ -46,7 +47,8 @@ Then open <http://localhost:8080>.
 | `SOIREE_SECONDARY_LOCALE` | *primary locale* | Formatting for the second currency |
 | `SOIREE_BUDGET_CEILING` | `0` | Starting spending ceiling |
 | `SOIREE_DEMO_DATA` | `false` | Seed obviously-fake sample data |
-| `SOIREE_LISTEN_ADDR` | `:8080` | Bind address |
+| `SOIREE_LISTEN_ADDR` | `:8080` | Bind address for the site |
+| `SOIREE_METRICS_ADDR` | `:9090` | Bind address for the Prometheus exposition. A separate listener on purpose — a reverse proxy in front of the site usually has no path constraint, so `/metrics` on the main port would be world-readable. Must differ from the above. |
 
 A date without a timezone is rejected at startup rather than accepted. It is a
 real bug, not pedantry: `2027-06-12T00:00:00` is interpreted in the *viewer's*
@@ -89,29 +91,29 @@ write path is already async-shaped for the API that replaces it.
 
 ## Status
 
-Usable today, with one significant limitation: **the running app still keeps
-state in the browser's `localStorage`**, so it is per-browser and not yet shared
-between people. Use Export / Import JSON to move data around in the meantime.
+The server side is built. **The browser has not been switched over to it yet**,
+so the page you see still keeps its state in `localStorage` — per-browser, not
+yet shared between people. That last connection is the next piece of work, and
+until it lands, Export / Import JSON is how data moves between people.
 
-Shared state is the point of the project. The database layer exists —
-`migrations/`, `internal/migrate` and `internal/store` are in the tree and
-tested against a real PostgreSQL — but the binary does not read `DATABASE_URL`
-yet, so nothing is wired through to it.
-
-1. ~~Configurable, self-hostable single binary~~ — done
+1. ~~Configurable, self-hostable single binary~~
 2. ~~Schema and store layer.~~ Migrations applied at startup under an advisory
-   lock; per-row revisions so concurrent edits are detected rather than
-   silently overwritten — done, not yet wired in
-3. REST API over that store, and the browser's `Store` becoming async
-4. Accounts with roles (admin / editor / viewer). An admin creates each account
-   from an email address and a role; the person receives a single-use link to
-   set their own password. Passwords are stored as Argon2id hashes with a
-   per-password salt — never encrypted, never emailed.
-5. Live sync over SSE, with per-field writes and conflict detection
+   lock, so concurrent replicas cannot race. Per-row revisions, so simultaneous
+   edits are detected rather than silently overwritten.
+3. ~~REST API over that store~~, including the 409-on-stale-revision path
+4. ~~Accounts with roles~~ (admin / editor / viewer). An admin creates each
+   account from an email address and a role; the person receives a single-use
+   link to set their own password. Argon2id with a per-password salt — never
+   encrypted, never emailed.
+5. ~~Append-only change history~~, ~~deadline reminders~~, ~~subject export and
+   erasure~~
+6. **Point the browser at the API** — the remaining gap
+7. Live sync over SSE, so a second person's edit appears without a refresh
 
 Browser-side persistence goes through a single `Store` object in
-`web/src/app.js` — that is the seam the API replaces. See
-[docs/architecture.md](docs/architecture.md).
+`web/src/app.js` — that is the seam step 6 replaces, and it is already
+debounced, so the write path is async-shaped before the network appears behind
+it. See [docs/architecture.md](docs/architecture.md).
 
 ## Development
 

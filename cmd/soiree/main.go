@@ -18,6 +18,7 @@ import (
 	"github.com/Yornik/soiree/internal/httpd"
 	"github.com/Yornik/soiree/internal/mailer"
 	"github.com/Yornik/soiree/internal/migrate"
+	"github.com/Yornik/soiree/internal/reminders"
 	"github.com/Yornik/soiree/internal/store"
 	"github.com/Yornik/soiree/web"
 )
@@ -139,6 +140,23 @@ func main() {
 	// context, so it stops when the process is asked to.
 	if accounts != nil {
 		go accounts.Sweep(ctx)
+	}
+
+	// The deadline digest. Off unless SOIREE_REMINDER_ENABLED is true, and a
+	// no-op when SMTP is unconfigured, so this costs nothing in a deployment
+	// that does not want it. It holds a Postgres advisory lock while sending,
+	// which is what stops three replicas mailing the same digest three times.
+	if st != nil {
+		stopReminders, err := reminders.Start(ctx, st, log)
+		if err != nil {
+			// Bad reminder configuration is a startup error rather than a
+			// warning: a digest that silently never sends is the same failure
+			// as having no reminders at all, which is the thing this feature
+			// exists to prevent.
+			log.Error("invalid reminder configuration", "err", err)
+			os.Exit(1)
+		}
+		defer stopReminders()
 	}
 
 	go func() {
