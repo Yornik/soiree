@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -29,15 +30,25 @@ func newAPIServerWithMetrics(t *testing.T) (public, metrics http.Handler, pool *
 	if _, err := migrate.Run(t.Context(), pool, nil); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	st := store.New(pool)
 	s, err := New(
 		config.Config{EventName: "Ada's Retirement", Currency: "EUR", Locale: "en-US"},
 		web.FS(),
-		WithStore(store.New(pool)),
+		WithStore(st),
 	)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	return s.Handler(), s.MetricsHandler(), pool
+
+	// The API is behind RequireWrite, so a request without a session never
+	// reaches a handler and never gets classified — which would make the label
+	// assertions below pass for the wrong reason.
+	a := NewAuth(AuthOptions{Store: st, BaseURL: "https://soiree.example.test/"})
+	a.params = cheapParams
+	a.background = func(fn func(context.Context)) { fn(context.Background()) }
+	h := s.WithAuth(a).Handler()
+
+	return authedAs(t, h, st, a, store.RoleEditor), s.MetricsHandler(), pool
 }
 
 // TestAPIMetricsRouteLabelIsBounded: every API path after the collection is a

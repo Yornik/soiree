@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -47,15 +48,114 @@ func newAPIServerIn(t *testing.T, currency string) (http.Handler, *pgxpool.Pool)
 	if _, err := migrate.Run(t.Context(), pool, nil); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	st := store.New(pool)
 	s, err := New(
 		config.Config{EventName: "Ada's Retirement", Currency: currency, Locale: "en-US"},
 		web.FS(),
-		WithStore(store.New(pool)),
+		WithStore(st),
 	)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
-	return s.Handler(), pool
+
+	// The API is behind RequireWrite, so these tests need a session like any
+	// other caller. Signing in here rather than per test keeps all of them
+	// about the API instead of about authentication, which has its own suite —
+	// and an editor is the least-privileged role that may write, so a test
+	// passing here does not depend on being an admin.
+	a := NewAuth(AuthOptions{Store: st, BaseURL: "https://soiree.example.test/"})
+	a.params = cheapParams
+	a.background = func(fn func(context.Context)) { fn(context.Background()) }
+	h := s.WithAuth(a).Handler()
+
+	return authedAs(t, h, st, a, store.RoleEditor), pool
+}
+
+// newAPIServerParts is the shared construction, handing back the bare handler
+// so a caller can choose whether and as whom to sign in.
+func newAPIServerParts(t *testing.T, currency string) (http.Handler, *Auth, *pgxpool.Pool) {
+	t.Helper()
+
+	pool := pgtest.Pool(t)
+	if _, err := migrate.Run(t.Context(), pool, nil); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	st := store.New(pool)
+	s, err := New(
+		config.Config{EventName: "Ada's Retirement", Currency: currency, Locale: "en-US"},
+		web.FS(),
+		WithStore(st),
+	)
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	a := NewAuth(AuthOptions{Store: st, BaseURL: "https://soiree.example.test/"})
+	a.params = cheapParams
+	a.background = func(fn func(context.Context)) { fn(context.Background()) }
+	return s.WithAuth(a).Handler(), a, pool
+}
+
+// newAPIServerUnauthenticated is the same server with no session attached, for
+// asserting what an anonymous caller is refused.
+func newAPIServerUnauthenticated(t *testing.T) (http.Handler, *pgxpool.Pool) {
+	t.Helper()
+	h, _, pool := newAPIServerParts(t, "EUR")
+	return h, pool
+}
+
+// newAPIServerAs is the server with a session in a chosen role.
+func newAPIServerAs(t *testing.T, role store.Role) (http.Handler, *pgxpool.Pool) {
+	t.Helper()
+	h, a, pool := newAPIServerParts(t, "EUR")
+	return authedAs(t, h, store.New(pool), a, role), pool
+}
+
+// authedAs returns h with every request carrying a session for a new account in
+// the given role.
+//
+// Wrapping the handler rather than changing call() keeps the ~54 existing
+// request sites untouched: what they assert about the API is unchanged by the
+// API having become authenticated.
+func authedAs(t *testing.T, h http.Handler, st *store.Store, a *Auth, role store.Role) http.Handler {
+	t.Helper()
+
+	const password = "correct horse battery staple"
+	hash, err := a.params.Hash(password)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	email := string(role) + "@example.test"
+	if _, err := st.CreateUser(t.Context(), store.User{
+		Email: email, Role: role, Status: store.StatusActive, PasswordHash: &hash,
+	}); err != nil {
+		t.Fatalf("create %s: %v", role, err)
+	}
+
+	body := `{"email":"` + email + `","password":"` + password + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login as %s: status %d, body %s", role, rec.Code, rec.Body)
+	}
+
+	var session *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookieName && c.Value != "" {
+			session = c
+		}
+	}
+	if session == nil {
+		t.Fatalf("login as %s set no session cookie", role)
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := r.Cookie(sessionCookieName); err != nil {
+			r.AddCookie(session)
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 type response struct {
@@ -855,5 +955,50 @@ func TestReadyzChecksTheDatabase(t *testing.T) {
 	}
 	if res := call(t, h, http.MethodGet, "/healthz", ""); res.status != http.StatusOK {
 		t.Error("/healthz failed on a database outage, which turns the outage into a restart loop")
+	}
+}
+
+// The plan is not public. It holds people's names against amounts of money they
+// owe each other, and for several releases every route below was readable and
+// writable by anyone who could reach the URL — the middleware, the roles and the
+// sessions all existed and nothing here called any of them.
+//
+// This asserts the subtree, not a list of routes, because the failure was never
+// one route being wrong: it was the guard being absent, and a per-route test
+// would have passed for every route that existed on the day it was written.
+func TestTheAPIRefusesAnyoneNotSignedIn(t *testing.T) {
+	h, _ := newAPIServerUnauthenticated(t)
+
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodGet, "/api/v1/plan", ""},
+		{http.MethodGet, "/api/v1/events", ""},
+		{http.MethodPost, "/api/v1/budget-items", `{"item":"Venue deposit"}`},
+		{http.MethodPatch, "/api/v1/budget-items/" + uuid.Nil.String(), `{"revision":1}`},
+		{http.MethodDelete, "/api/v1/budget-items/" + uuid.Nil.String() + "?revision=1", ""},
+		{http.MethodPost, "/api/v1/sponsors", `{"code":"Rose"}`},
+		{http.MethodPost, "/api/v1/tasks", `{"name":"Book the venue"}`},
+		{http.MethodPost, "/api/v1/notes", `{"text":"Lock the caterer"}`},
+		{http.MethodPost, "/api/v1/phases", `{"name":"Arrival"}`},
+		{http.MethodPost, "/api/v1/programme-entries", `{"title":"Speeches"}`},
+		{http.MethodPatch, "/api/v1/settings", `{"revision":1,"ceiling":"1.00"}`},
+	} {
+		res := call(t, h, c.method, c.path, c.body)
+		if res.status != http.StatusUnauthorized {
+			t.Errorf("%s %s -> %d, want 401", c.method, c.path, res.status)
+		}
+	}
+}
+
+// A viewer may look and may not touch. The role exists precisely so somebody
+// can be shown the budget without being able to move a figure in it.
+func TestAViewerMayReadAndMayNotWrite(t *testing.T) {
+	h, _ := newAPIServerAs(t, store.RoleViewer)
+
+	if res := call(t, h, http.MethodGet, "/api/v1/plan", ""); res.status != http.StatusOK {
+		t.Errorf("GET /plan as a viewer -> %d, want 200", res.status)
+	}
+	res := call(t, h, http.MethodPost, "/api/v1/budget-items", `{"item":"Venue deposit"}`)
+	if res.status != http.StatusForbidden {
+		t.Errorf("POST as a viewer -> %d, want 403", res.status)
 	}
 }

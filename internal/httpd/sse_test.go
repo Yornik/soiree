@@ -46,23 +46,35 @@ const (
 // tweak runs after both are built and before either is started, which is the
 // only point at which the hub's knobs and the listener's timeouts can be
 // changed without racing whoever is reading them.
-func newLiveServer(t *testing.T, tweak ...func(*Server, *httptest.Server)) (*Server, *httptest.Server, *pgxpool.Pool) {
+// The fourth return is the API handler with a session attached: the CRUD
+// subtree is behind RequireWrite, so a test that writes needs one. The
+// httptest.Server carries the same session for the streams themselves.
+func newLiveServer(t *testing.T, tweak ...func(*Server, *httptest.Server)) (*Server, *httptest.Server, *pgxpool.Pool, http.Handler) {
 	t.Helper()
 
 	pool := pgtest.Pool(t)
 	if _, err := migrate.Run(t.Context(), pool, nil); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	st := store.New(pool)
 	s, err := New(
 		config.Config{EventName: "Ada's Retirement", Currency: "EUR", Locale: "en-US"},
 		web.FS(),
-		WithStore(store.New(pool)),
+		WithStore(st),
 	)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
 
-	ts := httptest.NewUnstartedServer(s.Handler())
+	// /events sits inside the guarded API subtree, so a stream needs a session
+	// like any other request. Without one these tests would assert against a
+	// 401 body and never open a stream at all.
+	a := NewAuth(AuthOptions{Store: st, BaseURL: "https://soiree.example.test/"})
+	a.params = cheapParams
+	a.background = func(fn func(context.Context)) { fn(context.Background()) }
+
+	authed := authedAs(t, s.WithAuth(a).Handler(), st, a, store.RoleEditor)
+	ts := httptest.NewUnstartedServer(authed)
 	for _, fn := range tweak {
 		fn(s, ts)
 	}
@@ -74,7 +86,7 @@ func newLiveServer(t *testing.T, tweak ...func(*Server, *httptest.Server)) (*Ser
 		ts.Close()
 	})
 	ts.Start()
-	return s, ts, pool
+	return s, ts, pool, authed
 }
 
 // stream is one open SSE connection, with its frames pumped into a channel so a
@@ -251,8 +263,7 @@ func TestTheMetricsWrapperStaysFlushable(t *testing.T) {
 // TestEventsAnnouncesAWrite is the feature: an edit made through the API turns
 // up on somebody else's stream, naming the row to re-read.
 func TestEventsAnnouncesAWrite(t *testing.T) {
-	s, ts, _ := newLiveServer(t)
-	h := s.Handler()
+	s, ts, _, h := newLiveServer(t)
 
 	st := openStream(t, ts)
 	if got := st.header.Get("Cache-Control"); got != "no-store" {
@@ -298,8 +309,7 @@ func TestEventsAnnouncesAWrite(t *testing.T) {
 // fan-out only reached the first, a planning session of three would have two
 // people quietly out of date.
 func TestEventsReachesEverySubscriber(t *testing.T) {
-	s, ts, _ := newLiveServer(t)
-	h := s.Handler()
+	s, ts, _, h := newLiveServer(t)
 
 	first, second := openStream(t, ts), openStream(t, ts)
 	first.awaitResync(t)
@@ -323,7 +333,7 @@ func TestEventsReachesEverySubscriber(t *testing.T) {
 // leave nothing behind, or a day of people reloading fills the subscriber table
 // with streams nobody is reading.
 func TestEventsCleansUpAfterADisconnectingClient(t *testing.T) {
-	s, ts, _ := newLiveServer(t)
+	s, ts, _, _ := newLiveServer(t)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/events", nil)
@@ -354,7 +364,7 @@ func TestEventsCleansUpAfterADisconnectingClient(t *testing.T) {
 // socket, so there has to be a number. Past it the answer is a refusal a client
 // can act on, not a connection the server cannot afford.
 func TestEventsCapsConcurrentSubscribers(t *testing.T) {
-	s, ts, _ := newLiveServer(t, func(s *Server, _ *httptest.Server) { s.live.maxClients = 1 })
+	s, ts, _, _ := newLiveServer(t, func(s *Server, _ *httptest.Server) { s.live.maxClients = 1 })
 
 	first := openStream(t, ts)
 	first.awaitResync(t)
@@ -380,8 +390,7 @@ func TestEventsCapsConcurrentSubscribers(t *testing.T) {
 // so — changes happened while it was down and nobody was told, so every client
 // is asked to refetch once it is back.
 func TestEventsRecoversFromADroppedListenConnection(t *testing.T) {
-	s, ts, pool := newLiveServer(t)
-	h := s.Handler()
+	s, ts, pool, h := newLiveServer(t)
 
 	st := openStream(t, ts)
 	st.awaitResync(t)
@@ -421,7 +430,7 @@ func TestEventsRecoversFromADroppedListenConnection(t *testing.T) {
 // Checked by removing the rolling deadline, at which point this fails after
 // six heartbeats.
 func TestEventsOutlivesTheServersRequestTimeouts(t *testing.T) {
-	_, ts, _ := newLiveServer(t, func(s *Server, ts *httptest.Server) {
+	_, ts, _, _ := newLiveServer(t, func(s *Server, ts *httptest.Server) {
 		// Short enough to observe, against deadlines short enough to have
 		// already fired several times over by the end of the test.
 		s.live.heartbeat = 50 * time.Millisecond
