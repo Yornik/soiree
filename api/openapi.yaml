@@ -576,6 +576,10 @@ paths:
         answers `false` and returns `setPasswordUrl`. Give that link to the
         person by another route. A deployment with mail omits the link, so it
         never reaches a log.
+
+        Send `language` to choose the language of the mail. The link then
+        carries `?lang=`, so the page it opens is in the same language. Omit
+        `language` to use the language of the deployment.
       requestBody:
         required: true
         content:
@@ -589,6 +593,8 @@ paths:
                   format: email
                 role:
                   $ref: '#/components/schemas/Role'
+                language:
+                  $ref: '#/components/schemas/Language'
       responses:
         '201':
           description: The account exists. The invitation is on its way.
@@ -1401,7 +1407,7 @@ components:
         code is `bad_request`.
 
         On the accounts paths the code names the fault: `invalid_json`,
-        `invalid_email`, `invalid_role`, `invalid_status`,
+        `invalid_email`, `invalid_role`, `invalid_status`, `invalid_language`,
         `revision_required`, `self_change`, `invalid_token`, `weak_password`,
         `invalid_passkey` or `invalid_challenge`.
       content:
@@ -1571,6 +1577,23 @@ components:
 
         `viewer` reads the plan.
 
+    Language:
+      type: [string, 'null']
+      description: |
+        The language the server writes to this person in: the invitation mail,
+        the password-reset mail, and the page that the link in them opens.
+
+        `null` means the language of the deployment. The server reads that
+        language when it writes the mail. It does not copy it into the account,
+        so a change of `SOIREE_LOCALE` reaches every account that chose
+        nothing.
+
+        Send a bare tag. The server also accepts a locale, such as `nl-NL`,
+        and keeps the language part. A language with no translation gets
+        **400** with the code `invalid_language`.
+      enum: [en, nl, id, null]
+      examples: [nl]
+
     UserStatus:
       type: string
       enum: [invited, active, disabled]
@@ -1627,6 +1650,7 @@ components:
             - invalid_email
             - invalid_role
             - invalid_status
+            - invalid_language
             - invalid_passkey
             - invalid_challenge
             - invalid_credentials
@@ -2091,12 +2115,13 @@ components:
     User:
       type: object
       description: One account.
-      required: [id, email, role, status, createdBy, createdAt, revision, updatedAt]
+      required: [id, email, role, status, createdBy, createdAt, revision, updatedAt, language]
       properties:
         id: { $ref: '#/components/schemas/Id' }
         email: { type: string, format: email }
         role: { $ref: '#/components/schemas/Role' }
         status: { $ref: '#/components/schemas/UserStatus' }
+        language: { $ref: '#/components/schemas/Language' }
         createdBy:
           type: [string, 'null']
           format: uuid
@@ -2112,13 +2137,19 @@ components:
       description: |
         A change to an account.
 
-        Omit a field to leave it as it is.
+        Omit a field to leave it as it is. `language` has three states: omit
+        it to leave it, send a tag to set it, and send `null` to use the
+        language of the deployment again.
+
+        An admin changes their own `language`. An admin does not change their
+        own `role` or `status`.
       required: [revision]
       properties:
         revision: { $ref: '#/components/schemas/Revision' }
         email: { type: string, format: email }
         role: { $ref: '#/components/schemas/Role' }
         status: { $ref: '#/components/schemas/UserStatus' }
+        language: { $ref: '#/components/schemas/Language' }
 
     Invite:
       type: object
@@ -2141,8 +2172,8 @@ components:
             The link that sets the password. It is present when `mailSent` is
             `false`, and absent otherwise.
 
-            The link carries the token. Give it to the person by a private
-            route. A deployment with mail omits it, so the token never reaches
+            The link carries the token. It also carries `?lang=` when the
+            account has a language. Give it to the person by a private route. A deployment with mail omits it, so the token never reaches
             a log.
 
     Passkey:

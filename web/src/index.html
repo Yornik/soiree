@@ -386,10 +386,17 @@
           <option value="admin" data-i18n-auth="opt.admin">Admin</option>
         </select>
       </div>
+      <!-- Filled by auth.js: the first choice names the deployment's own
+           language, which the template does not know how to say. -->
+      <div class="auth-field">
+        <label for="newUserLanguage" data-i18n-auth="people.language">Language</label>
+        <select id="newUserLanguage"></select>
+      </div>
       <button class="solid-btn" type="submit" id="createUserSubmit" data-i18n-auth="people.add">Add person</button>
     </form>
     <p class="auth-roles" data-i18n-auth="people.roles">A viewer reads the ledger. An editor changes it. An admin
        also decides who has an account.</p>
+    <p class="auth-roles" data-i18n-auth="people.language.hint">The invitation, and the screens it opens, are written in this language.</p>
 
     <p class="auth-msg" id="adminMsg" role="status" aria-live="polite"></p>
 

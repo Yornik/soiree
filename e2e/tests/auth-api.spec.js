@@ -287,3 +287,61 @@ test('a passkey can be registered from a signed-in session and then signs you in
     await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId }).catch(() => {});
   }
 });
+
+/*
+ * The reason a person has a language at all, against the real server: the
+ * deployment speaks one language, the person being invited reads another, and
+ * the admin says so. What they are then sent has to open in it — and that is a
+ * claim about the link the *server* builds, which a scripted server cannot
+ * make.
+ */
+test('somebody invited in Dutch is met in Dutch, from the link onwards', async ({ page, browser }, testInfo) => {
+  await signIn(page, admin(testInfo));
+
+  const invited = `saskia-${stamp()}@example.test`;
+  await page.goto('/#/admin');
+  await expect(page.locator('#peopleList .person')).not.toHaveCount(0);
+  await page.fill('#newUserEmail', invited);
+  await page.selectOption('#newUserRole', 'editor');
+  await page.selectOption('#newUserLanguage', 'nl');
+  await page.click('#createUserSubmit');
+
+  await expect(page.locator('#adminLinkOut')).toBeVisible();
+  const link = await page.inputValue('#adminLinkValue');
+  // The language rides in the query string, which is sent to the server and is
+  // only a language. The secret is still behind the #, which never is.
+  expect(link).toContain(`${AUTH_URL}/?lang=nl#/set-password?token=`);
+  await expect(page.locator('.person', { hasText: invited }).locator('.person-language')).toHaveValue('nl');
+
+  const theirs = await browser.newContext({ baseURL: AUTH_URL, serviceWorkers: 'block' });
+  await isolateFromPlan(theirs);
+  const them = await theirs.newPage();
+  try {
+    await them.goto(link);
+    await expect(them.locator('html')).toHaveAttribute('lang', 'nl');
+    await expect(them.locator('#authTitle')).toHaveText('Kies een wachtwoord');
+    expect(them.url()).not.toContain('token=');
+    expect(them.url()).toContain('lang=nl');
+
+    const chosen = 'een-lang-genoeg-wachtwoord';
+    await them.fill('#newPassword', chosen);
+    await them.fill('#newPassword2', chosen);
+    await them.click('#setPasswordSubmit');
+    await expect(them.locator('#authNote')).toContainText('Je wachtwoord is opgeslagen');
+
+    await them.click('#authNoteAct');
+    await them.fill('#loginEmail', invited);
+    await them.fill('#loginPassword', chosen);
+    await them.click('#loginSubmit');
+    await expect(them.locator('.account-role')).toHaveText('bewerker');
+
+    // A later visit with no ?lang= at all — a bookmark, the address typed in —
+    // is still in Dutch: the account says so, and this device remembers.
+    await them.goto('/');
+    await expect(them.locator('.account-email')).toHaveText(invited);
+    await expect(them.locator('html')).toHaveAttribute('lang', 'nl');
+    await expect(them.locator('#accountActs')).toContainText('Afmelden');
+  } finally {
+    await theirs.close();
+  }
+});

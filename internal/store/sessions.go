@@ -45,7 +45,7 @@ func (s *Store) SessionByToken(ctx context.Context, tokenHash []byte, maxLifetim
 	err := s.pool.QueryRow(ctx,
 		`SELECT s.id, s.user_id, s.token_hash, s.created_at, s.last_seen_at, s.expires_at,
 		        u.id, u.email, u.role, u.password_hash, u.status, u.created_by,
-		        u.created_at, u.revision, u.updated_at
+		        u.created_at, u.revision, u.updated_at, u.language
 		   FROM sessions s
 		   JOIN users u ON u.id = s.user_id
 		  WHERE s.token_hash = $1
@@ -55,7 +55,7 @@ func (s *Store) SessionByToken(ctx context.Context, tokenHash []byte, maxLifetim
 		tokenHash, maxLifetime.Seconds()).
 		Scan(&sess.ID, &sess.UserID, &sess.TokenHash, &sess.CreatedAt, &sess.LastSeenAt, &sess.ExpiresAt,
 			&u.ID, &u.Email, &u.Role, &u.PasswordHash, &u.Status, &u.CreatedBy,
-			&u.CreatedAt, &u.Revision, &u.UpdatedAt)
+			&u.CreatedAt, &u.Revision, &u.UpdatedAt, &u.Language)
 	if err != nil {
 		return Session{}, User{}, notFound(err, "sessions")
 	}

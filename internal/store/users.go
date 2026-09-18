@@ -43,9 +43,15 @@ type User struct {
 	CreatedAt    time.Time  `db:"created_at"`
 	Revision     int64      `db:"revision"`
 	UpdatedAt    time.Time  `db:"updated_at"`
+	// Language is the language this person is written to in, as a bare tag
+	// ("nl"). Nil means "whatever the deployment speaks" — see migration 0012
+	// for why that is a null rather than a default. This layer stores the tag
+	// and does not know which ones have a translation behind them; the caller
+	// that composes the mail does.
+	Language *string `db:"language"`
 }
 
-const userColumns = `id, email, role, password_hash, status, created_by, created_at, revision, updated_at`
+const userColumns = `id, email, role, password_hash, status, created_by, created_at, revision, updated_at, language`
 
 // CreateUser inserts an account. A zero ID lets the database generate one.
 //
@@ -57,11 +63,11 @@ func (s *Store) CreateUser(ctx context.Context, in User) (User, error) {
 	actor := resolveActor(ctx, in.CreatedBy)
 	return createAudited(ctx, s, EntityUsers, actor, func(tx pgx.Tx) (User, error) {
 		return queryOne[User](ctx, tx, "users",
-			`INSERT INTO users (id, email, role, password_hash, status, created_by)
-			 VALUES (COALESCE($1, gen_random_uuid()), $2, COALESCE($3::text, 'viewer'), $4, COALESCE($5::text, 'invited'), $6)
+			`INSERT INTO users (id, email, role, password_hash, status, created_by, language)
+			 VALUES (COALESCE($1, gen_random_uuid()), $2, COALESCE($3::text, 'viewer'), $4, COALESCE($5::text, 'invited'), $6, $7)
 			 RETURNING `+userColumns,
 			newID(in.ID), in.Email, nullString(string(in.Role)), in.PasswordHash,
-			nullString(string(in.Status)), in.CreatedBy)
+			nullString(string(in.Status)), in.CreatedBy, in.Language)
 	})
 }
 
@@ -93,11 +99,11 @@ func (s *Store) UpdateUser(ctx context.Context, in User) (User, error) {
 		func(tx pgx.Tx, _ User) (User, error) {
 			return queryOne[User](ctx, tx, "users",
 				`UPDATE users
-				    SET email = $1, role = $2, password_hash = $3, status = $4,
+				    SET email = $1, role = $2, password_hash = $3, status = $4, language = $7,
 				        revision = revision + 1, updated_at = now()
 				  WHERE id = $5 AND revision = $6
 				RETURNING `+userColumns,
-				in.Email, in.Role, in.PasswordHash, in.Status, in.ID, in.Revision)
+				in.Email, in.Role, in.PasswordHash, in.Status, in.ID, in.Revision, in.Language)
 		})
 	if err == nil {
 		return out, nil

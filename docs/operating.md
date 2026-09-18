@@ -117,9 +117,16 @@ shown once on the screen when it is not. Follow it and choose a new password.
 The variable can stay set afterwards — it is consumed only while no admin
 exists, so it cannot put the old password back.
 
-Creating everybody else is the same screen: an address and a role (`admin`,
-`editor` or `viewer`). There is no self-service sign-up and no open invitation
-link; an admin creates each account.
+Creating everybody else is the same screen: an address, a role (`admin`,
+`editor` or `viewer`) and a language. There is no self-service sign-up and no
+open invitation link; an admin creates each account.
+
+The language is what that person is written to in. *Same as the planner* means
+`SOIREE_LOCALE`, and is resolved each time a mail is written, so changing the
+locale later takes those accounts with it. Choosing one — for the Dutch half of
+a family on a deployment set to `id-ID`, say — puts the invitation in it, makes
+the link open in it, and turns the planner to it once they sign in. It can be
+changed afterwards from the same list, for anybody including yourself.
 
 With SMTP configured the link goes to the person it belongs to and nowhere else
 — an admin who never sees it cannot use it. Without SMTP the screen shows the

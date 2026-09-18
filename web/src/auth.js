@@ -131,6 +131,11 @@
       'people.add': 'Add person',
       'people.roles': 'A viewer reads the ledger. An editor changes it. An admin also decides who has an account.',
       'people.needemail': 'Enter the address the invitation should go to.',
+      'people.language': 'Language',
+      'people.language.hint': 'The invitation, and the screens it opens, are written in this language.',
+      'lang.default': 'Same as the planner ({name})',
+      'person.language.aria': 'Language for {email}',
+      'e.invalid_language': 'That language has no translation here.',
       'opt.viewer': 'Viewer',
       'opt.editor': 'Editor',
       'opt.admin': 'Admin',
@@ -248,6 +253,11 @@
       'people.add': 'Persoon toevoegen',
       'people.roles': 'Een lezer bekijkt het kasboek. Een bewerker past het aan. Een beheerder bepaalt ook wie een account heeft.',
       'people.needemail': 'Vul het adres in waar de uitnodiging naartoe moet.',
+      'people.language': 'Taal',
+      'people.language.hint': 'De uitnodiging, en de schermen die ze opent, zijn in deze taal.',
+      'lang.default': 'Zelfde als de planner ({name})',
+      'person.language.aria': 'Taal van {email}',
+      'e.invalid_language': 'Voor die taal is hier geen vertaling.',
       'opt.viewer': 'Lezer',
       'opt.editor': 'Bewerker',
       'opt.admin': 'Beheerder',
@@ -365,6 +375,11 @@
       'people.add': 'Tambah orang',
       'people.roles': 'Pembaca melihat buku kas. Penyunting mengubahnya. Admin juga menentukan siapa yang punya akun.',
       'people.needemail': 'Isi alamat tujuan undangan.',
+      'people.language': 'Bahasa',
+      'people.language.hint': 'Undangan, dan layar yang dibukanya, ditulis dalam bahasa ini.',
+      'lang.default': 'Sama dengan perencana ({name})',
+      'person.language.aria': 'Bahasa untuk {email}',
+      'e.invalid_language': 'Bahasa itu belum ada terjemahannya di sini.',
       'opt.viewer': 'Pembaca',
       'opt.editor': 'Penyunting',
       'opt.admin': 'Admin',
@@ -439,10 +454,20 @@
     }
   };
 
-  var LANG = (function () {
-    var tag = String(document.documentElement.lang || '').toLowerCase().split('-')[0];
-    return Object.prototype.hasOwnProperty.call(STRINGS, tag) ? tag : 'en';
-  })();
+  function knownLanguage(tag) {
+    tag = String(tag || '').toLowerCase().replace(/_/g, '-').split('-')[0];
+    return Object.prototype.hasOwnProperty.call(STRINGS, tag) ? tag : '';
+  }
+
+  var LANG = knownLanguage(document.documentElement.lang) || 'en';
+
+  // What the deployment speaks: what an account with no language of its own
+  // is written to in. The same rule the server applies to the same value.
+  var DEPLOYMENT_LANGUAGE = knownLanguage(CONFIG.language) || knownLanguage(CONFIG.locale) || 'en';
+
+  // Each in its own language, and so not in the table: somebody looking for
+  // theirs in a list is looking for the word they call it by.
+  var LANGUAGE_NAMES = { en: 'English', nl: 'Nederlands', id: 'Bahasa Indonesia' };
 
   function t(key, vars) {
     var str = STRINGS[LANG][key];
@@ -581,6 +606,7 @@
     no_password: 'e.no_password',
     self_change: 'e.self_change',
     link_failed: 'e.link_failed',
+    invalid_language: 'e.invalid_language',
     weak_password: 'setpw.weak',
     invalid_token: 'setpw.expired',
     too_many_passkeys: 'pk.e.toomany',
@@ -733,7 +759,7 @@
     // than none. Announced from here because this is the one place the session
     // changes, so a sign-out reaches it too.
     document.dispatchEvent(new CustomEvent('soiree:session', {
-      detail: { signedIn: next === 'in', role: user && user.role }
+      detail: { signedIn: next === 'in', role: user && user.role, language: user && user.language }
     }));
   }
 
@@ -790,6 +816,21 @@
       setSession(res.status === 404 ? 'none' : 'out');
     });
   }
+
+  /* The planner changed language — because whoever just signed in has one of
+   * their own. It owns that decision (see followAccount in app.js); this only
+   * has to say again, in the new language, whatever it has on screen. Every
+   * render here is idempotent, which is what makes that a short list. */
+  document.addEventListener('soiree:language', function (ev) {
+    var tag = knownLanguage(ev && ev.detail && ev.detail.language);
+    if (!tag || tag === LANG) return;
+    LANG = tag;
+    applyStrings();
+    // No second argument: keep whatever the admin had already picked.
+    fillLanguageChoice(byId('newUserLanguage'));
+    renderAccountBar();
+    render();
+  });
 
   /* The planner doubts the session.
    *
@@ -1257,6 +1298,30 @@
     drawPeople();
   }
 
+  /* The languages somebody can be written to in.
+   *
+   * The first choice is "nothing chosen", and it names the language that
+   * means: an admin deciding whether to pick one needs to know what happens
+   * if they do not. It is sent as null rather than as that language's tag, so
+   * that an operator who later changes the deployment's locale takes every
+   * account that never chose along with it. */
+  function fillLanguageChoice(select, current) {
+    if (!select) return;
+    var keep = current === undefined ? select.value : (current || '');
+    while (select.firstChild) select.removeChild(select.firstChild);
+    var none = document.createElement('option');
+    none.value = '';
+    none.textContent = t('lang.default', { name: LANGUAGE_NAMES[DEPLOYMENT_LANGUAGE] });
+    select.appendChild(none);
+    Object.keys(LANGUAGE_NAMES).forEach(function (tag) {
+      var o = document.createElement('option');
+      o.value = tag;
+      o.textContent = LANGUAGE_NAMES[tag];
+      select.appendChild(o);
+    });
+    select.value = keep;
+  }
+
   function statusWord(status) {
     if (status === 'invited' || status === 'active' || status === 'disabled') return t('status.' + status);
     return status;
@@ -1301,6 +1366,17 @@
       });
       acts.appendChild(sel);
     }
+
+    /* The language they are written to in. Offered on your own row as well:
+     * the server's self-change rule is about not locking yourself out, and
+     * this cannot. */
+    var lang = make('select', 'person-language');
+    lang.setAttribute('aria-label', t('person.language.aria', { email: p.email }));
+    fillLanguageChoice(lang, p.language || null);
+    lang.addEventListener('change', function () {
+      patchPerson(p, { language: lang.value || null }, lang);
+    });
+    acts.appendChild(lang);
 
     /* A fresh link. Issuing one supersedes whatever was outstanding, so this
      * is also how a link that went astray is revoked. Not offered for an
@@ -1353,6 +1429,11 @@
       if (control) control.disabled = false;
       if (res.status === 200 && res.body) {
         adoptPerson(res.body);
+        // Your own language, changed from your own row: the page should turn
+        // to it now rather than at the next sign-in.
+        if (user && res.body.id === user.id && res.body.language !== user.language) {
+          setSession('in', res.body);
+        }
         return;
       }
       if (res.status === 409 && res.body && res.body.current) {
@@ -1435,6 +1516,7 @@
       var emailField = byId('newUserEmail');
       var email = (emailField.value || '').trim();
       var role = byId('newUserRole').value;
+      var language = byId('newUserLanguage') ? byId('newUserLanguage').value : '';
       if (!email) {
         adminSays(t('people.needemail'), true);
         emailField.focus();
@@ -1443,7 +1525,11 @@
       var submit = byId('createUserSubmit');
       submit.disabled = true;
       adminSays('');
-      request('POST', '/users', { email: email, role: role }).then(function (res) {
+      var made = { email: email, role: role };
+      // Left out entirely when nothing was chosen, which is what "follow the
+      // deployment" is on the wire.
+      if (language) made.language = language;
+      request('POST', '/users', made).then(function (res) {
         submit.disabled = false;
         if (res.status === 201 && res.body && res.body.user) {
           emailField.value = '';
@@ -1756,6 +1842,7 @@
    * ------------------------------------------------------------------ */
 
   applyStrings();
+  fillLanguageChoice(byId('newUserLanguage'), null);
   bindLogin();
   bindSetPassword();
   bindAdmin();

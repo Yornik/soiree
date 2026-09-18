@@ -385,6 +385,10 @@ func TestTheDocumentedErrorContractHolds(t *testing.T) {
 		{"the settings echoed back as they are read", "PATCH", "/api/v1/settings", `{"revision":1,"updatedAt":"2026-01-04T10:00:00Z"}`, editor,
 			http.StatusOK, ""},
 
+		{"an account in a language with no translation", "POST", "/api/v1/users",
+			`{"email":"nobody@example.test","role":"viewer","language":"fr"}`, admin,
+			http.StatusBadRequest, "invalid_language"},
+
 		// The accounts surface is NOT strict, and the specification says so.
 		// Pinned because it is the half of that sentence somebody would
 		// "fix" by assumption.

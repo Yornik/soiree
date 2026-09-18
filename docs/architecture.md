@@ -285,8 +285,8 @@ constraint drives the design:
 4. **Compression and cache headers in the binary.** No proxy configuration is
    required for either.
 
-Measured at 1.0.0, brotli: shell 3.7 kB, stylesheet 8.4 kB, planner script
-36 kB, accounts script 19 kB, font 33 kB. Both scripts are `defer`, so first
+Measured at 1.0.0, brotli: shell 3.8 kB, stylesheet 8.4 kB, planner script
+36 kB, accounts script 20 kB, font 33 kB. Both scripts are `defer`, so first
 paint needs the shell and stylesheet only — about 12 kB.
 
 ### Deliberately excluded
@@ -363,7 +363,7 @@ left is listed under *Open*.
 Done:
 
 1. ~~Configurable single binary, no third-party requests.~~
-2. ~~Data schema and store layer.~~ Migrations through 0011, a typed data-access
+2. ~~Data schema and store layer.~~ Migrations through 0012, a typed data-access
    layer, and its own tests against a real Postgres. See *Data storage*.
 3. ~~REST API~~, including `PATCH /api/v1/settings` and the 409-on-stale-revision
    path. `Store` in the browser is async and writes through it. See *API shape*.
@@ -403,12 +403,12 @@ struck only halfway.
 
 Open, in the order they matter:
 
-- **Translate the mails.** Every screen speaks English, Dutch and Indonesian.
-  The invitation, the password-reset mail and the deadline digest are composed
-  on the server (`inviteMessage` in `internal/httpd/auth.go`,
-  `internal/reminders/render.go`) and are in English. The server knows the
-  deployment's locale and nothing about the recipient's, so this is also a
-  question of whose language a mail should be in.
+- **Translate the deadline digest.** The invitation and the reset mail are
+  written in each person's own language. The digest
+  (`internal/reminders/render.go`) is one body for every admin and is in
+  English; per-recipient bodies would mean one send per language.
+- **A language setting of one's own.** `PATCH /api/v1/users/{id}` is admin-only,
+  so an editor cannot change the language they are written to in.
 - **A standing control for reminders.** See *Web push*: the offer is the only
   way in and there is no way out.
 - **What a signed-out browser shows.** The page draws its cached copy of the
@@ -865,6 +865,7 @@ one-time link does, and it is useless once used or expired.
 | `password_hash` | Argon2id (see below). Null until the person sets one. |
 | `status` | `invited` \| `active` \| `disabled` |
 | `created_by` | Attribution |
+| `language` | The language this person is written to in: `en`, `nl` or `id`. Null means "whatever the deployment speaks", resolved when a mail is written rather than stored — a default would freeze today's `SOIREE_LOCALE` into every row. |
 
 Set-password and reset both use the same short-lived token: ≥128 bits from a
 CSPRNG, stored only as a hash, single-use, expiring in 24 hours, consumed
@@ -910,7 +911,22 @@ with `data-i18n-auth`, because `app.js` walks the whole document for
 `data-i18n` and answers a key it does not know with the key itself. What the
 two share is the choice of language: `app.js` resolves it and writes it to
 `<html lang>`, and `auth.js`, a deferred script after it, reads it from there
-rather than resolving it a second time. Refusals are worded from the server's
+rather than resolving it a second time.
+
+**A person has a language, because a deployment has one locale and the people
+using it do not have one language.** The admin creating an account is the one
+who knows what the person they are inviting reads, so it is chosen there
+(`users.language`, migration 0012), and three things follow it. The mail is
+composed in it (`inviteMessage`). The link in the mail carries `?lang=`, so the
+set-password screen opens in it — a query string, which is sent to the server,
+and harmless there: it is a language tag, and the token is still behind the
+`#`. And once they sign in the planner turns to it, in place: `auth.js` reports
+the language with the session, `app.js` re-applies its strings and re-renders,
+and tells `auth.js` on `soiree:language` to do the same. Never by reloading — a
+reload at the moment of sign-in would discard what was typed while signed out.
+The language is remembered on the device (`soiree.lang`, the third and last
+`localStorage` key) so the next visit opens in it rather than switching after it
+paints, and an explicit `?lang=` still wins over all of it. Refusals are worded from the server's
 error *code*; its English `message` is shown only to somebody reading English.
 
 #### Sessions

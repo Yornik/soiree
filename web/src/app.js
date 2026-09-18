@@ -95,10 +95,17 @@
    *   1. ?lang= in the URL   — makes a link shareable in one language, and is
    *                            deliberately not persisted: it is a view of the
    *                            page, not a setting on the planner.
-   *   2. config.language     — read if the server ever sends it.
-   *   3. config.locale       — what an operator already configures, and it
+   *   2. the account         — the language an admin chose for whoever is
+   *                            signed in. A deployment has one locale and the
+   *                            people using it do not have one language. It is
+   *                            not known until the session answers, which is
+   *                            after first paint, so the last answer is kept
+   *                            on this device (LANG_KEY) and the page opens in
+   *                            it; see followAccount() for when it changes.
+   *   3. config.language     — read if the server ever sends it.
+   *   4. config.locale       — what an operator already configures, and it
    *                            carries the language tag: nl-NL -> nl.
-   *   4. 'en'
+   *   5. 'en'
    *
    * Currency and date formatting stay on config.locale throughout. Language is
    * what the interface is written in; locale is how numbers are spelled, and
@@ -471,18 +478,33 @@
     }
   };
 
-  var LANG = (function () {
-    function pick(v) {
-      var tag = String(v || '').toLowerCase().replace(/_/g, '-').split('-')[0];
-      return LANGS.indexOf(tag) !== -1 ? tag : '';
-    }
+  // The third and last thing this page keeps in localStorage, beside the
+  // planner and the theme: the signed-in account's language, so that the next
+  // visit opens in it rather than switching to it a moment after it paints.
+  var LANG_KEY = 'soiree.lang';
+
+  function pickLang(v) {
+    var tag = String(v || '').toLowerCase().replace(/_/g, '-').split('-')[0];
+    return LANGS.indexOf(tag) !== -1 ? tag : '';
+  }
+
+  // What the deployment speaks, with nobody's preference applied.
+  var LANG_DEFAULT = pickLang(CONFIG.language) || pickLang(CONFIG.locale) || 'en';
+
+  // A language in the URL is somebody's explicit choice for this view, and
+  // nothing an account says overrides it.
+  var LANG_FROM_URL = (function () {
     var q = '';
     try {
       q = (location.search.match(/[?&]lang=([^&]*)/) || [])[1] || '';
       q = decodeURIComponent(q);
     } catch (e) { q = ''; }
-    return pick(q) || pick(CONFIG.language) || pick(CONFIG.locale) || 'en';
+    return pickLang(q);
   })();
+
+  var LANG = LANG_FROM_URL || (function () {
+    try { return pickLang(localStorage.getItem(LANG_KEY)); } catch (e) { return ''; }
+  })() || LANG_DEFAULT;
 
   // Drives screen-reader pronunciation and hyphenation, so it has to be the
   // language the page is actually written in rather than the one the server
@@ -1512,8 +1534,43 @@
     document.dispatchEvent(new CustomEvent('soiree:session-check'));
   }
 
+  /* Speak the language of whoever signed in.
+   *
+   * In place, never by reloading. A reload at the moment somebody signs in
+   * throws away what they typed while signed out — it is in `state` and on
+   * screen but `dirty` does not survive a reload, so the plan that arrives
+   * would simply replace it. Everything this page says comes from three calls,
+   * so saying it again in another language is those three calls.
+   *
+   * An account with no language of its own follows the deployment, and the
+   * remembered key is cleared rather than left: otherwise an admin putting
+   * somebody back to "same as the planner" would change nothing on the one
+   * device they use.
+   *
+   * auth.js is told on `soiree:language`, because its screens are open at
+   * exactly this moment and would otherwise stay in the language they were
+   * drawn in.
+   */
+  function followAccount(language) {
+    var theirs = pickLang(language);
+    try {
+      if (theirs) localStorage.setItem(LANG_KEY, theirs);
+      else localStorage.removeItem(LANG_KEY);
+    } catch (e) { /* storage unavailable: the next visit starts in the default */ }
+
+    var next = LANG_FROM_URL || theirs || LANG_DEFAULT;
+    if (next === LANG) return;
+    LANG = next;
+    document.documentElement.lang = LANG;
+    applyStrings();
+    renderCountdown();
+    renderAll();
+    document.dispatchEvent(new CustomEvent('soiree:language', { detail: { language: LANG } }));
+  }
+
   document.addEventListener('soiree:session', function (e) {
     var signedIn = !!(e && e.detail && e.detail.signedIn);
+    if (signedIn) followAccount(e.detail.language);
     if (!signedIn) {
       // Only once there is something to halt. Before the first plan arrives
       // this is the ordinary "nobody is signed in yet" and connect() is
@@ -3255,7 +3312,7 @@
    * is obvious rather than the moment the page appears. Notification.permission
    * is also the memory of whether the question has been asked: it is already
    * persistent, already per-device, and not asking the browser to remember it
-   * twice keeps this page's storage to the two keys it documents.
+   * twice keeps this page's storage to the three keys it documents.
    */
   function offerPush() {
     if (pushAsked || editingLocked || !pushable()) return;

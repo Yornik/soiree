@@ -109,6 +109,7 @@ func main() {
 			Logger:            log,
 			BaseURL:           cfg.BaseURL,
 			TrustProxyHeaders: cfg.TrustProxyHeaders,
+			Locale:            cfg.Locale,
 		})
 		if err := accounts.WithPasskeys(cfg); err != nil {
 			// Logged and carried on with, never fatal. Passkeys are additive:

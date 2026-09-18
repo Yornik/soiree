@@ -127,6 +127,11 @@ type AuthOptions struct {
 
 	// TrustProxyHeaders says whether X-Forwarded-For may be believed.
 	TrustProxyHeaders bool
+
+	// Locale is the deployment's SOIREE_LOCALE. Only its language is used
+	// here: it is what an account with no language of its own is written to
+	// in, which keeps the mail in step with the page that account opens.
+	Locale string
 }
 
 // Auth is the accounts, sessions and roles surface.
@@ -136,6 +141,10 @@ type Auth struct {
 	log        *slog.Logger
 	baseURL    string
 	trustProxy bool
+
+	// defaultLanguage is the deployment's language, resolved once. See
+	// languageFor.
+	defaultLanguage string
 
 	loginIP   *limiter
 	loginAcct *limiter
@@ -173,12 +182,15 @@ func NewAuth(o AuthOptions) *Auth {
 		log:        log,
 		baseURL:    strings.TrimRight(o.BaseURL, "/"),
 		trustProxy: o.TrustProxyHeaders,
-		loginIP:    newLimiter(loginIPBurst, loginIPWindow),
-		loginAcct:  newLimiter(loginAcctBurst, loginAcctWindow),
-		resetIP:    newLimiter(resetIPBurst, resetIPWindow),
-		redeemIP:   newLimiter(redeemIPBurst, redeemIPWindow),
-		params:     auth.DefaultParams,
-		now:        time.Now,
+
+		defaultLanguage: languageOfLocale(o.Locale),
+
+		loginIP:   newLimiter(loginIPBurst, loginIPWindow),
+		loginAcct: newLimiter(loginAcctBurst, loginAcctWindow),
+		resetIP:   newLimiter(resetIPBurst, resetIPWindow),
+		redeemIP:  newLimiter(redeemIPBurst, redeemIPWindow),
+		params:    auth.DefaultParams,
+		now:       time.Now,
 		background: func(fn func(context.Context)) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), backgroundTimeout)
@@ -263,6 +275,11 @@ type userDTO struct {
 	CreatedAt time.Time  `json:"createdAt"`
 	Revision  int64      `json:"revision"`
 	UpdatedAt time.Time  `json:"updatedAt"`
+	// Language is the language this person is written to in, or null for
+	// "whatever the deployment speaks". Null is published as null rather than
+	// resolved here: the page has to be able to show that nothing was chosen,
+	// and to offer that again as a choice.
+	Language *string `json:"language"`
 }
 
 func toDTO(u store.User) userDTO {
@@ -275,6 +292,7 @@ func toDTO(u store.User) userDTO {
 		CreatedAt: u.CreatedAt,
 		Revision:  u.Revision,
 		UpdatedAt: u.UpdatedAt,
+		Language:  u.Language,
 	}
 }
 
@@ -586,6 +604,10 @@ func (a *Auth) handleGetUser(w http.ResponseWriter, r *http.Request) {
 type createUserRequest struct {
 	Email string `json:"email"`
 	Role  string `json:"role"`
+	// Language is optional. Omitted or null, the account follows the
+	// deployment; the admin creating it is the one person who knows whether
+	// that is the right language for who they are inviting.
+	Language *string `json:"language"`
 }
 
 // createUserResponse carries the new account, and the link when — and only
@@ -625,11 +647,22 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var language *string
+	if req.Language != nil {
+		l, ok := parseLanguage(*req.Language)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid_language", "language must be one of "+strings.Join(languages, ", "))
+			return
+		}
+		language = &l
+	}
+
 	user, err := a.store.CreateUser(r.Context(), store.User{
 		Email:     email,
 		Role:      role,
 		Status:    store.StatusInvited,
 		CreatedBy: &actor.ID,
+		Language:  language,
 	})
 	if err != nil {
 		if store.IsUniqueViolation(err) {
@@ -708,9 +741,9 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 		return "", err
 	}
 
-	link := a.setPasswordURL(token)
+	link := a.setPasswordURL(token, user.Language)
 	if a.mailer != nil {
-		subject, body := inviteMessage(purpose, link)
+		subject, body := inviteMessage(purpose, link, a.languageFor(user))
 		a.background(func(ctx context.Context) {
 			if err := a.mailer.Send(ctx, user.Email, subject, body); err != nil {
 				// The error, never the message. The body is the link.
@@ -729,22 +762,61 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 // Referer header the page would otherwise leak it through. The origin comes
 // from configuration and never from the request's Host header, which the
 // client controls.
-func (a *Auth) setPasswordURL(token string) string {
-	return a.baseURL + "/#/set-password?token=" + url.QueryEscape(token)
+//
+// An account with a language of its own gets it as ?lang=, so the screen the
+// link opens is in the language the mail was. That part is a query string and
+// is sent to the server, which is fine: it is a language tag, and the secret
+// is still behind the #. An account with no language gets the bare link, and
+// the page opens in the deployment's language — the same one the mail used.
+func (a *Auth) setPasswordURL(token string, language *string) string {
+	query := ""
+	if language != nil {
+		if l, ok := parseLanguage(*language); ok {
+			query = "?lang=" + l
+		}
+	}
+	return a.baseURL + "/" + query + "#/set-password?token=" + url.QueryEscape(token)
 }
 
-func inviteMessage(purpose store.TokenPurpose, link string) (subject, body string) {
-	if purpose == store.PurposeReset {
-		subject = "Set a new password"
-		body = "Someone asked to set a new password on your account.\n\n" +
-			link + "\n\nThe link works once and expires in 24 hours. " +
-			"If this was not you, nothing has changed and you can ignore this.\n"
-		return subject, body
+// inviteMessage composes the two mails this surface sends.
+//
+// Plain text and short: the link is the message. None of them names the event
+// or the admin who sent it, and a consequence worth keeping when editing them
+// is that a mail sent to a mistyped address tells a stranger nothing about
+// whose planner this is.
+func inviteMessage(purpose store.TokenPurpose, link, language string) (subject, body string) {
+	reset := purpose == store.PurposeReset
+	switch language {
+	case "nl":
+		if reset {
+			return "Stel een nieuw wachtwoord in",
+				"Iemand heeft gevraagd om een nieuw wachtwoord voor je account in te stellen.\n\n" +
+					link + "\n\nDe link werkt één keer en verloopt na 24 uur. " +
+					"Was jij dit niet, dan is er niets veranderd en kun je dit bericht negeren.\n"
+		}
+		return "Je account staat klaar",
+			"Er is een account voor je aangemaakt. Kies hier een wachtwoord:\n\n" +
+				link + "\n\nDe link werkt één keer en verloopt na 24 uur.\n"
+	case "id":
+		if reset {
+			return "Buat kata sandi baru",
+				"Seseorang meminta pembuatan kata sandi baru untuk akunmu.\n\n" +
+					link + "\n\nTautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam. " +
+					"Kalau ini bukan kamu, tidak ada yang berubah dan pesan ini bisa diabaikan.\n"
+		}
+		return "Akunmu sudah siap",
+			"Sebuah akun telah dibuat untukmu. Buat kata sandi di sini:\n\n" +
+				link + "\n\nTautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam.\n"
 	}
-	subject = "Your account is ready"
-	body = "An account has been created for you. Choose a password here:\n\n" +
-		link + "\n\nThe link works once and expires in 24 hours.\n"
-	return subject, body
+	if reset {
+		return "Set a new password",
+			"Someone asked to set a new password on your account.\n\n" +
+				link + "\n\nThe link works once and expires in 24 hours. " +
+				"If this was not you, nothing has changed and you can ignore this.\n"
+	}
+	return "Your account is ready",
+		"An account has been created for you. Choose a password here:\n\n" +
+			link + "\n\nThe link works once and expires in 24 hours.\n"
 }
 
 type updateUserRequest struct {
@@ -752,6 +824,11 @@ type updateUserRequest struct {
 	Role     *string `json:"role"`
 	Status   *string `json:"status"`
 	Email    *string `json:"email"`
+	// Language has three states, which is why it is not a pointer like the
+	// rest: omitted leaves it alone, a tag sets it, and an explicit null puts
+	// the account back to following the deployment. A pointer cannot tell the
+	// first from the last.
+	Language optional[string] `json:"language"`
 }
 
 // handleUpdateUser changes a role, a status or an address.
@@ -824,6 +901,21 @@ func (a *Auth) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		next.Email = email
+	}
+	// Not covered by the self-change rule above, on purpose. That rule exists
+	// because demoting yourself can leave no way back in; the language you are
+	// written to in cannot lock anybody out of anything.
+	if req.Language.set {
+		if req.Language.value == nil {
+			next.Language = nil
+		} else {
+			l, ok := parseLanguage(*req.Language.value)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "invalid_language", "language must be one of "+strings.Join(languages, ", "))
+				return
+			}
+			next.Language = &l
+		}
 	}
 
 	updated, err := a.store.UpdateUser(r.Context(), next)

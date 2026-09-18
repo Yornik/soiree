@@ -552,6 +552,39 @@ async function openWithOwnSession(page, request) {
   return cookie;
 }
 
+/**
+ * Makes an edit whose write meets the end of the session.
+ *
+ * The order matters and cannot be left to timing. Ending the session first and
+ * editing second looks like the scenario, and is a race: the page has its own
+ * reasons to ask the server something — a resync after its last write is the
+ * usual one — and if that request is the one that finds the session gone, the
+ * sign-in screen is up before the test reaches for the input underneath it.
+ * That is the page being right and the test being wrong, about one run in
+ * three with two workers.
+ *
+ * So the edit is made while still signed in, its PATCH is held in flight, the
+ * session is ended, and only then is the PATCH let through. The edit always
+ * exists, and its write can never have succeeded.
+ */
+async function editAsTheSessionEnds(page, request, cookie, paid) {
+  const held = '**/api/v1/budget-items/**';
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  await page.route(held, async (route) => { await gate; await route.continue(); });
+
+  const sent = page.waitForRequest((r) => r.method() === 'PATCH' && r.url().includes('/api/v1/budget-items/'));
+  const refused = page.waitForResponse((r) => r.request().method() === 'PATCH' && r.status() === 401);
+  await budgetRow(page, 0).paid.fill(String(paid));
+  await budgetRow(page, 0).paid.blur();
+  await sent;
+
+  await endSession(request, cookie);
+  release();
+  await refused;
+  await page.unroute(held);
+}
+
 async function signInThroughTheForm(page, request) {
   const who = await ensureEditor(request);
   await page.fill('#loginEmail', who.email);
@@ -573,11 +606,8 @@ test('a session that ends mid-edit asks for a sign-in, and the edit goes up afte
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.paid))
     .toEqual(['500.00']);
 
-  await endSession(request, cookie);
-
-  // The edit that finds out. Nothing about it is wrong; only who is asking.
-  await budgetRow(page, 0).paid.fill('750');
-  await budgetRow(page, 0).paid.blur();
+  // Nothing about the edit is wrong; only who is asking.
+  await editAsTheSessionEnds(page, request, cookie, 750);
 
   await expect(page.locator('#authScreen'), 'the sign-in screen should open by itself').toBeVisible();
   await expect(page.locator('#authLede')).toContainText('Your session has ended');
@@ -607,9 +637,7 @@ test('signing back in merges, and does not write a stale copy over everyone else
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item).sort())
     .toEqual(['Flowers', 'Venue deposit']);
 
-  await endSession(request, cookie);
-  await budgetRow(page, 0).paid.fill('750');
-  await budgetRow(page, 0).paid.blur();
+  await editAsTheSessionEnds(page, request, cookie, 750);
   await expect(page.locator('#authScreen')).toBeVisible();
 
   // While this browser is signed out, somebody else carries on: they change a
@@ -645,9 +673,7 @@ test('once the session has ended the page stops asking', async ({ page, request 
   await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
   await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
 
-  await endSession(request, cookie);
-  await budgetRow(page, 0).paid.fill('750');
-  await budgetRow(page, 0).paid.blur();
+  await editAsTheSessionEnds(page, request, cookie, 750);
   await expect(page.locator('#authScreen')).toBeVisible();
 
   /*

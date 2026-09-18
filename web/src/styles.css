@@ -1025,7 +1025,7 @@ body.showing-auth #plannerWrap { display: none; }
   gap: 16px;
   flex-wrap: wrap;
 }
-.person-role {
+.person-role, .person-language {
   width: auto;
   min-width: 7rem;
   font-size: 13px;
