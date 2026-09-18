@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.1](https://github.com/Yornik/soiree/compare/v1.1.0...v1.1.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* a visible paperclip, the right event day, and long names that fit ([d319a61](https://github.com/Yornik/soiree/commit/d319a61dd54935b839cdb372d195032a083c8473))
+* the event is on the day it was written for, for every reader ([3b5e2e8](https://github.com/Yornik/soiree/commit/3b5e2e83e898a545be280d06d5bb47acf5c527e0))
+* **web:** a long name makes its row taller instead of hiding behind a scrollbar ([df01ff9](https://github.com/Yornik/soiree/commit/df01ff91f78df5490b33d0a3c509962451d755b1))
+* **web:** a paperclip that can be seen, and pressed on a line with a long name ([1f59872](https://github.com/Yornik/soiree/commit/1f59872357be3e3904086ba0cf69b577f6771830))
+
+
+### Performance Improvements
+
+* compress each asset once per process, which makes the tests twelve times faster ([eef0525](https://github.com/Yornik/soiree/commit/eef0525422ebe58827819c26f25d21310662e11d))
+* compress each asset once per process, which makes the tests twelve times faster ([eed4c0d](https://github.com/Yornik/soiree/commit/eed4c0d36a12268213a0c43fbb42b6c200d96ac2))
+
 ## [1.1.0](https://github.com/Yornik/soiree/compare/v1.0.2...v1.1.0) (2026-09-18)
 
 
