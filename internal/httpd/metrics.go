@@ -143,6 +143,7 @@ func routeClass(path string) string {
 // segment is caller-controlled, so an unknown one must never become a label.
 var apiRoutes = map[string]string{
 	"plan":              "api-plan",
+	"events":            "api-events",
 	"budget-items":      "api-budget-items",
 	"sponsors":          "api-sponsors",
 	"tasks":             "api-tasks",

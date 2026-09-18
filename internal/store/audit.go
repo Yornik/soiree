@@ -431,7 +431,15 @@ func insertChange(ctx context.Context, tx pgx.Tx, entity string, id uuid.UUID, a
 	); err != nil {
 		return fmt.Errorf("change_log: %w", err)
 	}
-	return nil
+	// Announce it on the way out, in this same transaction. Recording and
+	// announcing are then one act: a rolled-back write does neither, and there
+	// is no path that can do one without the other. See notify.go.
+	return notifyChange(ctx, tx, ChangeNotice{
+		Entity:   entity,
+		ID:       newID(id),
+		Action:   action,
+		Revision: revision,
+	})
 }
 
 // lockRow reads the row a write is about to change, as it stands, and holds it
