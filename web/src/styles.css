@@ -5,71 +5,82 @@
    weight capped to 400-700, 67KB -> 33KB. See README for the command.
    Body text uses the system UI stack so it paints instantly with no swap. */
 @font-face {
-  font-family: 'Fraunces';
-  src: url('fraunces-display.woff2') format('woff2');
-  font-weight: 400 700;
+  font-family: 'Bricolage Grotesque';
+  src: url('bricolage-display.woff2') format('woff2');
+  font-weight: 500 800;
   font-style: normal;
   font-display: swap;
 }
 
-/* TOKENS. Colour carries meaning and is spent on nothing else: gold is money
-   committed, jade money paid, rust money outstanding or past its ceiling, ink
-   is structure, emphasis and focus. The countdown is the biggest thing here
-   and is set in ink, not gold, because a deadline is not money.
+/* TOKENS. The palette is an evening, because that is what a soiree is: dusk
+   for ink and for the dark page, porcelain - paper with a faint violet cast,
+   not cream - for the light one, and one warm thing in it, the lamp.
+
+   Colour carries meaning and is spent on nothing else. --committed is money
+   promised, --paid money handed over, --owed money still outstanding, --alarm
+   a ceiling crossed or something about to be destroyed. --lamp is today's
+   mark on the run-up and little else, so that the one bright point on the
+   page is "you are here". The display face is condensed and heavy, the
+   lettering of tickets and marquees; body text is the reader's own system
+   face, which costs nothing and lines its figures up in a table.
 
    Rules are graded by the job they do: --rule is a hairline between rows of
    data and is deliberately low contrast, --rule-mid frames a control or a
-   table header, --rule-ink is structural (under the tabs, above a set of
-   totals). A grand total closes with a double rule in full ink, the
-   convention every hand-kept account book already uses.
+   table header, --rule-ink is structural.
 
-   Every value below clears 4.5:1 against the surfaces it is used on, in both
-   themes. Dark is the same ledger by lamplight, not an inversion: each hue is
-   re-picked rather than lightened by rule. */
+   Every text colour below clears 4.5:1 against --paper, --tint and --raise in
+   its own theme, and --lamp clears 3:1 as a graphic. Dark is the same evening
+   later on, not an inversion: each hue is re-picked rather than lightened. */
 :root {
   /* The width of the page. One number, because the language switch above the
      planner has to line up with its right edge. */
   --page: 1280px;
-  --paper: #F6F0DE;
-  --tint: #EDE6CE;
-  --raise: #FFFCF2;
-  --ink: #1B2440;
-  --ink-2: #575D70;
-  --gold: #8D6212;
-  --jade: #3F6F5E;
-  --rust: #A6532E;
-  --rule: rgba(27,36,64,0.16);
-  --rule-mid: rgba(27,36,64,0.30);
-  --rule-ink: rgba(27,36,64,0.70);
-  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --paper: #F3F1F7;
+  --tint: #E7E3EF;
+  --raise: #FCFBFE;
+  --ink: #231B3A;
+  --ink-2: #5B5474;
+  --committed: #4B3F9E;
+  --paid: #186B5F;
+  --owed: #8A5200;
+  --alarm: #A92C48;
+  --lamp: #B8720C;
+  --rule: rgba(35,27,58,0.14);
+  --rule-mid: rgba(35,27,58,0.28);
+  --rule-ink: rgba(35,27,58,0.70);
+  --font-display: 'Bricolage Grotesque', 'Arial Narrow', 'Helvetica Neue', Arial, sans-serif;
   --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 :root[data-theme="dark"] {
-  --paper: #141C30;
-  --tint: #1C2438;
-  --raise: #232C46;
-  --ink: #F3ECDA;
-  --ink-2: #ABA99F;
-  --gold: #D8AE55;
-  --jade: #74B49B;
-  --rust: #E08863;
-  --rule: rgba(243,236,218,0.16);
-  --rule-mid: rgba(243,236,218,0.30);
-  --rule-ink: rgba(243,236,218,0.70);
+  --paper: #1D1633;
+  --tint: #2A2146;
+  --raise: #342A55;
+  --ink: #F1EEF8;
+  --ink-2: #B4AECB;
+  --committed: #B0A4F5;
+  --paid: #6FCBB9;
+  --owed: #F0B152;
+  --alarm: #F58BA2;
+  --lamp: #E9A23B;
+  --rule: rgba(241,238,248,0.14);
+  --rule-mid: rgba(241,238,248,0.28);
+  --rule-ink: rgba(241,238,248,0.70);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #141C30;
-    --tint: #1C2438;
-    --raise: #232C46;
-    --ink: #F3ECDA;
-    --ink-2: #ABA99F;
-    --gold: #D8AE55;
-    --jade: #74B49B;
-    --rust: #E08863;
-    --rule: rgba(243,236,218,0.16);
-    --rule-mid: rgba(243,236,218,0.30);
-    --rule-ink: rgba(243,236,218,0.70);
+    --paper: #1D1633;
+    --tint: #2A2146;
+    --raise: #342A55;
+    --ink: #F1EEF8;
+    --ink-2: #B4AECB;
+    --committed: #B0A4F5;
+    --paid: #6FCBB9;
+    --owed: #F0B152;
+    --alarm: #F58BA2;
+    --lamp: #E9A23B;
+    --rule: rgba(241,238,248,0.14);
+    --rule-mid: rgba(241,238,248,0.28);
+    --rule-ink: rgba(241,238,248,0.70);
   }
 }
 
@@ -157,51 +168,126 @@ body {
 .table-wrap :focus-visible { outline-offset: -2px; }
 
 /* One class colours both a figure and the bar that measures it. */
-.committed { color: var(--gold); }
-.paid { color: var(--jade); }
-.owing { color: var(--rust); }
+.committed { color: var(--committed); }
+.paid { color: var(--paid); }
+.owing { color: var(--owed); }
 
-/* --- Masthead ------------------------------------------------------------ */
-.masthead {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px 32px;
-  flex-wrap: wrap;
-  padding-bottom: 20px;
-}
-.masthead-id { flex: 1; min-width: 240px; }
+/* --- Masthead ------------------------------------------------------------
+   The event's name, and under it the run-up: the distance from today to the
+   day, which is what everything else on the page is measured against. */
+.masthead { padding-bottom: 22px; }
+.masthead-id { min-width: 0; }
 .masthead h1 {
   font-family: var(--font-display);
-  font-weight: 600;
-  font-size: clamp(28px, 4.4vw, 40px);
-  line-height: 1.04;
-  letter-spacing: -0.012em;
+  font-weight: 800;
+  font-size: clamp(34px, 5.2vw, 60px);
+  line-height: 1;
+  letter-spacing: -0.005em;
   margin: 0;
+  max-width: 22ch;
+  text-wrap: balance;
 }
 .tagline {
-  margin: 7px 0 0;
+  margin: 10px 0 0;
   color: var(--ink-2);
   max-width: 54ch;
 }
 .tagline:empty { display: none; }
+
+/* The count on the left, the scale to its right, and under the scale the two
+   ends it runs between. */
+.runup {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "count scale" "count ends";
+  column-gap: 28px;
+  align-items: end;
+  margin-top: 30px;
+}
 .countdown {
+  grid-area: count;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  text-align: right;
   margin: 0;
+  align-self: center;
 }
 .countdown-num {
   font-family: var(--font-display);
-  font-size: clamp(42px, 8vw, 58px);
-  font-weight: 600;
-  line-height: 0.84;
+  font-size: clamp(44px, 7vw, 68px);
+  font-weight: 800;
+  line-height: 0.86;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
-.countdown-unit { font-size: 13px; font-weight: 600; margin-top: 9px; }
-.countdown-date { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.countdown-unit { font-size: 13px; font-weight: 600; margin-top: 8px; }
+
+.runup-scale {
+  grid-area: scale;
+  position: relative;
+  height: 44px;               /* room above the line for the names */
+  margin: 0 7px;              /* half a dot, so the end dots sit inside */
+}
+.runup-line {
+  position: absolute;
+  left: 0; right: 0; bottom: 6px;
+  height: 2px;
+  background: var(--rule-ink);
+  transform-origin: left center;
+}
+.runup-today, .runup-day, .runup-mark {
+  position: absolute;
+  bottom: 0;
+  width: 14px; height: 14px;
+  margin-left: -7px;
+  border-radius: 50%;
+}
+.runup-today { left: 0; background: var(--lamp); box-shadow: 0 0 0 4px color-mix(in srgb, var(--lamp) 24%, transparent); }
+.runup-day { left: 100%; background: var(--paper); border: 3px solid var(--ink); }
+.runup-mark {
+  bottom: 3px;
+  width: 8px; height: 8px;
+  margin-left: -4px;
+  background: var(--ink);
+}
+.runup-mark.late { background: var(--alarm); }
+.runup-label {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  max-width: 150px;
+  padding-left: 7px;
+  border-left: 1px solid var(--rule-mid);
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.runup-ends {
+  grid-area: ends;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 7px 0 0;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.runup-from.late { color: var(--alarm); font-weight: 600; }
+.countdown-date { font-weight: 600; color: var(--ink); text-align: right; }
 .countdown-date:empty { display: none; }
+/* No date, the day itself, or a finished event: there is no distance to draw. */
+.runup.no-scale .runup-scale, .runup.no-scale .runup-from { display: none; }
+.runup.no-scale { grid-template-areas: "count ends"; align-items: center; }
+
+/* The one piece of motion on the page: the line draws itself from today to
+   the day, once, when the page opens. */
+@media (prefers-reduced-motion: no-preference) {
+  .runup-line { animation: runup-draw 900ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .runup-day { animation: runup-arrive 300ms 800ms ease-out both; }
+}
+@keyframes runup-draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes runup-arrive { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
 
 /* --- Tabs ---------------------------------------------------------------- */
 .tabs {
@@ -279,6 +365,38 @@ body.is-empty .when-data { display: none; }
 /* --- Reckoning ---
    Four figures on one baseline, right-aligned, under one rule. A row of a
    ledger, not four cards: no box, no shadow, no fill. */
+/* --- The overview: money on the left, what to do on the right. Two columns,
+   so that no row has to be read across the whole width of a desktop page. */
+.overview-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  column-gap: 56px;
+  align-items: start;
+}
+.todo { min-width: 0; }
+
+/* Paid and owed are the two halves of what is committed; the ceiling is a mark
+   that total has or has not reached. */
+.moneybar {
+  position: relative;
+  display: flex;
+  height: 18px;
+  background: var(--tint);
+  margin: 4px 0 18px;
+}
+.moneybar-paid { background: var(--paid); }
+.moneybar-owed { background: var(--lamp); }
+.moneybar-paid, .moneybar-owed { height: 100%; transition: width 240ms ease-out; }
+.moneybar-ceiling {
+  position: absolute;
+  top: -5px; bottom: -5px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+}
+.moneybar-ceiling.over { background: var(--alarm); }
+@media (prefers-reduced-motion: reduce) { .moneybar-paid, .moneybar-owed { transition: none; } }
+
 .reckoning {
   display: grid;
   /* minmax(0,…) so a long figure scrolls its own cell rather than widening
@@ -300,7 +418,7 @@ body.is-empty .when-data { display: none; }
 .fig-num {
   font-family: var(--font-display);
   font-size: 30px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.06;
   font-variant-numeric: tabular-nums;
   margin-top: 5px;
@@ -310,7 +428,34 @@ body.is-empty .when-data { display: none; }
 .reckoning.compact { margin-bottom: 4px; }
 .reckoning.compact .fig-num { font-size: 21px; }
 
-/* --- Gauges -------------------------------------------------------------- */
+/* On the overview the four figures are rows under the bar: a label, the
+   figure, and its note, read down the page like the lines of an account. */
+.reckoning.ledger {
+  grid-template-columns: minmax(0, 1fr);
+  border-top: 0;
+  border-bottom: 0;
+  margin-bottom: 8px;
+}
+.reckoning.ledger .fig {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 16px;
+  text-align: left;
+  padding: 9px 0;
+  border-left: 0;
+  border-top: 1px solid var(--rule);
+}
+.reckoning.ledger .fig:first-child { border-top: 0; }
+.reckoning.ledger .fig-label { font-size: 14px; color: var(--ink); }
+.reckoning.ledger .fig-num { font-size: 26px; margin-top: 0; text-align: right; }
+.reckoning.ledger .fig-sub { grid-column: 1 / -1; margin-top: 1px; }
+
+/* The two money gauges keep their figures and notes, and lose their tracks:
+   the bar above already draws both. */
+.money .gauge-track { display: none; }
+.money .gauge { padding: 9px 0; }
+
 .gauge {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -328,7 +473,7 @@ body.is-empty .when-data { display: none; }
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
-.gauge-fig.warn { color: var(--rust); }
+.gauge-fig.warn { color: var(--alarm); }
 .gauge-track {
   grid-column: 1 / -1;
   height: 6px;
@@ -345,7 +490,7 @@ body.is-empty .when-data { display: none; }
   background: currentColor;
   transition: width 0.3s ease;
 }
-.gauge-fill.over { color: var(--rust); }
+.gauge-fill.over { color: var(--alarm); }
 .gauge-sub { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); margin-top: 7px; }
 
 /* --- Blocks -------------------------------------------------------------- */
@@ -353,8 +498,9 @@ body.is-empty .when-data { display: none; }
 .block.spaced { margin-top: 36px; }
 .block h2 {
   font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 19px;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.005em;
   margin: 0 0 12px;
 }
 .h2-note {
@@ -377,6 +523,16 @@ body.is-empty .when-data { display: none; }
   font-size: 14px;
 }
 .upnext-list li:last-child, .split-list li:last-child { border-bottom: 0; }
+
+/* Who is covering what, as lengths. The list is held to a readable width - a
+   name at one edge of a desktop and its amount at the other is two facts, not
+   one - and each share is drawn under its row. */
+.split-list { max-width: 760px; }
+.split-list li { row-gap: 7px; }
+.split-list .share { grid-column: 1 / -1; height: 6px; background: var(--tint); }
+.split-list .share-fill { display: block; height: 100%; background: var(--committed); }
+.split-list .share-fill.unassigned { background: var(--rule-mid); }
+.upnext-list .due.late { color: var(--alarm); font-weight: 600; }
 .upnext-list .who, .upnext-list .due {
   color: var(--ink-2);
   font-size: 13px;
@@ -397,7 +553,7 @@ body.is-empty .when-data { display: none; }
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  border-left: 3px solid var(--rust);
+  border-left: 3px solid var(--lamp);
   padding-left: 13px;
   margin-bottom: 10px;
 }
@@ -474,7 +630,7 @@ input:focus, select:focus, textarea:focus { background: var(--raise); border-col
   cursor: pointer;
   border-radius: 2px;
 }
-.del-btn:hover { color: var(--rust); }
+.del-btn:hover { color: var(--alarm); }
 
 /* --- Tables ---
    border-collapse stays separate so the frozen first column keeps its own
@@ -508,12 +664,30 @@ td.calc {
   color: var(--ink-2);
 }
 td.calc.strong { color: var(--ink); font-weight: 600; }
-td.calc.owing { color: var(--rust); }
-td.calc.paid { color: var(--jade); }
+td.calc.owing { color: var(--owed); }
+table.budget tbody tr.settled td.calc:nth-child(6) { color: var(--paid); font-weight: 600; }
+td.calc.paid { color: var(--paid); }
 td.num-cell input { text-align: right; }
 td.del-cell { width: 40px; text-align: center; }
 td.empty-cell { color: var(--ink-2); padding: 18px 12px; }
 .status-select { min-width: 124px; }
+
+/* --- Tasks: a row shows its state --------------------------------------------
+   The edge of the first cell carries the status, so a column of tasks can be
+   scanned for what is moving without reading a single dropdown. */
+table.tasks tbody tr[data-status] td:first-child { box-shadow: inset 3px 0 0 var(--rule-mid); }
+table.tasks tbody tr[data-status="in-progress"] td:first-child { box-shadow: inset 3px 0 0 var(--lamp); }
+table.tasks tbody tr[data-status="done"] td:first-child { box-shadow: inset 3px 0 0 var(--paid); }
+table.tasks tbody tr[data-status="in-progress"] .status-select { color: var(--owed); font-weight: 600; }
+table.tasks tbody tr[data-status="done"] .status-select { color: var(--paid); font-weight: 600; }
+table.tasks tbody tr[data-status="done"] td:first-child input { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--ink-2); }
+table.tasks tbody tr[data-status="done"] td:nth-child(2) input,
+table.tasks tbody tr[data-status="done"] input[type="date"] { color: var(--ink-2); }
+table.tasks tbody tr.late input[type="date"] { color: var(--alarm); font-weight: 600; }
+
+/* How many, beside the filter that would show them. */
+.pill-count { margin-left: 7px; font-weight: 400; font-variant-numeric: tabular-nums; opacity: 0.75; }
+.pill-count:empty { display: none; }
 
 /* Single rule above the totals, double rule below: the one piece of received
    notation here, because it already means "this is the figure that counts". */
@@ -687,7 +861,7 @@ a.files-name { text-decoration: underline; text-underline-offset: 2px; }
 .files-none { padding: 7px 4px; font-size: 13px; color: var(--ink-2); border-top: 1px solid var(--rule); }
 .files-pending progress { grid-column: 1 / -1; width: 100%; height: 6px; accent-color: var(--ink); }
 .files-pending .files-meta { white-space: normal; }
-.files-failed .files-meta { color: var(--rust); }
+.files-failed .files-meta { color: var(--alarm); }
 .files-foot { padding-top: 8px; }
 .files-foot .pop-note { border-top: 0; margin-top: 2px; }
 .files-add { width: 100%; }
@@ -806,6 +980,13 @@ body.is-archived .when-data { display: block; }
   .reckoning.compact .fig:nth-child(-n+2) { display: none; }
   .countdown { flex-direction: row; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .countdown-unit, .countdown-date { margin-top: 0; }
+  /* One column: the count, then the scale under it, then money, then to do. */
+  .runup { grid-template-columns: minmax(0, 1fr); grid-template-areas: "count" "scale" "ends"; row-gap: 6px; margin-top: 22px; }
+  .runup.no-scale { grid-template-areas: "count" "ends"; }
+  .runup-label { max-width: 96px; }
+  .overview-cols { grid-template-columns: minmax(0, 1fr); }
+  .reckoning.ledger .fig { border-bottom: 0; padding-left: 0; }
+  .reckoning.ledger .fig-num { font-size: 22px; }
   .start-steps li { grid-template-columns: auto 1fr; row-gap: 4px; }
   .start-steps button { grid-column: 2; grid-row: auto; margin-top: 8px; }
 
@@ -1034,7 +1215,7 @@ body.showing-auth #plannerWrap { display: none; }
 .auth-msg:empty { display: none; }
 /* Rust is spent on a refusal and on nothing else here, so "follow the prompt
    from your device" does not arrive looking like a failure. */
-.auth-msg.is-refusal { color: var(--rust); }
+.auth-msg.is-refusal { color: var(--alarm); }
 .auth-note-body { margin: 0 0 14px; color: var(--ink-2); max-width: 58ch; }
 /* Small enough to ignore, present enough to read out over the phone. */
 .app-version { margin: 18px 0 0; font-size: 0.6875rem; letter-spacing: 0.02em; color: var(--ink-2); opacity: 0.7; text-align: center; }
@@ -1080,7 +1261,7 @@ body.showing-auth #plannerWrap { display: none; }
   text-align: left;
 }
 .link-btn:hover { color: var(--ink); border-bottom-color: var(--ink); }
-.link-btn.danger:hover { color: var(--rust); border-bottom-color: var(--rust); }
+.link-btn.danger:hover { color: var(--alarm); border-bottom-color: var(--alarm); }
 .link-btn:disabled { opacity: 0.45; cursor: default; }
 .link-btn:disabled:hover { color: var(--ink-2); border-bottom-color: var(--rule-mid); }
 
@@ -1136,8 +1317,8 @@ body.showing-auth #plannerWrap { display: none; }
   color: var(--ink-2);
 }
 .person-status { font-weight: 600; }
-.status-invited { color: var(--gold); }
-.status-active { color: var(--jade); }
+.status-invited { color: var(--committed); }
+.status-active { color: var(--paid); }
 .status-disabled { color: var(--ink-2); }
 .person-added { font-variant-numeric: tabular-nums; }
 .person-acts {

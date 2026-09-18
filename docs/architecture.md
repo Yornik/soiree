@@ -62,7 +62,7 @@ ever reaching its method-not-allowed branch.
 Order matters, because assets reference each other by name:
 
 1. **Leaf assets** — the font and favicon are hashed first.
-2. **Stylesheet** — its `url('fraunces-display.woff2')` is rewritten to the
+2. **Stylesheet** — its `url('bricolage-display.woff2')` is rewritten to the
    font's hashed filename, *then* the stylesheet itself is hashed. Doing it in
    this order is what keeps the font reference from 404ing.
 3. **Application script** — hashed.
@@ -331,9 +331,9 @@ constraint drives the design:
 4. **Compression and cache headers in the binary.** No proxy configuration is
    required for either.
 
-Measured at 1.1.0, brotli, from a running server: shell 4.4 kB, stylesheet
-9.5 kB, planner script 44 kB, accounts script 25 kB, font 33 kB. Both scripts
-are `defer`, so first paint needs the shell and stylesheet only — about 14 kB.
+Measured at 1.2.0, brotli, from a running server: shell 4.5 kB, stylesheet
+11 kB, planner script 46 kB, accounts script 25 kB, font 69 kB. Both scripts
+are `defer`, so first paint needs the shell and stylesheet only — about 16 kB.
 
 ### Deliberately excluded
 
@@ -1446,10 +1446,24 @@ provenance are what tie an image back to its source, not digest equality.
 
 ### Design pass (track 7)
 
-The interface inherited its look from a single-purpose dashboard. It is
-decent — warm paper tones, a serif display face against a system sans, real
-data density — and the point of this track is to make it feel deliberate
-rather than to restyle it into something generic.
+The interface inherited its look from a single-purpose dashboard: warm paper
+tones, a serif display face against a system sans, a big countdown number in
+the corner. It was decent, and it was also the look every generated page
+arrives at by default.
+
+Since 1.2.0 the look comes from the subject instead. A soiree is an evening, so
+the palette is one: dusk for ink and for the dark page, porcelain for the light
+one, a lamp for the one warm point, which is always "today". The display face
+is a condensed, heavy grotesque, the lettering of tickets and marquees. And the
+first thing on the page is the thing every line of an event plan is measured
+against: **the run-up**, a scale from today to the day with what is due pinned
+along it. The count of days is still there, as the scale's left end rather than
+a number by itself. Underneath, money and jobs sit side by side, and one bar
+says what four figures in a row could only list: paid and owed are the two
+halves of what is committed, and the ceiling is a mark that total has or has
+not reached.
+
+The rules that follow still hold, and the redesign was held to them.
 
 Principles, in rough priority:
 

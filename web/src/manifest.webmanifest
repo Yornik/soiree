@@ -5,14 +5,32 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#F6F0DE",
-  "theme_color": "#1E2A47",
+  "background_color": "#F3F1F7",
+  "theme_color": "#231B3A",
   "icons": [
     {
       "src": "{{ .Asset "favicon.svg" }}",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
+    },
+    {
+      "src": "{{ .Asset "icon-192.png" }}",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "{{ .Asset "icon-512.png" }}",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "{{ .Asset "icon-maskable-512.png" }}",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

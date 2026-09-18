@@ -170,6 +170,10 @@
       'aria.money': 'Money at a glance',
       'aria.totals': 'Budget totals',
       'pr.title': 'Progress',
+      'ov.money': 'Money',
+      'ov.todo': 'To do',
+      'ru.today': 'today',
+      'ru.overdue': '{n} overdue',
       'pr.ceiling': 'Committed against ceiling',
       'pr.paid': 'Paid against committed',
       'pr.tasks': 'Tasks done',
@@ -310,6 +314,10 @@
       'aria.money': 'Het geld in één oogopslag',
       'aria.totals': 'Budgettotalen',
       'pr.title': 'Voortgang',
+      'ov.money': 'Geld',
+      'ov.todo': 'Te doen',
+      'ru.today': 'vandaag',
+      'ru.overdue': '{n} te laat',
       'pr.ceiling': 'Vastgelegd ten opzichte van het plafond',
       'pr.paid': 'Betaald ten opzichte van vastgelegd',
       'pr.tasks': 'Taken afgerond',
@@ -450,6 +458,10 @@
       'aria.money': 'Ringkasan uang',
       'aria.totals': 'Total anggaran',
       'pr.title': 'Kemajuan',
+      'ov.money': 'Uang',
+      'ov.todo': 'Yang harus dikerjakan',
+      'ru.today': 'hari ini',
+      'ru.overdue': '{n} terlambat',
       'pr.ceiling': 'Total biaya terhadap batas anggaran',
       'pr.paid': 'Dibayar terhadap total biaya',
       'pr.tasks': 'Tugas selesai',
@@ -2389,6 +2401,78 @@
       }).format(EVENT_DATE);
     } catch (e) { when = ''; }
     setText('statDaysLabel', when);
+    renderRunUp(diffDays);
+  }
+
+  /* ---------- The run-up ----------
+   * A scale from today to the day, with every open task that has a due date
+   * pinned where it falls. It is a picture of what "Up next" says in words,
+   * which is why the markup hides it from assistive technology.
+   *
+   * Positions are reckoned in whole days at the event's own offset, exactly as
+   * daysLeft() does, so a task due "tomorrow" sits one day along for every
+   * reader. A task that is already late is pinned at today, in the alarm
+   * colour, and counted: a scale that quietly dropped what was overdue would
+   * flatter precisely the plan that most needs looking at.
+   *
+   * Only the nearest few marks are named, and a name is skipped when it would
+   * run into the one before it. The rest are dots, with the task in a title.
+   */
+  function renderRunUp(diffDays) {
+    var scale = document.getElementById('runupScale');
+    var marks = document.getElementById('runupMarks');
+    var from = document.getElementById('runupFrom');
+    if (!scale || !marks) return;
+
+    var usable = EVENT && diffDays !== null && diffDays > 0 && !isArchived();
+    document.getElementById('runup').classList.toggle('no-scale', !usable);
+    marks.textContent = '';
+    if (from) from.textContent = t('ru.today');
+    if (!usable) return;
+
+    var there = new Date(Date.now() + EVENT.offsetMinutes * 60000);
+    var today = Date.UTC(there.getUTCFullYear(), there.getUTCMonth(), there.getUTCDate());
+    var span = EVENT.day - today;
+
+    var overdue = 0;
+    var pinned = [];
+    state.tasks.forEach(function (task) {
+      if (task.status === 'done' || !task.due) return;
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(task.due));
+      if (!m) return;
+      var due = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      if (due < today) overdue += 1;
+      pinned.push({ task: task, at: Math.max(0, Math.min(1, (due - today) / span)), late: due < today, due: due });
+    });
+    pinned.sort(function (a, b) { return a.due - b.due; });
+
+    // How far apart two names have to be, as a share of the scale: the width a
+    // name may take (150px, 96px on a phone - see .runup-label) plus a little
+    // air, over the width the scale really has. A fixed share let two names
+    // run into each other on a phone, where a sixth of the scale is 55px.
+    var width = scale.clientWidth || 800;
+    var minGap = ((width < 480 ? 96 : 150) + 12) / width;
+    var lastLabelAt = -1;
+    var named = 0;
+    pinned.forEach(function (p) {
+      var mark = document.createElement('span');
+      mark.className = 'runup-mark' + (p.late ? ' late' : '');
+      mark.style.left = (p.at * 100).toFixed(2) + '%';
+      mark.title = (p.task.name || t('un.untitled')) + ' \u2013 ' + p.task.due;
+      // Room for a name: not late (those are counted instead), among the
+      // first four, clear of the previous name, and not under the day itself.
+      if (!p.late && named < 4 && p.at - lastLabelAt > minGap && p.at < 1 - minGap * 0.6) {
+        var label = document.createElement('span');
+        label.className = 'runup-label';
+        label.textContent = p.task.name || t('un.untitled');
+        mark.appendChild(label);
+        lastLabelAt = p.at;
+        named += 1;
+      }
+      marks.appendChild(mark);
+    });
+    if (overdue && from) from.textContent = t('ru.today') + ' \u2013 ' + t('ru.overdue', { n: overdue });
+    if (from) from.classList.toggle('late', overdue > 0);
   }
 
   /* ---------- Empty state ----------
@@ -2446,6 +2530,18 @@
       budgetFillEl.classList.remove('over');
     }
 
+    // The money bar: paid and owed as the two halves of what is committed,
+    // drawn against whichever is larger, the commitment or the ceiling, so a
+    // plan under its ceiling shows the room it has left and one over it shows
+    // the ceiling as a mark it has passed.
+    var barMax = Math.max(m.total, m.ceiling, 1);
+    document.getElementById('moneyBarPaid').style.width = ((Math.min(m.paid, m.total) / barMax) * 100).toFixed(2) + '%';
+    document.getElementById('moneyBarOwed').style.width = ((Math.max(m.total - m.paid, 0) / barMax) * 100).toFixed(2) + '%';
+    var ceilingMark = document.getElementById('moneyBarCeiling');
+    ceilingMark.hidden = !(m.ceiling > 0);
+    ceilingMark.style.left = ((m.ceiling / barMax) * 100).toFixed(2) + '%';
+    ceilingMark.classList.toggle('over', m.ceiling > 0 && m.total > m.ceiling);
+
     var paidPct = m.total ? Math.round((m.paid / m.total) * 100) : 0;
     setText('paidBarPct', paidPct + '%');
     setText('paidBarSub', t('pr.of', { a: fmtShort(m.paid), b: fmtShort(m.total) }));
@@ -2470,9 +2566,18 @@
       var li = document.createElement('li');
       li.appendChild(cell('span', '', t3.name || t('un.untitled')));
       li.appendChild(cell('span', 'who', t3.owner || ''));
-      li.appendChild(cell('span', 'due', t3.due || ''));
+      var dueCell = cell('span', 'due', t3.due || '');
+      // Late is late where the event is, as everywhere else on this page.
+      if (t3.due && EVENT) {
+        var thereNow = new Date(Date.now() + EVENT.offsetMinutes * 60000);
+        var todayThere = thereNow.toISOString().slice(0, 10);
+        if (String(t3.due) < todayThere) dueCell.classList.add('late');
+      }
+      li.appendChild(dueCell);
       list.appendChild(li);
     });
+    // A task added, finished or given a date moves a mark on the run-up.
+    renderRunUp(daysLeft());
     syncEmptyState();
   }
 
@@ -2715,6 +2820,14 @@
       li.appendChild(cell('span', '', k));
       li.appendChild(cell('span', 'amt', fmtCur(Math.round(toMajor(groups[k])))));
       li.appendChild(cell('span', 'pct', share + '%'));
+      // The share again, as a length: five percentages in a column have to be
+      // read and compared, five bars are compared by looking.
+      var bar = cell('span', 'share', '');
+      bar.setAttribute('aria-hidden', 'true');
+      var fill = cell('span', 'share-fill' + (k === t('sp.unassigned') ? ' unassigned' : ''), '');
+      fill.style.width = share + '%';
+      bar.appendChild(fill);
+      li.appendChild(bar);
       list.appendChild(li);
     });
 
@@ -3369,7 +3482,7 @@
   window.addEventListener('resize', function () {
     if (fitQueued) return;
     fitQueued = true;
-    requestAnimationFrame(function () { fitQueued = false; fitBudgetText(); });
+    requestAnimationFrame(function () { fitQueued = false; fitBudgetText(); renderRunUp(daysLeft()); });
   });
 
   // ---------- Resizing the budget grid ----------
@@ -3598,6 +3711,9 @@
     tr.children[3].textContent = fmtCur(tot);
     tr.children[5].textContent = fmtCur(owing);
     tr.children[5].classList.toggle('owing', owing > 0);
+    // Paid in full: the line is settled, and the figure that said what was
+    // owed says so in the colour of money paid rather than as a bare zero.
+    tr.classList.toggle('settled', tot > 0 && owing <= 0);
   }
 
   document.getElementById('addBudgetRow').addEventListener('click', function () {
@@ -3626,10 +3742,39 @@
     btn.addEventListener('click', function () { setFilter(btn.dataset.filter); });
   });
 
+  /* Today's date where the event is, as YYYY-MM-DD, so that "late" means the
+   * same thing on every screen - and on a planner with no date, the reader's
+   * own today, which is the only one there is. */
+  function todayISO() {
+    if (EVENT) return new Date(Date.now() + EVENT.offsetMinutes * 60000).toISOString().slice(0, 10);
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  /* A row says what state it is in without being read: the stylesheet draws a
+   * done task struck through and quiet, one in progress with the lamp at its
+   * edge, and a late date in the alarm colour. Set here, on the row, so a
+   * change of status or date repaints one row and not the table under a
+   * cursor. */
+  function markTaskRow(tr, task) {
+    tr.setAttribute('data-status', task.status || 'not-started');
+    tr.classList.toggle('late', !!task.due && task.status !== 'done' && String(task.due) < todayISO());
+  }
+
+  // How many of each, beside the filter that would show them.
+  function renderTaskCounts() {
+    var counts = { all: state.tasks.length, 'not-started': 0, 'in-progress': 0, done: 0 };
+    state.tasks.forEach(function (task) { if (task.status in counts) counts[task.status] += 1; });
+    Array.prototype.forEach.call(document.querySelectorAll('#taskFilters .pill-count'), function (el) {
+      el.textContent = counts[el.getAttribute('data-count')] || 0;
+    });
+  }
+
   function renderTasksTable() {
     var body = document.getElementById('tasksBody');
     body.innerHTML = '';
     var shown = 0;
+    renderTaskCounts();
     state.tasks.forEach(function (task) {
       if (currentFilter !== 'all' && task.status !== currentFilter) return;
       shown++;
@@ -3663,6 +3808,7 @@
       dueInput.addEventListener('input', function () {
         task.due = dueInput.value;
         save();
+        markTaskRow(tr, task);
         renderOverview();
         // The one gesture on this page that makes a deadline reminder obvious:
         // somebody has just written a date they intend to be held to.
@@ -3683,6 +3829,8 @@
       statusSelect.addEventListener('change', function () {
         task.status = statusSelect.value;
         save();
+        markTaskRow(tr, task);
+        renderTaskCounts();
         renderOverview();
         if (currentFilter !== 'all') renderTasksTable();
       });
@@ -3698,6 +3846,7 @@
       }));
 
       addFilesButton(tdName, 'task', task);
+      markTaskRow(tr, task);
 
       tr.appendChild(tdName);
       tr.appendChild(tdOwner);

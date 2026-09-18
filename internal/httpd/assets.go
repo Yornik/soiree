@@ -66,6 +66,7 @@ var contentTypes = map[string]string{
 	".css":         "text/css; charset=utf-8",
 	".woff2":       "font/woff2",
 	".svg":         "image/svg+xml",
+	".png":         "image/png",
 	".webmanifest": "application/manifest+json",
 	".json":        "application/json",
 	".html":        "text/html; charset=utf-8",
@@ -146,7 +147,15 @@ func BuildAssets(srcFS fs.FS) (*Assets, error) {
 	}
 
 	// 1. Leaf assets that nothing else references by name.
-	leaves := []string{"fonts/fraunces-display.woff2", "favicon.svg"}
+	//
+	// The PNG icons are for phones. A home screen does not take an SVG: iOS
+	// wants the 180px apple-touch-icon, and Android will not offer to install
+	// the page without 192 and 512px PNGs in the manifest. They are rendered
+	// from favicon.svg by e2e/scripts/make-icons.js.
+	leaves := []string{
+		"fonts/bricolage-display.woff2", "favicon.svg",
+		"icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-512.png", "icons/apple-touch-icon.png",
+	}
 	for _, name := range leaves {
 		body, err := fs.ReadFile(srcFS, name)
 		if err != nil {
@@ -163,8 +172,8 @@ func BuildAssets(srcFS fs.FS) (*Assets, error) {
 		return nil, fmt.Errorf("read styles.css: %w", err)
 	}
 	css = bytes.ReplaceAll(css,
-		[]byte("fraunces-display.woff2"),
-		[]byte(path.Base(a.URL("fraunces-display.woff2"))),
+		[]byte("bricolage-display.woff2"),
+		[]byte(path.Base(a.URL("bricolage-display.woff2"))),
 	)
 	a.buildAsset("styles.css", css)
 

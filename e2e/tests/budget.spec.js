@@ -10,7 +10,7 @@
  * claims to be.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, budgetRow, expectFigures, gotoTab, money, openPlanner } = require('./helpers');
+const { addBudgetLine, addSponsor, budgetRow, expectFigures, gotoTab, money, openPlanner, tagLine } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
   await openPlanner(page);
@@ -246,3 +246,28 @@ test('a long name makes its row taller instead of hiding behind a scrollbar', as
   await gotoTab(page, 'budget');
   expect(await hidden(budgetRow(page, 1).item)).toBeLessThanOrEqual(1);
 });
+
+test('who is covering what is drawn as shares, and a line paid in full says so', async ({ page }) => {
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await addSponsor(page, { code: 'North', name: 'Ada' });
+  await addBudgetLine(page, { item: 'Venue', unit: 3000, qty: 1, paid: 3000 });
+  await addBudgetLine(page, { item: 'Band', unit: 1000, qty: 1, paid: 0 });
+  await tagLine(budgetRow(page, 0), ['North']);
+
+  const shares = await page.locator('#splitList li').evaluateAll((lis) => lis.map((li) => [
+    li.querySelector('span').textContent,
+    li.querySelector('.pct').textContent,
+    parseFloat(li.querySelector('.share-fill').style.width),
+    li.querySelector('.share-fill').classList.contains('unassigned'),
+  ]));
+  expect(shares).toEqual([['North', '75%', 75, false], ['Unassigned', '25%', 25, true]]);
+
+  const settled = () => page.locator('#budgetBody tr').evaluateAll((trs) => trs.map((tr) => tr.classList.contains('settled')));
+  expect(await settled()).toEqual([true, false]);
+  await budgetRow(page, 1).paid.fill('1000');
+  expect(await settled()).toEqual([true, true]);
+  await budgetRow(page, 0).paid.fill('2999');
+  expect(await settled()).toEqual([false, true]);
+});
+

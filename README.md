@@ -239,12 +239,12 @@ Measured transfer at 1.0.0, brotli:
 
 | | |
 |---|---|
-| HTML shell | 4.4 kB (the three flags are inline SVG, so they cost no request) |
-| Stylesheet | 9.5 kB |
-| Planner script | 44 kB (`defer`, does not block paint) |
+| HTML shell | 4.5 kB (the three flags are inline SVG, so they cost no request) |
+| Stylesheet | 11 kB |
+| Planner script | 46 kB (`defer`, does not block paint) |
 | Accounts script | 25 kB (`defer`, does not block paint; three languages) |
-| Display font | 33 kB (`font-display: swap`, does not block paint) |
-| **First paint** | **~14 kB** |
+| Display font | 69 kB (`font-display: swap`, does not block paint) |
+| **First paint** | **~16 kB** |
 
 **Writes are debounced.** Edits apply to local state instantly and persist
 500 ms later, flushed on page hide. That keeps typing smooth, and it is what
@@ -431,21 +431,50 @@ it cannot.
 
 ### Regenerating the font subset
 
-The shipped `web/src/fonts/fraunces-display.woff2` is [Fraunces][fraunces]
-(SIL OFL 1.1), reduced from 67 kB to 33 kB by pinning the optical-size axis and
-capping weight to the range actually used:
+The shipped `web/src/fonts/bricolage-display.woff2` is [Bricolage
+Grotesque][bricolage] (SIL OFL 1.1), reduced from 408 kB to 69 kB: the width is
+pinned at 87, a condensed cut; the weight axis is kept from 500 to 800 and the
+optical-size axis from 14 to 96, so the event's name gets the tight display
+drawing and a 22px heading the looser one the face was designed to use at that
+size; and the glyphs are
+cut to Latin, Latin-1 and Latin Extended-A, which covers English, Dutch and
+Indonesian and most of Europe. It is used for the event's name, the countdown,
+headings and the large figures; everything else is the reader's system font.
 
 ```bash
 python3 -m venv /tmp/fontenv && /tmp/fontenv/bin/pip install fonttools brotli
+curl -fsSL -o bricolage-var.ttf \
+  'https://github.com/google/fonts/raw/main/ofl/bricolagegrotesque/BricolageGrotesque%5Bopsz%2Cwdth%2Cwght%5D.ttf'
 /tmp/fontenv/bin/python -c "
 from fontTools.ttLib import TTFont
 from fontTools.varLib import instancer
-f = TTFont('fraunces-latin-var.woff2')
-inst = instancer.instantiateVariableFont(f, {'opsz': 72, 'wght': (400, 700)})
-inst.flavor = 'woff2'
-inst.save('web/src/fonts/fraunces-display.woff2')
+from fontTools import subset
+f = TTFont('bricolage-var.ttf')
+inst = instancer.instantiateVariableFont(f, {'opsz': (14, 96), 'wdth': 87, 'wght': (500, 800)})
+o = subset.Options(); o.flavor = 'woff2'
+o.layout_features = ['kern', 'liga', 'tnum', 'lnum', 'ccmp', 'locl', 'mark', 'mkmk']
+s = subset.Subsetter(o)
+s.populate(unicodes=list(range(0x20, 0x7F)) + list(range(0xA0, 0x180))
+           + [0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2026, 0x20AC, 0x2192, 0x2212, 0xD7])
+s.subset(inst); inst.flavor = 'woff2'
+inst.save('web/src/fonts/bricolage-display.woff2')
 "
 ```
+
+### Regenerating the app icons
+
+The PNG icons in `web/src/icons/` are rendered from `web/src/favicon.svg`, so
+the drawing is changed in one place:
+
+```bash
+cd e2e && node scripts/make-icons.js
+```
+
+A phone's home screen does not take an SVG. iOS uses the 180px
+`apple-touch-icon`; Android will not offer to install the page without the 192
+and 512px PNGs in the manifest, and crops the maskable one to the launcher's
+shape, which is why that one is drawn full-bleed with the glass inside the
+inner 80%.
 
 ## Contributing and security
 
@@ -461,8 +490,10 @@ scope and what to expect. To check a release you already have, see
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The bundled Fraunces font is licensed separately
-under the [SIL Open Font License 1.1][ofl].
+MIT — see [LICENSE](LICENSE). The bundled Bricolage Grotesque font is licensed separately
+under the [SIL Open Font License 1.1][ofl]; its licence text is in
+[LICENSES/OFL-Bricolage-Grotesque.txt](LICENSES/OFL-Bricolage-Grotesque.txt). The shipped file is a subset of
+the original, which the licence permits.
 
-[fraunces]: https://github.com/undercasetype/Fraunces
+[bricolage]: https://github.com/ateliertriay/bricolage
 [ofl]: https://openfontlicense.org/

@@ -1,6 +1,9 @@
 package httpd
 
 import (
+	"encoding/json"
+	"fmt"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -197,7 +200,7 @@ func TestFontIsNotRecompressed(t *testing.T) {
 	body, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
 
-	fontURL := regexp.MustCompile(`/assets/fraunces-display\.[a-f0-9]+\.woff2`).FindString(string(body))
+	fontURL := regexp.MustCompile(`/assets/bricolage-display\.[a-f0-9]+\.woff2`).FindString(string(body))
 	if fontURL == "" {
 		t.Fatal("no font URL in the shell")
 	}
@@ -227,7 +230,7 @@ func TestStylesheetFontReferenceIsHashed(t *testing.T) {
 	if ref == nil {
 		t.Fatal("no url() in the stylesheet")
 	}
-	if !regexp.MustCompile(`^fraunces-display\.[a-f0-9]+\.woff2$`).MatchString(ref[1]) {
+	if !regexp.MustCompile(`^bricolage-display\.[a-f0-9]+\.woff2$`).MatchString(ref[1]) {
 		t.Errorf("font reference %q is not content-addressed", ref[1])
 	}
 	if r := get(t, h, "/assets/"+ref[1], nil); r.StatusCode != http.StatusOK {
@@ -461,4 +464,72 @@ func TestIndexingCanBeAllowed(t *testing.T) {
 	if got := r.Header.Get("X-Robots-Tag"); got != "" {
 		t.Errorf("X-Robots-Tag = %q, want it absent when indexing is allowed", got)
 	}
+}
+
+// A phone's home screen does not take an SVG. Every icon the manifest and the
+// page name has to be a real PNG at a hashed address, of the size it claims:
+// Android silently refuses to offer "install" when one is missing or the wrong
+// size, and says nothing about why.
+func TestThePhoneIconsAreRealAndTheSizeTheyClaim(t *testing.T) {
+	h := newTestServer(t, config.Config{EventName: "Ada's Leaving Do"})
+
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	page := get("/").Body.String()
+	manifestURL := regexp.MustCompile(`/assets/manifest\.[a-f0-9]+\.webmanifest`).FindString(page)
+	if manifestURL == "" {
+		t.Fatal("the page links no manifest")
+	}
+	var manifest struct {
+		Icons []struct{ Src, Sizes, Type, Purpose string }
+	}
+	if err := json.Unmarshal(get(manifestURL).Body.Bytes(), &manifest); err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+
+	want := map[string]bool{"192x192 any": false, "512x512 any": false, "512x512 maskable": false}
+	check := func(url string, side int) {
+		t.Helper()
+		rec := get(url)
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
+			t.Errorf("%s: %d %q", url, rec.Code, rec.Header().Get("Content-Type"))
+			return
+		}
+		cfg, err := png.DecodeConfig(rec.Body)
+		if err != nil || cfg.Width != side || cfg.Height != side {
+			t.Errorf("%s is %dx%d (%v), want %dx%d", url, cfg.Width, cfg.Height, err, side, side)
+		}
+		if !regexp.MustCompile(`\.[a-f0-9]{8,}\.png$`).MatchString(url) {
+			t.Errorf("%s is not a hashed address", url)
+		}
+	}
+	for _, icon := range manifest.Icons {
+		if icon.Type != "image/png" {
+			continue
+		}
+		key := icon.Sizes + " " + icon.Purpose
+		if _, ok := want[key]; ok {
+			want[key] = true
+		}
+		var side int
+		if _, err := fmt.Sscanf(icon.Sizes, "%dx", &side); err != nil {
+			t.Fatalf("sizes %q: %v", icon.Sizes, err)
+		}
+		check(icon.Src, side)
+	}
+	for key, found := range want {
+		if !found {
+			t.Errorf("the manifest has no %s PNG", key)
+		}
+	}
+
+	touch := regexp.MustCompile(`<link rel="apple-touch-icon" href="([^"]+)"`).FindStringSubmatch(page)
+	if touch == nil {
+		t.Fatal("the page names no apple-touch-icon")
+	}
+	check(touch[1], 180)
 }
