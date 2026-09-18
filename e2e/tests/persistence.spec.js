@@ -168,8 +168,69 @@ test('the planner is stored under one known key, and nothing else', async ({ pag
 
   // The key is a compatibility surface: change it and every saved planner is
   // silently orphaned, with no error anyone would see.
+  //
+  // Still an equality, and still exactly one key, because a theme nobody has
+  // chosen is stored by storing nothing — see the test below, which is where
+  // the second key is pinned down.
   const keys = await page.evaluate(() => Object.keys(localStorage));
   expect(keys).toEqual([STORAGE_KEY]);
+});
+
+/*
+ * The theme is the one preference on this page that deliberately does not
+ * travel. Everything else a person changes is a fact about the event and is
+ * shared; this is a fact about the screen they are looking at, and one person
+ * picking dark must not darken the ledger for everybody else.
+ *
+ * So it is not in the planner document, not in the export and not on the wire
+ * — which leaves a second localStorage key, and leaves the assertion above
+ * needing a companion rather than a loosening. The two together still pin the
+ * whole storage surface: exactly one key until somebody overrides their
+ * device, exactly two afterwards, and back to one when they stop.
+ */
+test('the theme is a per-device choice, kept out of the planner', async ({ page }) => {
+  await openPlanner(page);
+  const themed = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  const stored = () => page.evaluate(() => Object.keys(localStorage).sort());
+  // Addressed by its accessible name rather than by position in the footer, so
+  // this says which control it means and keeps meaning it when something else
+  // lands beside it.
+  const themes = page.getByRole('group', { name: 'Theme' }).getByRole('button');
+  const pill = (i) => themes.nth(i);
+
+  // Three states, not two: "follow the system" is the one most people want and
+  // the one there is no way back to from a two-position switch.
+  await expect(themes).toHaveCount(3);
+  await expect(pill(0)).toHaveText('System');
+  await expect(pill(2)).toHaveText('Dark');
+
+  // Nothing chosen yet. The page follows the device, and says so by writing
+  // no attribute and storing no key.
+  expect(await themed()).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem('soiree.theme'))).toBeNull();
+
+  await pill(2).click();
+  expect(await themed()).toBe('dark');
+
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 300 });
+  await flushToStorage(page);
+
+  expect(await stored()).toEqual(['soiree.theme', STORAGE_KEY]);
+  const planner = await readStored(page);
+  expect(planner).not.toHaveProperty('theme');
+
+  // It is remembered, and the control says which one is in force.
+  await page.reload();
+  expect(await themed()).toBe('dark');
+  await expect(pill(2)).toHaveAttribute('aria-pressed', 'true');
+  await expect(pill(0)).toHaveAttribute('aria-pressed', 'false');
+
+  // Back to following the device clears the key rather than storing a third
+  // value that then has to be kept in step with what "system" means.
+  await pill(0).click();
+  expect(await themed()).toBeNull();
+  expect(await stored()).toEqual([STORAGE_KEY]);
 });
 
 test('a corrupt saved planner is repaired rather than fatal', async ({ page }) => {

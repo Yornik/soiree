@@ -10,6 +10,37 @@
   var STORAGE_KEY = 'soiree.v1';
 
   /* ------------------------------------------------------------------
+   * THEME
+   * ------------------------------------------------------------------
+   * Both palettes are in the stylesheet already and :root[data-theme] is the
+   * hook that picks one. Until now nothing set it.
+   *
+   * A preference of the device, not a fact about the event, so it is the one
+   * thing here that deliberately does not travel: not in `state`, not in the
+   * export, not over the API. One person reading in the dark must not darken
+   * the ledger for everybody else. Hence a key of its own — and only once
+   * somebody has chosen: "follow the system" is the default and is stored by
+   * storing nothing, so a planner nobody has themed keeps exactly the one key
+   * it documents.
+   *
+   * Applied as the first thing this file does, so the page is painted once
+   * rather than repainted. A frame of the OS theme still gets through before
+   * this script runs; closing that needs an inline <script> in the head, which
+   * the CSP forbids on purpose.
+   * ------------------------------------------------------------------ */
+  var THEME_KEY = 'soiree.theme';
+  var THEMES = ['system', 'light', 'dark'];
+
+  function readTheme() {
+    try { return localStorage.getItem(THEME_KEY) || 'system'; } catch (e) { return 'system'; }
+  }
+  function paintTheme(mode) {
+    if (mode === 'light' || mode === 'dark') document.documentElement.setAttribute('data-theme', mode);
+    else document.documentElement.removeAttribute('data-theme');
+  }
+  paintTheme(readTheme());
+
+  /* ------------------------------------------------------------------
    * CONFIGURATION
    * ------------------------------------------------------------------
    * Injected by the server from SOIREE_* environment variables. Read from a
@@ -185,7 +216,16 @@
       'ar.close': 'Close the planner',
       'ar.settle': 'The final reckoning',
       'ar.settlenote': 'what each person covered',
-      'ar.nothing': 'Nothing was recorded.'
+      'ar.nothing': 'Nothing was recorded.',
+      'th.title': 'Theme',
+      'th.system': 'System',
+      'th.light': 'Light',
+      'th.dark': 'Dark',
+      'n.offer': 'Want a reminder here when a deadline is near? One notification on this device, listing what is coming up.',
+      'n.on': 'Turn on',
+      'n.later': 'Not now',
+      'n.done': 'Reminders are on for this device.',
+      'n.no': 'Notifications are blocked for this site. Your browser’s site settings can undo that.'
     },
     nl: {
       'nav.sections': 'Onderdelen van de planner',
@@ -296,7 +336,16 @@
       'ar.close': 'Planner sluiten',
       'ar.settle': 'De eindafrekening',
       'ar.settlenote': 'wat ieder heeft betaald',
-      'ar.nothing': 'Er is niets vastgelegd.'
+      'ar.nothing': 'Er is niets vastgelegd.',
+      'th.title': 'Thema',
+      'th.system': 'Systeem',
+      'th.light': 'Licht',
+      'th.dark': 'Donker',
+      'n.offer': 'Hier een seintje krijgen als een deadline nadert? Eén melding op dit apparaat, met wat eraan komt.',
+      'n.on': 'Aanzetten',
+      'n.later': 'Nu niet',
+      'n.done': 'Herinneringen staan aan op dit apparaat.',
+      'n.no': 'Meldingen zijn geblokkeerd voor deze site. Dat kun je terugdraaien bij de site-instellingen van je browser.'
     },
     id: {
       'nav.sections': 'Bagian perencana',
@@ -406,7 +455,16 @@
       'ar.close': 'Tutup perencana',
       'ar.settle': 'Perhitungan akhir',
       'ar.settlenote': 'berapa yang ditanggung tiap orang',
-      'ar.nothing': 'Tidak ada yang tercatat.'
+      'ar.nothing': 'Tidak ada yang tercatat.',
+      'th.title': 'Tema',
+      'th.system': 'Sistem',
+      'th.light': 'Terang',
+      'th.dark': 'Gelap',
+      'n.offer': 'Mau diingatkan di sini kalau tenggat sudah dekat? Satu notifikasi di perangkat ini, berisi apa yang akan datang.',
+      'n.on': 'Nyalakan',
+      'n.later': 'Nanti saja',
+      'n.done': 'Pengingat aktif di perangkat ini.',
+      'n.no': 'Notifikasi diblokir untuk situs ini. Kamu bisa membatalkannya di pengaturan situs browser.'
     }
   };
 
@@ -811,15 +869,21 @@
    *
    * `phases` and `programme` are in the plan and are not here. This page has
    * no interface for either, and a client must not delete rows it cannot draw.
+   *
+   * `entity` is the third name each of these has: the table, which is the word
+   * the change feed speaks. Written down beside the other two rather than
+   * derived, because `budget_items` -> `budget-items` -> `budgetItems` is three
+   * spellings of one thing and a rule that converts between them is a rule to
+   * get wrong.
    */
   var COLLECTIONS = [
     {
-      key: 'sponsors', route: 'sponsors', container: 'sponsorGrid',
+      key: 'sponsors', route: 'sponsors', entity: 'sponsors', container: 'sponsorGrid',
       fields: [textField('code'), textField('name')],
       render: function () { renderSponsors(); renderBudgetTable(); renderSplit(); }
     },
     {
-      key: 'budgetItems', route: 'budget-items', container: 'budgetBody',
+      key: 'budgetItems', route: 'budget-items', entity: 'budget_items', container: 'budgetBody',
       fields: [
         textField('item'), moneyField('unit'), numberField('qty'),
         moneyField('paid'), textField('note'), idsField('sponsors')
@@ -827,12 +891,12 @@
       render: function () { renderBudgetTable(); renderBudgetTotals(); renderOverview(); }
     },
     {
-      key: 'tasks', route: 'tasks', container: 'tasksBody',
+      key: 'tasks', route: 'tasks', entity: 'tasks', container: 'tasksBody',
       fields: [textField('name'), textField('owner'), dateField('due'), textField('status')],
       render: function () { renderTasksTable(); renderOverview(); }
     },
     {
-      key: 'notes', route: 'notes', container: 'watchList',
+      key: 'notes', route: 'notes', entity: 'notes', container: 'watchList',
       fields: [textField('text')],
       render: function () { renderNotes(); }
     }
@@ -844,13 +908,17 @@
    * is why this descriptor is not in the list above — everything else about
    * it, revision included, is the same. */
   var SETTINGS = {
-    key: 'settings', route: 'settings', singleton: true, container: 'panel-budget',
+    key: 'settings', route: 'settings', entity: 'settings', singleton: true, container: 'panel-budget',
     fields: [
       moneyField('ceiling'), numberField('inflationPct'),
       numberField('fxRate'), boolField('splitEvenly')
     ],
     render: function () { renderSettingsInputs(); renderBudgetTotals(); renderOverview(); }
   };
+
+  // Table name -> the descriptor that draws it, for reading the change feed.
+  var BY_ENTITY = { settings: SETTINGS };
+  COLLECTIONS.forEach(function (c) { BY_ENTITY[c.entity] = c; });
 
   function fieldNamed(coll, name) {
     for (var i = 0; i < coll.fields.length; i++) {
@@ -864,6 +932,15 @@
       if (list[i] && list[i].id === id) return list[i];
     }
     return null;
+  }
+
+  // Removal by identity rather than by index. A remote change can add or take
+  // away rows above this one, and a rebuild of the table is held off while
+  // somebody is typing in it — so the position a row had when its controls were
+  // drawn is not the position it has when one of them is pressed.
+  function dropRow(list, row) {
+    var i = list.indexOf(row);
+    if (i !== -1) list.splice(i, 1);
   }
 
   /* ---------- Wire <-> page ---------- */
@@ -1236,6 +1313,12 @@
    */
   var Sync = { queued: false, running: false, failures: 0, timer: null };
 
+  // Bumped whenever a write pass begins or ends. It is how a plan fetched from
+  // the live stream knows it was overtaken: a read that spans a pass may be
+  // missing a row this browser has just created, or carrying a revision it has
+  // just superseded, and merging either would undo work that did land.
+  var passes = 0;
+
   Sync.push = function () {
     if (!apiMode) return;
     Sync.queued = true;
@@ -1246,11 +1329,13 @@
     if (!apiMode || Sync.running || Sync.timer || !Sync.queued) return;
     Sync.queued = false;
     Sync.running = true;
+    passes++;
     drain(0).then(Sync.done, function () { Sync.done('retry'); });
   };
 
   Sync.done = function (outcome) {
     Sync.running = false;
+    passes++;
     if (outcome === 'done') {
       if (Sync.failures >= FAILURES_BEFORE_NOTICE) flash(t('d.online'));
       Sync.failures = 0;
@@ -1370,6 +1455,248 @@
 
     renderAll();
     Sync.push();
+    openLive();
+    pushRefresh();
+  }
+
+  /* ==================================================================
+   * LIVE SYNC — GET /api/v1/events
+   * ==================================================================
+   * Two people have shared one ledger since the API was wired up, and neither
+   * saw the other until they reloaded. That is how a venue gets booked twice.
+   *
+   * The stream carries identifiers, never rows — "budget_items <id> is now at
+   * revision 4" — so every event resolves to the same act: re-read GET /plan
+   * and merge it. The interesting parts are the merge, and knowing when not to
+   * read. Four rules from the endpoint's contract, each counter-intuitive and
+   * each load-bearing:
+   *
+   *   - `resync` means "your copy is stale". It arrives on every connect and
+   *     again whenever the server re-establishes its database connection,
+   *     because changes happened in that gap that nobody was told about. There
+   *     is no replay and no Last-Event-ID: this is the whole of what a client
+   *     does about missed events.
+   *   - On create and update, ignore a revision already held. That is what
+   *     suppresses the echo of this browser's own write — the server does not
+   *     filter it out, and re-reading the plan to be told what we just wrote is
+   *     a round trip for nothing.
+   *   - On delete, never compare revisions. A delete announces the row's final
+   *     revision, which is the one already held, so a `<=` test would discard
+   *     the one event that must never be discarded and the row would stay.
+   *   - Deleting a phase, a sponsor or a budget line is why every event ends in
+   *     a whole-plan read rather than a surgical one. Those cascade — a line's
+   *     phase and a programme entry's line go to NULL, attributions are removed
+   *     — without bumping the affected rows' revisions, so none of it is
+   *     announced, and a stale copy here would sail through the revision check
+   *     on the next PATCH and write the dangling reference back.
+   * ================================================================== */
+
+  var live = null;        // the EventSource, once there is a database behind us
+  var liveWait = 0;       // backoff for a stream that was refused outright
+
+  // Reconnect is normally the browser's job — the server sends `retry: 3000`.
+  // This is only for the case the browser will not retry: see onerror.
+  var LIVE_RETRY_MS = 5000;
+
+  function openLive() {
+    if (!apiMode || live || typeof EventSource !== 'function') return;
+    try { live = new EventSource(API_BASE + '/events'); } catch (e) { live = null; return; }
+
+    // Named events. Nothing is ever sent as a default `message`, so onmessage
+    // would sit there receiving nothing and the page would look connected and
+    // be deaf.
+    live.addEventListener('resync', function () { scheduleResync(); });
+    live.addEventListener('change', function (e) { onChange(e.data); });
+    live.onopen = function () { liveWait = 0; };
+    live.onerror = function () {
+      // CONNECTING means the browser is already reconnecting on the interval
+      // the server asked for, and anything done here would be a second attempt
+      // racing the first. CLOSED is the case that needs us: a stream refused
+      // with a status — a 503 when the subscriber cap is reached — puts an
+      // EventSource into CLOSED permanently, and it never comes back on its
+      // own. The Retry-After that came with it is not readable from here, so
+      // the wait is ours, doubling and jittered: a full cap means everyone hit
+      // it at once, and reconnecting in lockstep is how it stays hit.
+      if (!live || live.readyState !== EventSource.CLOSED) return;
+      live.close();
+      live = null;
+      liveWait = Math.min(RETRY_MAX_MS, liveWait ? liveWait * 2 : LIVE_RETRY_MS);
+      setTimeout(openLive, liveWait / 2 + Math.random() * liveWait);
+    };
+  }
+
+  function onChange(raw) {
+    var n;
+    try { n = JSON.parse(raw); } catch (e) { return; }
+    if (!n || !n.entity || !shadow) return;
+
+    var c = BY_ENTITY[n.entity];
+    if (n.action === 'delete') {
+      // No revision test, deliberately. `phases` is not drawn here and is acted
+      // on anyway, because deleting one silently rewrites budget lines; a
+      // programme entry is the one deletion with nothing behind it.
+      if (!c && n.entity !== 'phases') return;
+    } else {
+      if (!c) return;   // phases and programme entries: nothing here is drawn from them
+      var held = c.singleton ? shadow.settings : shadow[c.key][n.id];
+      if (held && n.revision != null && Number(n.revision) <= held.revision) return;
+    }
+    scheduleResync();
+  }
+
+  /* ---------- Re-reading the plan ----------
+   * Coalesced, and never on top of this browser's own writing.
+   *
+   * The wait is long enough to swallow the two resyncs a connect sends and the
+   * burst a cascading delete makes, and long enough that a keystroke which has
+   * only just landed has started the save debounce below: a read that overtakes
+   * the write it raced settles a conflict silently, where the write would have
+   * reported it.
+   */
+  var RESYNC_MS = 400;
+  var resyncTimer = null;
+  var resyncing = false;
+  var resyncAgain = false;
+  var resyncWait = 0;
+
+  function scheduleResync() {
+    if (!apiMode) return;
+    resyncAgain = true;
+    armResync(RESYNC_MS);
+  }
+
+  function armResync(ms) {
+    if (resyncTimer || resyncing) return;
+    resyncTimer = setTimeout(runResync, ms);
+  }
+
+  function runResync() {
+    resyncTimer = null;
+
+    // Not while this browser has a write in flight, waiting to be retried, or
+    // still sitting in the save debounce. A plan read around a POST that has
+    // committed but not answered carries a row under an id this page has never
+    // seen, and merging it would put a second copy of it on screen. A plan
+    // merged on top of an edit that has not been sent resolves a conflict
+    // silently and in the wrong direction — where letting the write go first
+    // produces the 409 the merge path already handles, and says out loud.
+    if (Sync.running || Sync.timer || saveTimer) { armResync(RESYNC_MS); return; }
+
+    resyncing = true;
+    resyncAgain = false;
+    var mark = passes;
+    api('GET', '/plan').then(function (res) {
+      resyncing = false;
+      // The same three conditions again, because the answer is what gets
+      // merged and a write can have started while it was on its way.
+      if (res.status === 200 && res.body && passes === mark && !Sync.running && !saveTimer) {
+        resyncWait = 0;
+        applyPlan(res.body);
+      } else {
+        // Overtaken by a write of our own, or no answer at all. Both are worth
+        // another go — a stream that is still up will not repeat itself — but
+        // on a widening wait, so an origin that is down is asked about once in
+        // a while rather than constantly.
+        resyncAgain = true;
+        resyncWait = Math.min(RETRY_MAX_MS, resyncWait ? resyncWait * 2 : RETRY_BASE_MS);
+      }
+      if (resyncAgain) armResync(resyncWait || RESYNC_MS);
+    });
+  }
+
+  /* Merge a plan that arrived while this page was already running.
+   *
+   * Emphatically not adopt(). That one is allowed to decide this browser's
+   * copy wins and seed an empty database from it, which is right on a first
+   * load and catastrophic here: somebody else removing the last row would make
+   * this browser put its entire planner back.
+   *
+   * It is the same three-way merge reconcile() does on a 409, applied to every
+   * row at once, against the shadow — the version both sides started from:
+   *
+   *   field changed here since the server confirmed it -> ours. It is an edit
+   *     somebody is in the middle of making, and it goes again on the next
+   *     pass. Nothing anybody has typed is ever overwritten, focused or not.
+   *   field unchanged here -> theirs, which is simply newer.
+   *
+   * Rows work the same way, and the shadow is what tells the two halves of
+   * each ambiguity apart:
+   *
+   *   here, not on the server -> in the shadow? somebody deleted it: drop it.
+   *                              not in the shadow? our own create, unsent:
+   *                              keep it, and let the next pass POST it.
+   *   on the server, not here -> in the shadow? our own delete, unsent: keep
+   *                              it deleted, and keep the shadow entry so the
+   *                              DELETE still goes, at the revision that now
+   *                              stands. not in the shadow? somebody added it.
+   */
+  function applyPlan(plan) {
+    var touched = {};
+
+    COLLECTIONS.forEach(function (c) {
+      var was = shadow[c.key];
+      var now = {};
+      var here = {};
+
+      (plan[c.key] || []).forEach(function (w) {
+        if (!w || !w.id) return;
+        here[w.id] = true;
+        var entry = { row: rowFromWire(c, w), revision: Number(w.revision) || 0 };
+        now[w.id] = entry;
+
+        var mine = findRow(state[c.key], w.id);
+        if (!mine) {
+          if (was[w.id]) return;                     // removed here, not yet sent
+          state[c.key].push(cloneRow(c, entry.row)); // somebody else's new row
+          touched[c.key] = c;
+          return;
+        }
+        var base = was[w.id] ? was[w.id].row : entry.row;
+        c.fields.forEach(function (f) {
+          var ours = f.canon(mine);
+          if (ours !== f.canon(base)) return;        // edited here: ours wins
+          if (ours === f.canon(entry.row)) return;   // nobody changed it
+          mine[f.name] = f.copy(entry.row[f.name]);
+          touched[c.key] = c;
+        });
+      });
+
+      state[c.key] = (state[c.key] || []).filter(function (r) {
+        if (!r || !r.id || here[r.id] || !was[r.id]) return true;
+        touched[c.key] = c;
+        return false;
+      });
+      shadow[c.key] = now;
+    });
+
+    var wire = plan.settings || {};
+    var entry = { row: rowFromWire(SETTINGS, wire), revision: Number(wire.revision) || 0 };
+    var base = shadow.settings.row;
+    SETTINGS.fields.forEach(function (f) {
+      var ours = f.canon(state);
+      if (ours !== f.canon(base) || ours === f.canon(entry.row)) return;
+      state[f.name] = f.copy(entry.row[f.name]);
+      touched.settings = SETTINGS;
+    });
+    shadow.settings = entry;
+
+    // Before the early return below: a merge can leave work to do even when
+    // nothing on screen moved — a delete of ours that the plan shows already
+    // gone settles here, and a pending one keeps its shadow entry and still has
+    // to go out.
+    Sync.push();
+
+    var keys = Object.keys(touched);
+    if (!keys.length) return;
+
+    // The figures belong to no caret, so they are always current. The editable
+    // containers go through scheduleRefresh, which holds a rebuild back while
+    // somebody is typing inside one — rebuilding a table under a cursor moves
+    // it, drops the selection and truncates a half-typed number, which is the
+    // one thing a remote change must never do to a local edit.
+    keys.forEach(function (k) { scheduleRefresh(touched[k]); });
+    renderBudgetTotals();
+    renderOverview();
   }
 
   /* ---------- Saving ----------
@@ -1694,7 +2021,7 @@
     host.innerHTML = '';
     empty.style.display = state.notes.length ? 'none' : 'block';
 
-    state.notes.forEach(function (note, idx) {
+    state.notes.forEach(function (note) {
       var row = document.createElement('div');
       row.className = 'flag';
 
@@ -1703,12 +2030,12 @@
       ta.value = note.text || '';
       ta.placeholder = t('w.ph');
       ta.addEventListener('input', function () {
-        state.notes[idx].text = ta.value;
+        note.text = ta.value;
         save();
       });
 
       var del = delButton(t('w.del'), function () {
-        state.notes.splice(idx, 1);
+        dropRow(state.notes, note);
         save();
         renderNotes();
       });
@@ -1800,7 +2127,7 @@
   function renderSponsors() {
     var grid = document.getElementById('sponsorGrid');
     grid.innerHTML = '';
-    state.sponsors.forEach(function (sp, idx) {
+    state.sponsors.forEach(function (sp) {
       var row = document.createElement('div');
       row.className = 'sponsor-row';
 
@@ -1810,7 +2137,7 @@
       code.placeholder = t('sp.code');
       code.value = sp.code || '';
       code.addEventListener('input', function () {
-        state.sponsors[idx].code = code.value;
+        sp.code = code.value;
         save();
         renderBudgetTable();
         renderSplit();
@@ -1822,7 +2149,7 @@
       name.placeholder = t('sp.who');
       name.value = sp.name || '';
       name.addEventListener('input', function () {
-        state.sponsors[idx].name = name.value;
+        sp.name = name.value;
         save();
         renderSplit();
       });
@@ -1832,8 +2159,8 @@
       amt.textContent = fmtCur(sponsorShare(sp.id));
 
       var del = delButton(t('sp.del'), function () {
-        var id = state.sponsors[idx].id;
-        state.sponsors.splice(idx, 1);
+        var id = sp.id;
+        dropRow(state.sponsors, sp);
         state.budgetItems.forEach(function (i) {
           i.sponsors = (i.sponsors || []).filter(function (x) { return x !== id; });
         });
@@ -2234,7 +2561,7 @@
     if (!state.budgetItems.length) {
       emptyRow(body, 9, t('b.empty'));
     }
-    state.budgetItems.forEach(function (item, idx) {
+    state.budgetItems.forEach(function (item) {
       var tr = document.createElement('tr');
 
       function textCell(key, cls) {
@@ -2244,7 +2571,7 @@
         inp.rows = 1;
         inp.value = item[key] || '';
         inp.addEventListener('input', function () {
-          state.budgetItems[idx][key] = inp.value;
+          item[key] = inp.value;
           save();
         });
         td.appendChild(inp);
@@ -2260,9 +2587,9 @@
         if (step) inp.step = step;
         inp.value = Number(item[key]) || 0;
         inp.addEventListener('input', function () {
-          state.budgetItems[idx][key] = Number(inp.value) || 0;
+          item[key] = Number(inp.value) || 0;
           save();
-          refreshRow(tr, state.budgetItems[idx]);
+          refreshRow(tr, item);
           renderBudgetTotals();
           renderOverview();
         });
@@ -2291,7 +2618,7 @@
       setByLabel(byBtn, item);
       byBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
-        openPicker(byBtn, state.budgetItems[idx]);
+        openPicker(byBtn, item);
       });
       tdBy.appendChild(byBtn);
 
@@ -2311,7 +2638,7 @@
       label(tdNote, 'c.remarks');
       label(tdDel, 'c.remove');
       tdDel.appendChild(delButton(t('b.del'), function () {
-        state.budgetItems.splice(idx, 1);
+        dropRow(state.budgetItems, item);
         save();
         renderBudgetTable();
         renderBudgetTotals();
@@ -2377,7 +2704,7 @@
     var body = document.getElementById('tasksBody');
     body.innerHTML = '';
     var shown = 0;
-    state.tasks.forEach(function (task, idx) {
+    state.tasks.forEach(function (task) {
       if (currentFilter !== 'all' && task.status !== currentFilter) return;
       shown++;
       var tr = document.createElement('tr');
@@ -2387,7 +2714,7 @@
       nameInput.type = 'text';
       nameInput.value = task.name;
       nameInput.addEventListener('input', function () {
-        state.tasks[idx].name = nameInput.value;
+        task.name = nameInput.value;
         save();
       });
       tdName.appendChild(nameInput);
@@ -2397,7 +2724,7 @@
       ownerInput.type = 'text';
       ownerInput.value = task.owner || '';
       ownerInput.addEventListener('input', function () {
-        state.tasks[idx].owner = ownerInput.value;
+        task.owner = ownerInput.value;
         save();
         renderOverview();
       });
@@ -2408,9 +2735,12 @@
       dueInput.type = 'date';
       dueInput.value = task.due || '';
       dueInput.addEventListener('input', function () {
-        state.tasks[idx].due = dueInput.value;
+        task.due = dueInput.value;
         save();
         renderOverview();
+        // The one gesture on this page that makes a deadline reminder obvious:
+        // somebody has just written a date they intend to be held to.
+        if (dueInput.value) offerPush();
       });
       tdDue.appendChild(dueInput);
 
@@ -2425,7 +2755,7 @@
         statusSelect.appendChild(opt);
       });
       statusSelect.addEventListener('change', function () {
-        state.tasks[idx].status = statusSelect.value;
+        task.status = statusSelect.value;
         save();
         renderOverview();
         if (currentFilter !== 'all') renderTasksTable();
@@ -2435,7 +2765,7 @@
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
       tdDel.appendChild(delButton(t('k.del'), function () {
-        state.tasks.splice(idx, 1);
+        dropRow(state.tasks, task);
         save();
         renderTasksTable();
         renderOverview();
@@ -2609,6 +2939,176 @@
     };
     reader.readAsText(f);
   });
+
+  /* ---------- The theme control ----------
+   * Built here rather than written into index.html because the markup and the
+   * stylesheet are somebody else's file this week. It borrows the classes the
+   * task filters already use, which is the same segmented control this page
+   * makes elsewhere and costs no new rules.
+   *
+   * Three states, not two. A switch with two positions cannot express "follow
+   * whatever this device is set to", which is the state most people want and
+   * the one the page starts in — and a person who has picked dark on a laptop
+   * that switches at sunset needs a way back to that.
+   */
+  (function themeControl() {
+    var tools = document.querySelector('.data-tools');
+    if (!tools) return;
+
+    var group = document.createElement('div');
+    group.className = 'filter-pills';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', t('th.title'));
+
+    var btns = THEMES.map(function (mode) {
+      var b = document.createElement('button');
+      b.className = 'pill';
+      b.type = 'button';
+      b.textContent = t('th.' + mode);
+      b.addEventListener('click', function () { choose(mode); });
+      group.appendChild(b);
+      return b;
+    });
+
+    function mark(mode) {
+      THEMES.forEach(function (m, i) {
+        var on = m === mode;
+        btns[i].classList.toggle('active', on);
+        btns[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    }
+
+    function choose(mode) {
+      try {
+        // Back to the system means back to no stored preference at all, so the
+        // key exists exactly while somebody is overriding their device.
+        if (mode === 'system') localStorage.removeItem(THEME_KEY);
+        else localStorage.setItem(THEME_KEY, mode);
+      } catch (e) { /* storage unavailable; the choice still applies here */ }
+      paintTheme(mode);
+      mark(mode);
+    }
+
+    mark(readTheme());
+    // Before the status line, which is the last thing in the row and the one
+    // that grows a sentence long.
+    tools.insertBefore(group, document.getElementById('dataMsg'));
+  })();
+
+  /* ---------- Deadline notifications ----------
+   * Three conditions, all of them necessary:
+   *
+   *   - The server published a VAPID public key. Its *absence* is the signal:
+   *     the field is omitted from the config rather than sent empty, because a
+   *     browser cannot subscribe without it and offering a button that cannot
+   *     work spends a permission prompt on nothing.
+   *   - There is an API here at all. The subscription endpoints are mounted
+   *     with the accounts surface, so a deployment with a key and no database
+   *     has the key and no route behind it.
+   *   - The browser has the Push API, which on iOS means the site has been
+   *     added to the Home Screen first. That is Apple's rule, not something to
+   *     work around; on Android, which is most of this audience, it is ordinary.
+   */
+  var VAPID = String(CONFIG.vapidPublicKey || '');
+
+  function pushable() {
+    return !!(apiMode && VAPID && navigator.serviceWorker &&
+      window.PushManager && window.Notification);
+  }
+
+  // Unpadded base64url to the bytes applicationServerKey wants. atob reads
+  // neither the URL alphabet nor a missing pad, so both go back on first.
+  function vapidKey(k) {
+    var b = (k + '==='.slice(0, (4 - k.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+    var raw = atob(b);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  // POSTed verbatim: the endpoint takes the PushSubscription as the Push API
+  // hands it over, and transcribing it by hand is how a p256dh ends up in the
+  // auth field. JSON.stringify calls the object's own toJSON, which is the
+  // shape the server parses.
+  function pushSave(sub) { return api('POST', '/push/subscriptions', sub); }
+
+  /* Re-post whatever this device is already subscribed to, on every load.
+   *
+   * It costs one request and the endpoint is idempotent on the endpoint URL,
+   * so it cannot pile up rows — and it is the only thing that puts a device
+   * back in the table after the server's subscriptions are restored from a
+   * backup, or after its key changed and the browser made a new subscription.
+   * Silent: no permission is asked for and nothing is said if it fails.
+   */
+  function pushRefresh() {
+    if (!pushable() || Notification.permission !== 'granted') return;
+    navigator.serviceWorker.ready
+      .then(function (reg) { return reg.pushManager.getSubscription(); })
+      .then(function (sub) { if (sub) pushSave(sub); })
+      .catch(function () { /* nothing subscribed here */ });
+  }
+
+  var pushAsked = false;
+
+  /* The offer, and the one permission prompt this page ever spends.
+   *
+   * Never on load. A denied notification permission in Chrome is sticky — the
+   * person has to go into the site settings to undo it — so there is exactly
+   * one attempt per person, and it is worth spending at the moment the value
+   * is obvious rather than the moment the page appears. Notification.permission
+   * is also the memory of whether the question has been asked: it is already
+   * persistent, already per-device, and not asking the browser to remember it
+   * twice keeps this page's storage to the two keys it documents.
+   */
+  function offerPush() {
+    if (pushAsked || editingLocked || !pushable()) return;
+    if (Notification.permission !== 'default') return;
+    var anchor = document.getElementById('addTaskRow');
+    if (!anchor || !anchor.parentNode) return;
+    pushAsked = true;
+
+    var note = document.createElement('p');
+    note.className = 'empty-note';
+    note.setAttribute('role', 'status');
+    // One plain sentence saying what will arrive, before anything is asked.
+    note.appendChild(document.createTextNode(t('n.offer') + ' '));
+
+    function button(label, fn) {
+      var b = document.createElement('button');
+      b.className = 'ghost-btn';
+      b.type = 'button';
+      b.textContent = label;
+      b.style.marginLeft = '8px';
+      b.addEventListener('click', fn);
+      note.appendChild(b);
+      return b;
+    }
+
+    button(t('n.on'), function () {
+      note.remove();
+      // Inside the click, so the browser still counts it as a gesture.
+      var asked;
+      try { asked = Notification.requestPermission(); } catch (e) { asked = null; }
+      // Old Safari answers through a callback and returns nothing.
+      if (!asked || typeof asked.then !== 'function') return;
+      asked.then(function (verdict) {
+        if (verdict !== 'granted') { flash(t('n.no')); return; }
+        return navigator.serviceWorker.ready.then(function (reg) {
+          return reg.pushManager.getSubscription().then(function (existing) {
+            return existing || reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: vapidKey(VAPID)
+            });
+          });
+        }).then(pushSave).then(function (res) {
+          flash(t(res.status === 204 ? 'n.done' : 'n.no'));
+        });
+      }).catch(function () { flash(t('n.no')); });
+    });
+    button(t('n.later'), function () { note.remove(); });
+
+    anchor.parentNode.insertBefore(note, anchor);
+  }
 
   // ---------- Init ----------
   applyStrings();
