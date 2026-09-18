@@ -197,7 +197,7 @@ func TestFontIsNotRecompressed(t *testing.T) {
 	body, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
 
-	fontURL := regexp.MustCompile(`/assets/fraunces-display\.[a-f0-9]+\.woff2`).FindString(string(body))
+	fontURL := regexp.MustCompile(`/assets/bricolage-display\.[a-f0-9]+\.woff2`).FindString(string(body))
 	if fontURL == "" {
 		t.Fatal("no font URL in the shell")
 	}
@@ -227,7 +227,7 @@ func TestStylesheetFontReferenceIsHashed(t *testing.T) {
 	if ref == nil {
 		t.Fatal("no url() in the stylesheet")
 	}
-	if !regexp.MustCompile(`^fraunces-display\.[a-f0-9]+\.woff2$`).MatchString(ref[1]) {
+	if !regexp.MustCompile(`^bricolage-display\.[a-f0-9]+\.woff2$`).MatchString(ref[1]) {
 		t.Errorf("font reference %q is not content-addressed", ref[1])
 	}
 	if r := get(t, h, "/assets/"+ref[1], nil); r.StatusCode != http.StatusOK {

@@ -146,7 +146,7 @@ func BuildAssets(srcFS fs.FS) (*Assets, error) {
 	}
 
 	// 1. Leaf assets that nothing else references by name.
-	leaves := []string{"fonts/fraunces-display.woff2", "favicon.svg"}
+	leaves := []string{"fonts/bricolage-display.woff2", "favicon.svg"}
 	for _, name := range leaves {
 		body, err := fs.ReadFile(srcFS, name)
 		if err != nil {
@@ -163,8 +163,8 @@ func BuildAssets(srcFS fs.FS) (*Assets, error) {
 		return nil, fmt.Errorf("read styles.css: %w", err)
 	}
 	css = bytes.ReplaceAll(css,
-		[]byte("fraunces-display.woff2"),
-		[]byte(path.Base(a.URL("fraunces-display.woff2"))),
+		[]byte("bricolage-display.woff2"),
+		[]byte(path.Base(a.URL("bricolage-display.woff2"))),
 	)
 	a.buildAsset("styles.css", css)
 

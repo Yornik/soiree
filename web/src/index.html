@@ -9,7 +9,7 @@
 <meta name="color-scheme" content="light dark">
 <title>{{ .EventName }}</title>
 <link rel="icon" href="{{ .Asset "favicon.svg" }}" type="image/svg+xml">
-<link rel="preload" href="{{ .Asset "fraunces-display.woff2" }}" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{{ .Asset "bricolage-display.woff2" }}" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{{ .Asset "styles.css" }}">
 <link rel="manifest" href="{{ .Asset "manifest.webmanifest" }}">
 <!--
@@ -87,11 +87,28 @@
       <h1>{{ .EventName }}</h1>
       <p class="tagline">{{ .Tagline }}</p>
     </div>
-    <p class="countdown">
-      <span class="countdown-num" id="daysNum">–</span>
-      <span class="countdown-unit" id="daysLabel">days to go</span>
-      <span class="countdown-date" id="statDaysLabel">–</span>
-    </p>
+    <!-- The run-up: from today to the day, with what is due pinned along it.
+         Everything in planning an evening is measured against one date, so
+         that distance is the first thing on the page rather than a number in
+         a corner. The scale is a picture of what "Up next" already says in
+         words, so it is hidden from assistive technology; the count and the
+         date beside it are not. -->
+    <div class="runup" id="runup">
+      <p class="countdown">
+        <span class="countdown-num" id="daysNum">–</span>
+        <span class="countdown-unit" id="daysLabel">days to go</span>
+      </p>
+      <div class="runup-scale" id="runupScale" aria-hidden="true">
+        <span class="runup-line"></span>
+        <span class="runup-marks" id="runupMarks"></span>
+        <span class="runup-today"></span>
+        <span class="runup-day"></span>
+      </div>
+      <p class="runup-ends">
+        <span class="runup-from" id="runupFrom" data-i18n="ru.today">today</span>
+        <span class="countdown-date" id="statDaysLabel">–</span>
+      </p>
+    </div>
   </header>
 
   <!-- Only ever shown once the event date has passed. With no date configured
@@ -144,31 +161,6 @@
     </section>
 
     <div class="when-data">
-      <!-- The reckoning: four figures on one baseline, right-aligned so they
-           read down the page as a column of money rather than four cards. -->
-      <section class="reckoning" aria-label="Money at a glance" data-i18n-aria="aria.money">
-        <div class="fig">
-          <span class="fig-label" data-i18n="f.committed">Committed</span>
-          <span class="fig-num committed" id="mCommitted">–</span>
-          <span class="fig-sub" id="mCommittedEur">–</span>
-        </div>
-        <div class="fig">
-          <span class="fig-label" data-i18n="f.buffer">With buffer</span>
-          <span class="fig-num committed" id="mForecast">–</span>
-          <span class="fig-sub" id="mForecastSub">–</span>
-        </div>
-        <div class="fig">
-          <span class="fig-label" data-i18n="f.paid">Paid</span>
-          <span class="fig-num paid" id="mPaid">–</span>
-          <span class="fig-sub" id="mPaidSub">–</span>
-        </div>
-        <div class="fig">
-          <span class="fig-label" data-i18n="f.outstanding">Outstanding</span>
-          <span class="fig-num owing" id="mOutstanding">–</span>
-          <span class="fig-sub" id="mOutstandingEur">–</span>
-        </div>
-      </section>
-
       <!-- The one section that belongs only to a finished event: not what is
            left to do, but what each person ended up covering. -->
       <section class="block settlement">
@@ -177,8 +169,40 @@
         <p class="empty-note" id="settleEmpty" data-i18n="ar.nothing">Nothing was recorded.</p>
       </section>
 
-      <section class="block">
-        <h2 data-i18n="pr.title">Progress</h2>
+      <div class="overview-cols">
+      <!-- MONEY. One bar says what four figures in a row could only list:
+           paid and still owed are the two halves of what is committed, and
+           the ceiling is a mark that total either has or has not reached. The
+           figures underneath are the same numbers for anybody who wants them
+           exactly, and they are what a screen reader is given. -->
+      <section class="block money">
+        <h2 data-i18n="ov.money">Money</h2>
+        <div class="moneybar" aria-hidden="true">
+          <span class="moneybar-paid" id="moneyBarPaid"></span><span class="moneybar-owed" id="moneyBarOwed"></span>
+          <span class="moneybar-ceiling" id="moneyBarCeiling" hidden></span>
+        </div>
+        <section class="reckoning ledger" aria-label="Money at a glance" data-i18n-aria="aria.money">
+          <div class="fig">
+            <span class="fig-label" data-i18n="f.paid">Paid</span>
+            <span class="fig-num paid" id="mPaid">–</span>
+            <span class="fig-sub" id="mPaidSub">–</span>
+          </div>
+          <div class="fig">
+            <span class="fig-label" data-i18n="f.outstanding">Outstanding</span>
+            <span class="fig-num owing" id="mOutstanding">–</span>
+            <span class="fig-sub" id="mOutstandingEur">–</span>
+          </div>
+          <div class="fig">
+            <span class="fig-label" data-i18n="f.committed">Committed</span>
+            <span class="fig-num committed" id="mCommitted">–</span>
+            <span class="fig-sub" id="mCommittedEur">–</span>
+          </div>
+          <div class="fig">
+            <span class="fig-label" data-i18n="f.buffer">With buffer</span>
+            <span class="fig-num committed" id="mForecast">–</span>
+            <span class="fig-sub" id="mForecastSub">–</span>
+          </div>
+        </section>
         <div class="gauge">
           <span class="gauge-label" data-i18n="pr.ceiling">Committed against ceiling</span>
           <span class="gauge-fig" id="statBudget">–</span>
@@ -191,6 +215,11 @@
           <span class="gauge-track"><span class="gauge-fill paid" id="paidBarFill"></span></span>
           <span class="gauge-sub" id="paidBarSub">–</span>
         </div>
+      </section>
+
+      <div class="todo">
+      <section class="block">
+        <h2 data-i18n="ov.todo">To do</h2>
         <div class="gauge">
           <span class="gauge-label" data-i18n="pr.tasks">Tasks done</span>
           <span class="gauge-fig" id="taskBarPct">0%</span>
@@ -200,17 +229,19 @@
       </section>
 
       <section class="block">
+        <h2 data-i18n="un.title">Up next</h2>
+        <ul class="upnext-list" id="upNextList"></ul>
+        <p class="empty-note" id="upNextEmpty" data-i18n="un.empty">No open tasks — add some in the Tasks tab.</p>
+      </section>
+
+      <section class="block">
         <h2><span data-i18n="w.title">Watch list</span><span class="h2-note" data-i18n="w.note">things to keep an eye on</span></h2>
         <div id="watchList"></div>
         <p class="empty-note" id="watchEmpty" data-i18n="w.empty">Nothing flagged yet.</p>
         <button class="add-row-btn" type="button" id="addWatch" data-i18n="w.add">Add note</button>
       </section>
-
-      <section class="block">
-        <h2 data-i18n="un.title">Up next</h2>
-        <ul class="upnext-list" id="upNextList"></ul>
-        <p class="empty-note" id="upNextEmpty" data-i18n="un.empty">No open tasks — add some in the Tasks tab.</p>
-      </section>
+      </div>
+      </div>
     </div>
   </div>
 
