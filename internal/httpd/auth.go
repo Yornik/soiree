@@ -142,6 +142,10 @@ type Auth struct {
 	resetIP   *limiter
 	redeemIP  *limiter
 
+	// passkeys is the WebAuthn surface, nil unless WithPasskeys turned it on.
+	// Nil is what leaves its routes unmounted; see passkeys.go.
+	passkeys *passkeys
+
 	// params is the hashing policy. A field rather than a package constant so
 	// the HTTP tests can turn the cost down; production never sets it and gets
 	// auth.DefaultParams.
@@ -199,6 +203,10 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	// itself, after the checks that cost nothing, so a fumbled password does
 	// not spend the allowance the redemption still needs.
 	mux.Handle("POST /api/v1/auth/set-password", http.HandlerFunc(a.handleSetPassword))
+
+	// Passkeys, when this deployment has them. A no-op otherwise: the paths are
+	// then not routes at all. See passkeys.go.
+	a.registerPasskeyRoutes(mux)
 
 	// Who am I. Any live session; the browser uses it to decide what to draw.
 	mux.Handle("GET /api/v1/auth/session", a.RequireAuth(http.HandlerFunc(a.handleSession)))
@@ -340,11 +348,34 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !a.startSession(w, r, user, "password") {
+		return
+	}
+	writeJSON(w, http.StatusOK, toDTO(user))
+}
+
+// startSession is the one place a session comes into existence.
+//
+// Every way of proving who you are ends here — a password today, a passkey in
+// passkeys.go — and that is the point of it being a function rather than a
+// paragraph inside handleLogin. A second way to mint a session is a second
+// place for the cookie's attributes, the idle window and the absolute lifetime
+// cap to drift out of agreement, and the drift would show up as a security
+// property that holds on one path and not the other.
+//
+// It reports whether it succeeded, having already answered the client if not.
+// The caller writes the body: what a successful login returns is the caller's
+// business, and this has exactly one job.
+//
+// method names how the person proved it, for the log. Which of the two ways in
+// was used is the sort of thing that matters only in retrospect, which is
+// precisely when it is too late to start recording it.
+func (a *Auth) startSession(w http.ResponseWriter, r *http.Request, user store.User, method string) bool {
 	token, err := auth.NewToken()
 	if err != nil {
 		a.log.Error("could not mint a session token", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "")
-		return
+		return false
 	}
 	if _, err := a.store.CreateSession(r.Context(), store.Session{
 		UserID:    user.ID,
@@ -353,12 +384,12 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		a.log.Error("could not create session", "user", user.ID, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "")
-		return
+		return false
 	}
 
-	a.log.Info("login", "user", user.ID, "role", user.Role)
+	a.log.Info("login", "user", user.ID, "role", user.Role, "method", method)
 	setSessionCookie(w, token, a.now(), sessionIdleTimeout)
-	writeJSON(w, http.StatusOK, toDTO(user))
+	return true
 }
 
 // handleLogout destroys the session this request arrived with.

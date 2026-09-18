@@ -88,12 +88,12 @@ func main() {
 		log.Info("no DATABASE_URL set, serving the frontend only and leaving the API unmounted")
 	}
 
-	srv, err := httpd.New(cfg, web.FS(), opts...)
-	if err != nil {
-		log.Error("failed to build server", "err", err)
-		os.Exit(1)
-	}
-
+	// The accounts surface is built before the server, because the server
+	// renders the client configuration into the page at construction and one of
+	// the things that configuration says is whether passkeys are on offer. The
+	// browser decides from it whether to show a passkey button, so it has to
+	// agree with whether the routes are actually mounted — and whether they are
+	// is only settled here.
 	if st != nil {
 		var accountMail httpd.Mailer
 		if cfg.SMTP.Enabled() {
@@ -110,8 +110,29 @@ func main() {
 			BaseURL:           cfg.BaseURL,
 			TrustProxyHeaders: cfg.TrustProxyHeaders,
 		})
+		if err := accounts.WithPasskeys(cfg); err != nil {
+			// Logged and carried on with, never fatal. Passkeys are additive:
+			// without them every account is still reachable by its password and
+			// by an admin's re-invite, so refusing to start would turn a
+			// convenience this deployment cannot offer into an outage.
+			log.Error("passkeys unavailable, leaving them off", "err", err)
+			cfg.PasskeysEnabled = false
+		}
+		log.Info("accounts enabled", "mail", cfg.SMTP.Enabled(),
+			"passkeys", cfg.PasskeysEnabled, "baseURL", cfg.BaseURL)
+	} else {
+		// No database, so no accounts and no passkeys, whatever the environment
+		// asked for. This is the condition package config cannot see.
+		cfg.PasskeysEnabled = false
+	}
+
+	srv, err := httpd.New(cfg, web.FS(), opts...)
+	if err != nil {
+		log.Error("failed to build server", "err", err)
+		os.Exit(1)
+	}
+	if accounts != nil {
 		srv = srv.WithAuth(accounts)
-		log.Info("accounts enabled", "mail", cfg.SMTP.Enabled(), "baseURL", cfg.BaseURL)
 	}
 
 	hs := &http.Server{

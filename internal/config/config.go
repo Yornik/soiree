@@ -7,6 +7,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/mail"
 	"net/url"
 	"os"
@@ -79,6 +80,35 @@ type Config struct {
 	// deployment has none. It breaks the circularity of "every account is
 	// created by an admin" on an empty database and does nothing thereafter.
 	BootstrapAdmin string
+
+	// PasskeysEnabled says whether this deployment offers WebAuthn passkeys
+	// alongside the password. Derived rather than simply read: a passkey
+	// ceremony is bound to a Relying Party ID, and the only trustworthy source
+	// for that is BaseURL, so with no BaseURL there is nothing to bind to and
+	// the answer is no whatever the environment says. See loadPasskeys.
+	//
+	// The browser is told this in ClientConfig, and decides from it whether to
+	// offer the passkey button — so it has to agree with whether the routes are
+	// actually mounted. cmd/soiree clears it when there is no database, which is
+	// the one condition this package cannot see.
+	PasskeysEnabled bool
+
+	// PasskeyRPID is the WebAuthn Relying Party ID: the domain a credential is
+	// scoped to, and the value hashed into every authenticator response.
+	//
+	// It comes from BaseURL and never from a request's Host header, which is
+	// attacker-supplied — a ceremony bound to a Host header is a ceremony an
+	// attacker chose the scope of. It is also the field with the quietest
+	// failure mode in the whole protocol: a credential registered under the
+	// wrong RP ID simply never matches again, and the browser reports nothing
+	// more useful than "no credentials available".
+	PasskeyRPID string
+
+	// PasskeyOrigin is the one origin a ceremony's collected client data may
+	// declare. Exactly the origin of BaseURL, with no siblings added: widening
+	// this is how a host somebody else controls becomes a way to mint
+	// assertions this server accepts.
+	PasskeyOrigin string
 
 	// BootstrapPassword, when set, gives that first admin a password so they
 	// can log in straight away.
@@ -182,6 +212,10 @@ type ClientConfig struct {
 	// Omitted entirely when push is off, so that "is there a key here?" is the
 	// single question the client asks before offering to turn notifications on.
 	VAPIDPublicKey string `json:"vapidPublicKey,omitempty"`
+	// Passkeys tells the browser whether to offer "sign in with a passkey".
+	// A capability flag and nothing more: it names no domain, carries no key,
+	// and reveals nothing a request to the login page would not.
+	Passkeys bool `json:"passkeys"`
 }
 
 // Client returns the browser-facing view of the configuration.
@@ -197,6 +231,7 @@ func (c Config) Client() ClientConfig {
 		Ceiling:           c.Ceiling,
 		DemoData:          c.DemoData,
 		VAPIDPublicKey:    c.publishablePushKey(),
+		Passkeys:          c.PasskeysEnabled,
 	}
 }
 
@@ -383,6 +418,8 @@ func (c *Config) loadAccounts() error {
 		c.BaseURL = strings.TrimRight(u.String(), "/")
 	}
 
+	c.loadPasskeys()
+
 	c.SMTP = SMTPConfig{
 		Host:     strings.TrimSpace(os.Getenv("SOIREE_SMTP_HOST")),
 		Port:     DefaultSMTPPort,
@@ -428,6 +465,76 @@ func (c *Config) loadAccounts() error {
 	}
 
 	return nil
+}
+
+// loadPasskeys decides whether this deployment offers passkeys, and derives the
+// Relying Party identity a ceremony is bound to.
+//
+// It returns nothing, on purpose. Passkeys are additive — an account reached by
+// a passkey can always be reached by its password, and an admin can always
+// re-invite it — so a deployment that cannot offer them is not broken, it is a
+// deployment with one way in instead of two. Refusing to start over that would
+// turn a missing convenience into an outage, and the CI image smoke test boots
+// this binary with neither a database nor a BaseURL.
+//
+// The default is on whenever a BaseURL is set, because unlike SMTP this needs
+// no relay, no key and no account anywhere: everything it requires is already
+// in the configuration. It is off when BaseURL is unset, because the RP ID
+// cannot be derived from anything else. A request's Host header is not an
+// alternative — see Config.PasskeyRPID.
+func (c *Config) loadPasskeys() {
+	// Off unless there is an origin to bind to, and then off again if the
+	// operator says so. A value of true cannot turn it on without a BaseURL:
+	// there would be nothing to scope the credential to.
+	c.PasskeysEnabled = c.BaseURL != ""
+	if v := strings.TrimSpace(os.Getenv("SOIREE_PASSKEYS_ENABLED")); v != "" {
+		// A value this cannot parse reads as off rather than as an error. Off is
+		// the state in which nothing is lost — password login is untouched — and
+		// the alternative is a process that refuses to start over a feature it
+		// could simply have declined to offer.
+		b, err := strconv.ParseBool(v)
+		c.PasskeysEnabled = c.PasskeysEnabled && err == nil && b
+	}
+	if !c.PasskeysEnabled {
+		return
+	}
+
+	// BaseURL parsed cleanly above, so this cannot fail; the check is here so
+	// that a later edit to the parsing above cannot turn it into a panic.
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || u.Host == "" {
+		c.PasskeysEnabled = false
+		return
+	}
+
+	// Hostname() drops the port, which an RP ID must not carry: an RP ID is a
+	// domain, and localhost:8080 is not one.
+	host := u.Hostname()
+	if host == "" || net.ParseIP(host) != nil {
+		// A bare IP cannot be an RP ID — a credential is scoped to a domain and
+		// an address is not one — so a deployment reached by address gets
+		// password login and nothing else.
+		c.PasskeysEnabled = false
+		return
+	}
+
+	// The registrable domain, as far as it can be known without a public suffix
+	// list. Only a leading `www.` is stripped, which is the case that actually
+	// occurs here: the deployment serves an apex with `www` redirecting to it,
+	// and an RP ID of the apex is a registrable domain suffix of both, so one
+	// credential works at either. Nothing further is stripped, because guessing
+	// at the suffix boundary is how a deployment at soiree.example.test ends up
+	// registering credentials scoped to example.test — a wider scope than the
+	// operator asked for, and a wrong one wherever the guess misses.
+	rpID := strings.TrimPrefix(host, "www.")
+	if rpID == "" {
+		c.PasskeysEnabled = false
+		return
+	}
+
+	c.PasskeyRPID = rpID
+	// Scheme and host only. BaseURL may carry a path; an origin never does.
+	c.PasskeyOrigin = u.Scheme + "://" + u.Host
 }
 
 func env(key, def string) string {
