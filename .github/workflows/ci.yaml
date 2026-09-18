@@ -50,10 +50,11 @@ jobs:
       # internal/httpd reached it. Nothing hung: under the race detector that
       # package took 522 s, then 554 s, and the activity tests took it past
       # 600, where Go kills the binary and reports whichever test happened to
-      # be running - one second into it - as if it were the culprit. Every
-      # test there gets a database of its own and runs every migration into
-      # it, which is the real cost and the thing to fix; until it is, the
-      # limit has to be somewhere the suite is not.
+      # be running - one second into it - as if it were the culprit. The
+      # limit has to be somewhere the suite is not. Why the package is that
+      # slow under -race is a separate question, and not the first guess:
+      # a fresh database and its migrations cost 0.23 s a test, measured,
+      # which is a twentieth of the total.
       - run: go test -race -cover -timeout 25m ./...
 
   # The Go tests prove the right bytes are served. They cannot prove the page
