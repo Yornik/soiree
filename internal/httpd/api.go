@@ -76,12 +76,18 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /plan", s.servePlan)
 
-	register(api, budgetItemEntity(s.store))
-	register(api, sponsorEntity(s.store))
-	register(api, taskEntity(s.store))
-	register(api, noteEntity(s.store))
-	register(api, phaseEntity(s.store))
-	register(api, programmeEntity(s.store))
+	// The currency is read once here rather than per request: it comes from the
+	// environment and cannot change while the process runs. It is what turns
+	// the minor units the store holds into the major units this API speaks —
+	// see the note at the top of api_json.go.
+	currency := s.cfg.Currency
+
+	register(api, budgetItemEntity(s.store, currency))
+	register(api, sponsorEntity(s.store, currency))
+	register(api, taskEntity(s.store, currency))
+	register(api, noteEntity(s.store, currency))
+	register(api, phaseEntity(s.store, currency))
+	register(api, programmeEntity(s.store, currency))
 
 	mux.Handle(apiPrefix, noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), api)))
 }
@@ -118,7 +124,7 @@ func (s *Server) servePlan(w http.ResponseWriter, r *http.Request) {
 		writeInternal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, encodePlan(plan))
+	writeJSON(w, http.StatusOK, encodePlan(s.cfg.Currency, plan))
 }
 
 func handleCreate[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
@@ -260,8 +266,15 @@ func revisionFromBody(body []byte) (int64, bool) {
 
 // bodyFor is the contract every request DTO satisfies: merge yourself onto a
 // row and say what is wrong if anything is.
+//
+// The currency is an argument rather than something the DTO knows because money
+// arrives as major units and is stored as minor, and the exponent that converts
+// between them comes from the ISO 4217 code. An UnmarshalJSON cannot reach it —
+// it sees only its own bytes — so the conversion waits until here. The four
+// bodies with no money column take it and ignore it, which is cheaper than two
+// shapes of decoder.
 type bodyFor[T any] interface {
-	apply(T) (T, error)
+	apply(currency string, row T) (T, error)
 }
 
 // decodeBody parses a request body onto a base row.
@@ -271,7 +284,7 @@ type bodyFor[T any] interface {
 // as it is to be something harmless, and nobody notices a money column that did
 // not change. The fields a client legitimately echoes back are listed in
 // `echoed` so that strictness does not make the obvious client illegal.
-func decodeBody[B bodyFor[T], T any](body []byte, base T) (T, error) {
+func decodeBody[B bodyFor[T], T any](body []byte, currency string, base T) (T, error) {
 	var zero T
 	var b B
 
@@ -288,7 +301,7 @@ func decodeBody[B bodyFor[T], T any](body []byte, base T) (T, error) {
 	if dec.More() {
 		return zero, errors.New("the request body must be a single JSON object")
 	}
-	return b.apply(base)
+	return b.apply(currency, base)
 }
 
 // writeStoreError maps a store error onto a status.

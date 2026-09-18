@@ -161,7 +161,9 @@ type ChangeEntry struct {
 	Entity   string       `db:"entity"`
 	EntityID *uuid.UUID   `db:"entity_id"` // nil for the settings singleton
 	Action   ChangeAction `db:"action"`
-	// The row's revision after the change; nil for phases, which carry none.
+	// The row's revision after the change. Non-null for every entity now that
+	// migration 0009 has given phases a revision; nil only on phase entries
+	// written before it, which the column keeps rather than rewrites.
 	Revision *int64                 `db:"revision"`
 	Changes  map[string]FieldChange `db:"changes"`
 	// Nil where there was no account, or where the account has since been
@@ -435,11 +437,13 @@ func insertChange(ctx context.Context, tx pgx.Tx, entity string, id uuid.UUID, a
 // lockRow reads the row a write is about to change, as it stands, and holds it
 // until the transaction ends.
 //
-// The read is what gives the log its "from" value. The lock is what makes that
-// value honest for `phases`, the one shared table with no revision to prove
-// nobody slipped in between the read and the write — everywhere else the
-// revision check already proves it, since revisions only ever go up and a write
-// that matched one is a write nothing intervened in.
+// The read is what gives the log its "from" value. The lock is what makes
+// concurrent writers queue at the read rather than at the write. Every shared
+// table carries a revision since migration 0009, `phases` included, so the
+// revision check would refuse the loser either way — revisions only ever go up,
+// and a write that matched one is a write nothing intervened in. Queueing here
+// means that refusal costs one blocked statement rather than a transaction's
+// worth of work thrown away.
 func lockRow[T any](ctx context.Context, tx pgx.Tx, entity, columns string, id uuid.UUID) (T, error) {
 	return queryOne[T](ctx, tx, entity,
 		`SELECT `+columns+` FROM `+entity+` WHERE id = $1 FOR UPDATE`, id)
@@ -464,8 +468,9 @@ func idOf[T any](row T) uuid.UUID {
 	return uuid.Nil
 }
 
-// revisionOf returns nil for an entity that carries no revision, which is
-// `phases` and only `phases`.
+// revisionOf returns nil for an entity that carries no revision. Every shared
+// entity carries one since migration 0009 closed the last gap, so this stays
+// total for the sake of a type that does not rather than for one that exists.
 func revisionOf[T any](row T) *int64 {
 	v := reflect.ValueOf(row)
 	t := v.Type()

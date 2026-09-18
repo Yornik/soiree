@@ -30,7 +30,17 @@ func TestMain(m *testing.M) { pgtest.Main(m, startPostgres) }
 
 // newAPIServer builds a server with the API on, backed by a database of its
 // own. It skips under -short, where there is no Docker.
+//
+// EUR, because the money tests have to be run against a currency that has
+// cents. See TestMoneyCrossesTheBoundaryInMajorUnits.
 func newAPIServer(t *testing.T) (http.Handler, *pgxpool.Pool) {
+	t.Helper()
+	return newAPIServerIn(t, "EUR")
+}
+
+// newAPIServerIn is newAPIServer against a named currency, which is the one
+// thing that decides how the API renders and reads every money field.
+func newAPIServerIn(t *testing.T, currency string) (http.Handler, *pgxpool.Pool) {
 	t.Helper()
 
 	pool := pgtest.Pool(t)
@@ -38,7 +48,7 @@ func newAPIServer(t *testing.T) (http.Handler, *pgxpool.Pool) {
 		t.Fatalf("migrate: %v", err)
 	}
 	s, err := New(
-		config.Config{EventName: "Ada's Retirement", Currency: "EUR", Locale: "en-US"},
+		config.Config{EventName: "Ada's Retirement", Currency: currency, Locale: "en-US"},
 		web.FS(),
 		WithStore(store.New(pool)),
 	)
@@ -163,9 +173,9 @@ func TestPlanIsOneRoundTrip(t *testing.T) {
 		"phaseId": "`+str(t, phase, "id")+`",
 		"item": "Venue deposit",
 		"vendor": "Example Hall",
-		"unit": 25050,
+		"unit": "250.50",
 		"qty": 2.5,
-		"paid": 5000,
+		"paid": "50.00",
 		"lockBy": "2030-01-31",
 		"note": "Balance due one month before",
 		"position": 0,
@@ -176,8 +186,8 @@ func TestPlanIsOneRoundTrip(t *testing.T) {
 	created(t, h, "notes", `{"text":"Venue balance is due a month out.","position":0}`)
 
 	// The created row comes back whole, in the shapes the browser is promised.
-	if got := num(t, item, "unit"); got != 25050 {
-		t.Errorf("unit = %v, want 25050 minor units straight through", got)
+	if got := str(t, item, "unit"); got != "250.50" {
+		t.Errorf("unit = %q, want the major units the client sent", got)
 	}
 	if got := str(t, item, "lockBy"); got != "2030-01-31" {
 		t.Errorf("lockBy = %q, want a plain date — a timestamp is a different day east of UTC", got)
@@ -200,8 +210,9 @@ func TestPlanIsOneRoundTrip(t *testing.T) {
 
 	var plan struct {
 		Settings struct {
-			Ceiling  int64 `json:"ceiling"`
-			Revision int64 `json:"revision"`
+			// A string, like every other money field on this boundary.
+			Ceiling  string `json:"ceiling"`
+			Revision int64  `json:"revision"`
 		} `json:"settings"`
 		Phases      []map[string]any `json:"phases"`
 		Sponsors    []map[string]any `json:"sponsors"`
@@ -216,6 +227,9 @@ func TestPlanIsOneRoundTrip(t *testing.T) {
 
 	if plan.Settings.Revision != 1 {
 		t.Errorf("settings.revision = %d, want the seeded 1", plan.Settings.Revision)
+	}
+	if plan.Settings.Ceiling != "0.00" {
+		t.Errorf("settings.ceiling = %q, want the seeded zero in EUR major units", plan.Settings.Ceiling)
 	}
 	for name, list := range map[string][]map[string]any{
 		"phases": plan.Phases, "sponsors": plan.Sponsors, "budgetItems": plan.BudgetItems,
@@ -256,20 +270,20 @@ func TestPatchLeavesOmittedFieldsAlone(t *testing.T) {
 	grace := created(t, h, "sponsors", `{"code":"Ivy","name":"Grace","position":1}`)
 	item := created(t, h, "budget-items", `{
 		"item": "Venue deposit", "vendor": "Example Hall",
-		"unit": 25000, "qty": 2, "paid": 5000,
+		"unit": "250.00", "qty": 2, "paid": "50.00",
 		"lockBy": "2030-01-31", "note": "Balance due one month before",
 		"sponsors": ["`+str(t, ada, "id")+`", "`+str(t, grace, "id")+`"]
 	}`)
 
 	res := call(t, h, http.MethodPatch, "/api/v1/budget-items/"+str(t, item, "id"),
-		`{"revision": 1, "unit": 30000}`)
+		`{"revision": 1, "unit": "300.00"}`)
 	if res.status != http.StatusOK {
 		t.Fatalf("PATCH -> %d\n%s", res.status, res.body)
 	}
 	patched := decode(t, res)
 
-	if got := num(t, patched, "unit"); got != 30000 {
-		t.Errorf("unit = %v, want the patched 30000", got)
+	if got := str(t, patched, "unit"); got != "300.00" {
+		t.Errorf("unit = %q, want the patched 300.00", got)
 	}
 	if got := num(t, patched, "revision"); got != 2 {
 		t.Errorf("revision = %v, want 2 after a write", got)
@@ -283,8 +297,8 @@ func TestPatchLeavesOmittedFieldsAlone(t *testing.T) {
 	if got := str(t, patched, "lockBy"); got != "2030-01-31" {
 		t.Errorf("lockBy = %q, want it untouched", got)
 	}
-	if got := num(t, patched, "paid"); got != 5000 {
-		t.Errorf("paid = %v, want it untouched", got)
+	if got := str(t, patched, "paid"); got != "50.00" {
+		t.Errorf("paid = %q, want it untouched", got)
 	}
 }
 
@@ -294,14 +308,231 @@ func TestPatchLeavesOmittedFieldsAlone(t *testing.T) {
 func TestCreateDefaultsQtyToOne(t *testing.T) {
 	h, _ := newAPIServer(t)
 
-	item := created(t, h, "budget-items", `{"item":"Welcome signage","unit":500}`)
+	item := created(t, h, "budget-items", `{"item":"Welcome signage","unit":"5.00"}`)
 	if got := num(t, item, "qty"); got != 1 {
 		t.Errorf("qty = %v, want the column default of 1", got)
 	}
 	// An explicit zero is still a zero; only absence takes the default.
-	zero := created(t, h, "budget-items", `{"item":"Cancelled extra","unit":500,"qty":0}`)
+	zero := created(t, h, "budget-items", `{"item":"Cancelled extra","unit":"5.00","qty":0}`)
 	if got := num(t, zero, "qty"); got != 0 {
 		t.Errorf("qty = %v, want the explicit 0", got)
+	}
+}
+
+// --- money at the API boundary -----------------------------------------
+//
+// The store holds minor units; this API speaks major units as decimal strings.
+// These tests are what stands between those two facts and a factor of a
+// hundred.
+//
+// They are written against EUR on purpose. The deployment currency is IDR,
+// which is zero-decimal — minor units and major units are the same number — so
+// every one of these passes under IDR whether the conversion is there or not.
+// That is exactly how the bug got as far as it did. If this suite is ever
+// "simplified" to run against the deployment currency alone, it stops testing
+// anything.
+
+// storedMinor reads what the database actually holds for one line, which is the
+// half of the round trip no HTTP response can show.
+func storedMinor(t *testing.T, pool *pgxpool.Pool, id string) (unit, paid int64) {
+	t.Helper()
+	if err := pool.QueryRow(t.Context(),
+		`SELECT unit, paid FROM budget_items WHERE id = $1`, id).Scan(&unit, &paid); err != nil {
+		t.Fatalf("read stored minor units: %v", err)
+	}
+	return unit, paid
+}
+
+// TestMoneyCrossesTheBoundaryInMajorUnits is the defect: the store's bigint is
+// cents, the browser's number is euros, and passing one straight through as the
+// other is a hundredfold error in every figure.
+func TestMoneyCrossesTheBoundaryInMajorUnits(t *testing.T) {
+	h, pool := newAPIServer(t)
+
+	item := created(t, h, "budget-items",
+		`{"item":"Venue deposit","vendor":"Example Hall","unit":"250.50","qty":1,"paid":"5.07"}`)
+	id := str(t, item, "id")
+
+	// Out: exactly what went in, to the cent.
+	if got := str(t, item, "unit"); got != "250.50" {
+		t.Errorf("unit = %q, want %q", got, "250.50")
+	}
+	if got := str(t, item, "paid"); got != "5.07" {
+		t.Errorf("paid = %q, want %q", got, "5.07")
+	}
+
+	// Down: minor units, unchanged, which is the part of the design that was
+	// already right and must stay that way.
+	unit, paid := storedMinor(t, pool, id)
+	if unit != 25050 || paid != 507 {
+		t.Errorf("stored (unit, paid) = (%d, %d), want (25050, 507) minor units", unit, paid)
+	}
+
+	// And back out again through the read the browser actually uses.
+	res := call(t, h, http.MethodGet, "/api/v1/plan", "")
+	if res.status != http.StatusOK {
+		t.Fatalf("GET /api/v1/plan -> %d\n%s", res.status, res.body)
+	}
+	for _, want := range []string{`"unit":"250.50"`, `"paid":"5.07"`} {
+		if !strings.Contains(string(res.body), want) {
+			t.Errorf("plan is missing %s:\n%s", want, res.body)
+		}
+	}
+
+	// A patch is the same boundary in the other direction.
+	patched := call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"paid":"250.50"}`)
+	if patched.status != http.StatusOK {
+		t.Fatalf("PATCH -> %d\n%s", patched.status, patched.body)
+	}
+	if got := str(t, decode(t, patched), "paid"); got != "250.50" {
+		t.Errorf("patched paid = %q, want %q", got, "250.50")
+	}
+	if _, paid := storedMinor(t, pool, id); paid != 25050 {
+		t.Errorf("stored paid = %d, want 25050 minor units", paid)
+	}
+}
+
+// TestMoneyInAZeroDecimalCurrencyIsUnchanged: for IDR, minor and major units
+// are the same number, so nothing moves. This is the trap rather than the
+// proof — it would pass just as well against the bug it exists to rule out —
+// and it is here to show the conversion does not invent decimals where the
+// currency has none.
+func TestMoneyInAZeroDecimalCurrencyIsUnchanged(t *testing.T) {
+	h, pool := newAPIServerIn(t, "IDR")
+
+	item := created(t, h, "budget-items",
+		`{"item":"Venue deposit","unit":"750000","qty":1,"paid":"150000"}`)
+	id := str(t, item, "id")
+
+	if got := str(t, item, "unit"); got != "750000" {
+		t.Errorf("unit = %q, want %q — no decimal point on a zero-decimal currency", got, "750000")
+	}
+	if got := str(t, item, "paid"); got != "150000" {
+		t.Errorf("paid = %q, want %q", got, "150000")
+	}
+	if unit, paid := storedMinor(t, pool, id); unit != 750000 || paid != 150000 {
+		t.Errorf("stored (unit, paid) = (%d, %d), want (750000, 150000)", unit, paid)
+	}
+
+	// Rupiah have no sen in practice, so a figure carrying them means the
+	// column was misread rather than that it needs rounding.
+	res := call(t, h, http.MethodPost, "/api/v1/budget-items", `{"item":"Flowers","unit":"750000.50"}`)
+	if res.status != http.StatusBadRequest {
+		t.Errorf("cents against a zero-decimal currency -> %d, want 400\n%s", res.status, res.body)
+	}
+}
+
+// TestOddCentsDoNotDrift walks the values a double cannot hold exactly. Every
+// one of these has no finite binary form; a boundary that went through a float
+// returns them a cent out, or with a tail of nines.
+func TestOddCentsDoNotDrift(t *testing.T) {
+	h, pool := newAPIServer(t)
+
+	for _, tc := range []struct {
+		major string
+		minor int64
+	}{
+		{"0.01", 1},
+		{"0.07", 7},
+		{"0.10", 10},
+		{"19.99", 1999},
+		{"1234.56", 123456},
+		{"8675.309", 0}, // rejected: three decimals, EUR has two
+		{"99999999.99", 9999999999},
+	} {
+		t.Run(tc.major, func(t *testing.T) {
+			res := call(t, h, http.MethodPost, "/api/v1/budget-items",
+				`{"item":"Venue deposit","unit":"`+tc.major+`","qty":1}`)
+			if tc.minor == 0 {
+				if res.status != http.StatusBadRequest {
+					t.Fatalf("-> %d, want 400 for more decimals than EUR has\n%s", res.status, res.body)
+				}
+				return
+			}
+			if res.status != http.StatusCreated {
+				t.Fatalf("-> %d\n%s", res.status, res.body)
+			}
+			row := decode(t, res)
+			if got := str(t, row, "unit"); got != tc.major {
+				t.Errorf("unit = %q, want %q — the value drifted crossing the boundary", got, tc.major)
+			}
+			if unit, _ := storedMinor(t, pool, str(t, row, "id")); unit != tc.minor {
+				t.Errorf("stored unit = %d, want %d minor units", unit, tc.minor)
+			}
+		})
+	}
+}
+
+// TestTotalsAgreeWithTheLineItems: a budget's whole purpose is that the lines
+// add up. Summing what this API reports, in the units it reports them in, must
+// give the same answer as the database — and the figures here are chosen so
+// that a summation done in major-unit floats does not (45.33 x 40 comes to
+// 1813.1999999999998, and 4.07 x 40 to 162.79999999999998).
+//
+// Integer quantities on purpose: a fractional qty would make this a test about
+// rounding rather than about the money boundary.
+func TestTotalsAgreeWithTheLineItems(t *testing.T) {
+	h, pool := newAPIServer(t)
+
+	for _, line := range []string{
+		`{"item":"Venue deposit","unit":"2500.00","qty":1,"paid":"500.00"}`,
+		`{"item":"Catering","unit":"45.33","qty":40,"paid":"0.00"}`,
+		`{"item":"Printed invitations","unit":"4.07","qty":40,"paid":"162.80"}`,
+	} {
+		created(t, h, "budget-items", line)
+	}
+
+	res := call(t, h, http.MethodGet, "/api/v1/plan", "")
+	if res.status != http.StatusOK {
+		t.Fatalf("GET /api/v1/plan -> %d\n%s", res.status, res.body)
+	}
+	var plan struct {
+		BudgetItems []struct {
+			Unit string  `json:"unit"`
+			Qty  float64 `json:"qty"`
+			Paid string  `json:"paid"`
+		} `json:"budgetItems"`
+	}
+	if err := json.Unmarshal(res.body, &plan); err != nil {
+		t.Fatalf("plan: %v\n%s", err, res.body)
+	}
+	if len(plan.BudgetItems) != 3 {
+		t.Fatalf("budgetItems = %d, want 3", len(plan.BudgetItems))
+	}
+
+	var committed, paid int64
+	for _, line := range plan.BudgetItems {
+		unit, err := store.ParseMajor("EUR", line.Unit)
+		if err != nil {
+			t.Fatalf("unit %q is not a decimal the API's own parser accepts: %v", line.Unit, err)
+		}
+		p, err := store.ParseMajor("EUR", line.Paid)
+		if err != nil {
+			t.Fatalf("paid %q is not a decimal the API's own parser accepts: %v", line.Paid, err)
+		}
+		committed += unit * int64(line.Qty)
+		paid += p
+	}
+
+	if committed != 447600 {
+		t.Errorf("committed = %d minor units (%s), want 447600",
+			committed, store.FormatMajor("EUR", committed))
+	}
+	if paid != 66280 {
+		t.Errorf("paid = %d minor units (%s), want 66280", paid, store.FormatMajor("EUR", paid))
+	}
+
+	// The same sums taken from the column the figures actually live in. If
+	// these disagree, the boundary is losing something on the way out.
+	var dbCommitted, dbPaid int64
+	if err := pool.QueryRow(t.Context(),
+		`SELECT COALESCE(sum(unit * qty), 0)::bigint, COALESCE(sum(paid), 0)::bigint FROM budget_items`).
+		Scan(&dbCommitted, &dbPaid); err != nil {
+		t.Fatalf("sum the stored lines: %v", err)
+	}
+	if dbCommitted != committed || dbPaid != paid {
+		t.Errorf("API totals (%d, %d) disagree with the stored lines (%d, %d)",
+			committed, paid, dbCommitted, dbPaid)
 	}
 }
 
@@ -311,15 +542,15 @@ func TestCreateDefaultsQtyToOne(t *testing.T) {
 func TestStaleRevisionIs409(t *testing.T) {
 	h, _ := newAPIServer(t)
 
-	item := created(t, h, "budget-items", `{"item":"Venue deposit","unit":25000,"qty":1}`)
+	item := created(t, h, "budget-items", `{"item":"Venue deposit","unit":"250.00","qty":1}`)
 	id := str(t, item, "id")
 
-	first := call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"unit":30000}`)
+	first := call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"unit":"300.00"}`)
 	if first.status != http.StatusOK {
 		t.Fatalf("first write -> %d\n%s", first.status, first.body)
 	}
 
-	second := call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"unit":27500}`)
+	second := call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"unit":"275.00"}`)
 	if second.status != http.StatusConflict {
 		t.Fatalf("second write at a stale revision -> %d, want 409\n%s", second.status, second.body)
 	}
@@ -337,8 +568,8 @@ func TestStaleRevisionIs409(t *testing.T) {
 	if conflict.Error != "stale_revision" {
 		t.Errorf("error = %q, want stale_revision", conflict.Error)
 	}
-	if got := num(t, conflict.Current, "unit"); got != 30000 {
-		t.Errorf("current.unit = %v, want the winning write's 30000", got)
+	if got := str(t, conflict.Current, "unit"); got != "300.00" {
+		t.Errorf("current.unit = %q, want the winning write's 300.00", got)
 	}
 	if got := num(t, conflict.Current, "revision"); got != 2 {
 		t.Errorf("current.revision = %v, want 2", got)
@@ -349,7 +580,7 @@ func TestStaleRevisionIs409(t *testing.T) {
 
 	// And the refused write must not have landed anyway.
 	plan := call(t, h, http.MethodGet, "/api/v1/plan", "")
-	if !strings.Contains(string(plan.body), `"unit":30000`) {
+	if !strings.Contains(string(plan.body), `"unit":"300.00"`) {
 		t.Errorf("the refused write overwrote the winner:\n%s", plan.body)
 	}
 
@@ -388,27 +619,75 @@ func TestDeleteRemovesTheRow(t *testing.T) {
 	}
 }
 
-// TestPhasesHaveNoRevisionCheck records the one table the schema gives no
-// revision column, so its writes are last-write-wins and cannot conflict.
-func TestPhasesHaveNoRevisionCheck(t *testing.T) {
+// TestPhaseConflictIs409 is the defect migration 0009 closed, end to end.
+//
+// `phases` was the one shared table with no revision column, so two people
+// renaming the same stage of the evening were never told apart: the second
+// write simply won. It now behaves as every other collection does — a patch
+// names the revision it is editing, a stale one is refused with the row as it
+// now stands, and a delete carries the same check.
+func TestPhaseConflictIs409(t *testing.T) {
 	h, _ := newAPIServer(t)
 
 	phase := created(t, h, "phases", `{"name":"Arrival","position":0}`)
 	id := str(t, phase, "id")
-	if _, ok := phase["revision"]; ok {
-		t.Error("a phase reported a revision it does not have")
+	if got := num(t, phase, "revision"); got != 1 {
+		t.Errorf("revision = %v, want 1 on a fresh phase", got)
+	}
+	if _, ok := phase["updatedAt"]; !ok {
+		t.Error("a phase carries no updatedAt")
+	}
+	if _, ok := phase["updatedBy"]; !ok {
+		t.Error("a phase carries no updatedBy")
 	}
 
-	res := call(t, h, http.MethodPatch, "/api/v1/phases/"+id, `{"name":"Guests arrive"}`)
-	if res.status != http.StatusOK {
-		t.Fatalf("patching a phase without a revision -> %d\n%s", res.status, res.body)
+	// Both people are holding revision 1. Ada renames it first.
+	first := call(t, h, http.MethodPatch, "/api/v1/phases/"+id, `{"revision":1,"name":"Guests arrive"}`)
+	if first.status != http.StatusOK {
+		t.Fatalf("first write -> %d\n%s", first.status, first.body)
 	}
-	if got := str(t, decode(t, res), "name"); got != "Guests arrive" {
-		t.Errorf("name = %q", got)
+	if got := num(t, decode(t, first), "revision"); got != 2 {
+		t.Errorf("revision = %v, want 2 after a write", got)
 	}
 
-	if del := call(t, h, http.MethodDelete, "/api/v1/phases/"+id, ""); del.status != http.StatusNoContent {
-		t.Errorf("deleting a phase without a revision -> %d, want 204\n%s", del.status, del.body)
+	second := call(t, h, http.MethodPatch, "/api/v1/phases/"+id, `{"revision":1,"name":"Doors open"}`)
+	if second.status != http.StatusConflict {
+		t.Fatalf("second write at a stale revision -> %d, want 409\n%s", second.status, second.body)
+	}
+
+	var conflict struct {
+		Error   string         `json:"error"`
+		Current map[string]any `json:"current"`
+	}
+	if err := json.Unmarshal(second.body, &conflict); err != nil {
+		t.Fatalf("409 body is not the documented shape: %v\n%s", err, second.body)
+	}
+	if conflict.Error != "stale_revision" {
+		t.Errorf("error = %q, want stale_revision", conflict.Error)
+	}
+	// Not just "you lost", but what the row now says — the thing the client
+	// reconciles against instead of refetching the whole plan.
+	if got := str(t, conflict.Current, "name"); got != "Guests arrive" {
+		t.Errorf("current.name = %q, want the winning write's", got)
+	}
+	if got := num(t, conflict.Current, "revision"); got != 2 {
+		t.Errorf("current.revision = %v, want 2", got)
+	}
+	if str(t, conflict.Current, "id") != id {
+		t.Errorf("current.id = %q, want %q", conflict.Current["id"], id)
+	}
+
+	// And the refused rename must not have landed anyway.
+	plan := call(t, h, http.MethodGet, "/api/v1/plan", "")
+	if strings.Contains(string(plan.body), "Doors open") {
+		t.Errorf("the refused write overwrote the winner:\n%s", plan.body)
+	}
+
+	if stale := call(t, h, http.MethodDelete, "/api/v1/phases/"+id+"?revision=1", ""); stale.status != http.StatusConflict {
+		t.Errorf("delete at a stale revision -> %d, want 409\n%s", stale.status, stale.body)
+	}
+	if del := call(t, h, http.MethodDelete, "/api/v1/phases/"+id+"?revision=2", ""); del.status != http.StatusNoContent {
+		t.Errorf("delete at the current revision -> %d, want 204\n%s", del.status, del.body)
 	}
 }
 
@@ -442,6 +721,8 @@ func TestBadRequestsAreRefused(t *testing.T) {
 
 	task := created(t, h, "tasks", `{"name":"Book the photographer"}`)
 	taskPath := "/api/v1/tasks/" + str(t, task, "id")
+	phase := created(t, h, "phases", `{"name":"Arrival"}`)
+	phasePath := "/api/v1/phases/" + str(t, phase, "id")
 
 	cases := []struct {
 		name         string
@@ -454,9 +735,18 @@ func TestBadRequestsAreRefused(t *testing.T) {
 		{"empty body", http.MethodPost, "/api/v1/notes", "", http.StatusBadRequest},
 		{"trailing content", http.MethodPost, "/api/v1/notes", `{"text":"a"}{"text":"b"}`, http.StatusBadRequest},
 		// A misspelt field that silently did nothing is the bug nobody catches.
-		{"unknown field", http.MethodPost, "/api/v1/budget-items", `{"item":"Cake","unitt":500}`, http.StatusBadRequest},
+		{"unknown field", http.MethodPost, "/api/v1/budget-items", `{"item":"Cake","unitt":"5.00"}`, http.StatusBadRequest},
 		{"null on a non-nullable field", http.MethodPost, "/api/v1/budget-items", `{"item":null}`, http.StatusBadRequest},
+		{"null money", http.MethodPost, "/api/v1/budget-items", `{"unit":null}`, http.StatusBadRequest},
 		{"wrong type", http.MethodPost, "/api/v1/budget-items", `{"unit":"lots"}`, http.StatusBadRequest},
+		// Money is a decimal string in major units and nothing else. A JSON
+		// number is a float in the browser's parser, and 25050 sent where
+		// "250.50" was meant is the factor-of-a-hundred nobody notices.
+		{"money as a JSON number", http.MethodPost, "/api/v1/budget-items", `{"unit":25050}`, http.StatusBadRequest},
+		// Cents beyond what the currency has means the client has the wrong
+		// idea about the amount, not that it needs rounding help.
+		{"more decimals than EUR has", http.MethodPost, "/api/v1/budget-items", `{"unit":"250.005"}`, http.StatusBadRequest},
+		{"money that is not a number at all", http.MethodPost, "/api/v1/budget-items", `{"paid":"1,250.00"}`, http.StatusBadRequest},
 		{"unknown task status", http.MethodPost, "/api/v1/tasks", `{"name":"x","status":"maybe"}`, http.StatusBadRequest},
 		{"date with a time on it", http.MethodPost, "/api/v1/tasks", `{"name":"x","due":"2030-01-15T00:00:00Z"}`, http.StatusBadRequest},
 		{"id that is not a uuid", http.MethodPatch, "/api/v1/tasks/not-a-uuid", `{"revision":1}`, http.StatusBadRequest},
@@ -464,6 +754,10 @@ func TestBadRequestsAreRefused(t *testing.T) {
 		{"patch without a revision", http.MethodPatch, taskPath, `{"name":"x"}`, http.StatusBadRequest},
 		{"delete without a revision", http.MethodDelete, taskPath, "", http.StatusBadRequest},
 		{"delete with a nonsense revision", http.MethodDelete, taskPath + "?revision=soon", "", http.StatusBadRequest},
+		// Phases are held to the same rule as everything else since 0009; they
+		// used to be the collection where forgetting the revision was fine.
+		{"phase patch without a revision", http.MethodPatch, phasePath, `{"name":"Guests arrive"}`, http.StatusBadRequest},
+		{"phase delete without a revision", http.MethodDelete, phasePath, "", http.StatusBadRequest},
 		// A reference to a row that does not exist is the caller's mistake, and
 		// reporting it as a 500 tells them this server is broken instead.
 		{"unknown phase", http.MethodPost, "/api/v1/budget-items",
@@ -569,9 +863,9 @@ func TestReadyzChecksTheDatabase(t *testing.T) {
 func TestAPIMetricsRouteLabelIsBounded(t *testing.T) {
 	h, _ := newAPIServer(t)
 
-	item := created(t, h, "budget-items", `{"item":"Venue deposit","unit":25000}`)
+	item := created(t, h, "budget-items", `{"item":"Venue deposit","unit":"250.00"}`)
 	id := str(t, item, "id")
-	call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"unit":26000}`)
+	call(t, h, http.MethodPatch, "/api/v1/budget-items/"+id, `{"revision":1,"unit":"260.00"}`)
 	call(t, h, http.MethodDelete, "/api/v1/budget-items/"+id+"?revision=2", "")
 	call(t, h, http.MethodGet, "/api/v1/plan", "")
 	// An unrecognised collection is caller-controlled, so it must not become a

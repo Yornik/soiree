@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,27 +12,31 @@ import (
 // "Arrival", "Dinner", "Speeches". Real planning sheets organise costs by the
 // run of the evening rather than as one flat list.
 //
-// Note what is missing: a phase has no revision, no updated_at and no
-// updated_by, because the schema in docs/architecture.md does not give it any.
-// Updates here are therefore last-write-wins, unlike every other shared table
-// in this package. See the note in the report accompanying this milestone.
+// It carries the same revision, updated_at and updated_by as every other shared
+// table, since migration 0009. It was the one table without them, which made
+// its writes last-write-wins: two people renaming the same stage of the evening
+// were not told apart, and the one who lost never found out.
 type Phase struct {
-	ID       uuid.UUID `db:"id"`
-	Name     string    `db:"name"`
-	Position int32     `db:"position"`
+	ID        uuid.UUID  `db:"id"`
+	Name      string     `db:"name"`
+	Position  int32      `db:"position"`
+	Revision  int64      `db:"revision"`
+	UpdatedAt time.Time  `db:"updated_at"`
+	UpdatedBy *uuid.UUID `db:"updated_by"`
 }
 
-const phaseColumns = `id, name, position`
+const phaseColumns = `id, name, position, revision, updated_at, updated_by`
 
-// CreatePhase inserts a phase. A zero ID lets the database generate one.
-func (s *Store) CreatePhase(ctx context.Context, in Phase) (Phase, error) {
-	actor := resolveActor(ctx, nil)
-	return createAudited(ctx, s, EntityPhases, actor, func(tx pgx.Tx) (Phase, error) {
+// CreatePhase inserts a phase. A zero ID lets the database generate one. actor
+// is the account making the change, or nil where there is no session.
+func (s *Store) CreatePhase(ctx context.Context, in Phase, actor *uuid.UUID) (Phase, error) {
+	who := resolveActor(ctx, actor)
+	return createAudited(ctx, s, EntityPhases, who, func(tx pgx.Tx) (Phase, error) {
 		return queryOne[Phase](ctx, tx, "phases",
-			`INSERT INTO phases (id, name, position)
-			 VALUES (COALESCE($1, gen_random_uuid()), $2, $3)
+			`INSERT INTO phases (id, name, position, updated_by)
+			 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4)
 			 RETURNING `+phaseColumns,
-			newID(in.ID), in.Name, in.Position)
+			newID(in.ID), in.Name, in.Position, actor)
 	})
 }
 
@@ -50,40 +54,47 @@ func (s *Store) Phases(ctx context.Context) ([]Phase, error) {
 		`SELECT `+phaseColumns+` FROM phases ORDER BY position, id`)
 }
 
-// UpdatePhase renames or reorders a phase. No revision check, because the
-// table carries no revision to check against — which is also why the row is
-// locked while it is read and rewritten: with no revision to prove nobody
-// intervened, the lock is what makes the "from" value in the change log the
-// value this write actually replaced.
-func (s *Store) UpdatePhase(ctx context.Context, in Phase) (Phase, error) {
-	actor := resolveActor(ctx, nil)
-	return updateAudited(ctx, s, EntityPhases, phaseColumns, in.ID, actor,
+// UpdatePhase renames or reorders a phase, refusing the write if in.Revision is
+// no longer current.
+func (s *Store) UpdatePhase(ctx context.Context, in Phase, actor *uuid.UUID) (Phase, error) {
+	who := resolveActor(ctx, actor)
+	out, err := updateAudited(ctx, s, EntityPhases, phaseColumns, in.ID, who,
 		func(tx pgx.Tx, _ Phase) (Phase, error) {
 			return queryOne[Phase](ctx, tx, "phases",
-				`UPDATE phases SET name = $1, position = $2 WHERE id = $3
-				 RETURNING `+phaseColumns,
-				in.Name, in.Position, in.ID)
+				`UPDATE phases
+				    SET name = $1, position = $2,
+				        revision = revision + 1, updated_at = now(), updated_by = $3
+				  WHERE id = $4 AND revision = $5
+				RETURNING `+phaseColumns,
+				in.Name, in.Position, actor, in.ID, in.Revision)
 		})
+	if err == nil {
+		return out, nil
+	}
+	if !isNotFound(err) {
+		return Phase{}, err
+	}
+
+	current, err := s.Phase(ctx, in.ID)
+	return Phase{}, conflict("phases", in.ID, in.Revision, current, err)
 }
 
-// DeletePhase removes a phase. Its budget items survive with a null phase_id
-// rather than being deleted with it: dropping a stage of the evening must not
-// silently drop what it was going to cost.
+// DeletePhase removes a phase, refusing if revision is no longer current. Its
+// budget items survive with a null phase_id rather than being deleted with it:
+// dropping a stage of the evening must not silently drop what it was going to
+// cost.
 //
-// No revision to check, so this cannot use the shared delete path. What the
-// items lose — their phase_id — is set to null by the cascade and appears in no
-// item's history; see the note in audit.go.
-func (s *Store) DeletePhase(ctx context.Context, id uuid.UUID) error {
-	actor := resolveActor(ctx, nil)
-	_, err := inTx(ctx, s, func(tx pgx.Tx) (struct{}, error) {
-		before, err := lockRow[Phase](ctx, tx, EntityPhases, phaseColumns, id)
-		if err != nil {
-			return struct{}{}, err
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM phases WHERE id = $1`, id); err != nil {
-			return struct{}{}, fmt.Errorf("phases: %w", err)
-		}
-		return struct{}{}, recordDelete(ctx, tx, EntityPhases, id, nil, before, actor)
-	})
-	return err
+// What the items lose — their phase_id — is set to null by the cascade and
+// appears in no item's history; see the note in audit.go.
+func (s *Store) DeletePhase(ctx context.Context, id uuid.UUID, revision int64) error {
+	err := deleteAudited[Phase](ctx, s, EntityPhases, phaseColumns, id, revision)
+	if err == nil {
+		return nil
+	}
+	if !isNotFound(err) {
+		return err
+	}
+
+	current, err := s.Phase(ctx, id)
+	return conflict("phases", id, revision, current, err)
 }
