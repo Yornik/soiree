@@ -32,6 +32,7 @@
 const { test, expect } = require('@playwright/test');
 
 const { AUTH_URL } = require('../servers');
+const { API_URL, adoptSession, apiSignIn } = require('./helpers');
 
 // Set in playwright.config.js, which is also where the server is told about
 // them. Read from metadata rather than repeated, so there is one place to
@@ -286,6 +287,253 @@ test('a passkey can be registered from a signed-in session and then signs you in
   } finally {
     await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId }).catch(() => {});
   }
+});
+
+/*
+ * What Chrome's authenticator is not: an iPhone.
+ *
+ * "Works with Windows Hello, not on an Apple device" was a real report, and
+ * the test above could not have caught it, because everything about it is the
+ * easy case — a device-bound key, a browser that answers only what it was
+ * asked, a prompt that opens whenever it is called. Each test below takes one
+ * of those away, as far as it can be taken away without the hardware: the
+ * authenticator is told to behave like a synced one, and the browser is
+ * shimmed to behave like WebKit where WebKit differs. A shim is a model of the
+ * other browser and not the other browser; what these prove is that the page
+ * and the server hold up their end of each rule.
+ *
+ * None of them signs in with the password. The run shares one session,
+ * replayed as a cookie, because the login limiters are real — and "signing
+ * out" here is losing the cookie, so that shared session survives for
+ * whoever is next.
+ */
+async function passkeysOn(page) {
+  await page.goto('/');
+  return page.evaluate(() =>
+    JSON.parse(document.getElementById('soiree-config').textContent).passkeys);
+}
+
+async function addAuthenticator(page, extra = {}) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('WebAuthn.enable');
+  const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2',
+      transport: 'internal',
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+      ...extra,
+    },
+  });
+  return { cdp, authenticatorId };
+}
+
+// Bounded, and not an assertion. A page that never fetches ahead is what the
+// test of the tap is for, and it should fail there, on the prompt it was
+// refused, rather than here on a wait.
+const begun = (page, ceremony) =>
+  page.waitForResponse((r) => r.url().endsWith(`/api/v1/auth/passkeys/${ceremony}/begin`), { timeout: 3000 })
+    .catch(() => null);
+
+/**
+ * Adds a passkey and then signs in with it from cold, the way a person would:
+ * the screen is up, and has been for a moment, before anything is tapped. That
+ * moment is part of the model — it is when the page fetches the challenge, so
+ * that the tap itself has nothing left to wait for.
+ */
+async function registerThenSignIn(page, testInfo, label) {
+  const who = admin(testInfo);
+  await adoptSession(page, await apiSignIn(page.request, API_URL), AUTH_URL);
+
+  // Reloaded, here and below, because a move between two #/ routes is not a
+  // page load, and the page asks who it is once per load.
+  let ready = begun(page, 'register');
+  await page.goto('/#/account');
+  await page.reload();
+  await expect(page.locator('#passkeySection')).toBeVisible();
+  await ready;
+  await page.fill('#passkeyLabel', label);
+  await page.click('#passkeyAdd');
+  await expect(page.locator('#passkeyMsg')).toContainText('Passkey added');
+  await expect(page.locator('.passkey-label', { hasText: label })).toHaveCount(1);
+
+  await page.context().clearCookies();
+  ready = begun(page, 'login');
+  await page.goto('/#/login');
+  await page.reload();
+  await expect(page.locator('#loginPasskey')).toBeVisible();
+  await ready;
+  await page.click('#loginPasskey');
+  await expect(page.locator('.account-email')).toHaveText(who.email);
+}
+
+/** Takes the test's passkey off the shared account again. */
+async function removePasskey(page, label) {
+  page.on('dialog', (d) => d.accept().catch(() => {}));
+  await page.goto('/#/account');
+  const row = page.locator('.passkey', { hasText: label });
+  if (await row.count()) {
+    await row.getByText('Remove').click();
+    await expect(row).toHaveCount(0);
+  }
+}
+
+test('a synced passkey, the kind an Apple device makes, registers and signs in', async ({ page }) => {
+  test.skip(!(await passkeysOn(page)), 'this instance derived no relying party, so passkeys are off');
+
+  // Backup-eligible and backed up: a passkey in iCloud Keychain. The server
+  // has to store the first flag at registration and find it unchanged in every
+  // assertion after, or the library refuses the login.
+  const { cdp, authenticatorId } = await addAuthenticator(page, {
+    defaultBackupEligibility: true,
+    defaultBackupState: true,
+  });
+  try {
+    await registerThenSignIn(page, test.info(), 'Synced phone');
+    const stored = await cdp.send('WebAuthn.getCredentials', { authenticatorId });
+    expect(stored.credentials).toHaveLength(1);
+    expect(stored.credentials[0].backupEligibility, 'the authenticator really made a synced credential').toBe(true);
+    expect(stored.credentials[0].backupState).toBe(true);
+    await removePasskey(page, 'Synced phone');
+  } finally {
+    await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId }).catch(() => {});
+  }
+});
+
+test('an extension output nobody asked for does not cost somebody their sign-in', async ({ page }) => {
+  // WebKit reports `appid: false` on assertions from a security key whether or
+  // not appid was requested. The signature is good; the server used to refuse
+  // the login over the extra member.
+  await page.addInitScript(() => {
+    const real = PublicKeyCredential.prototype.toJSON;
+    PublicKeyCredential.prototype.toJSON = function toJSON() {
+      const json = real.call(this);
+      if (this.response instanceof AuthenticatorAssertionResponse) {
+        json.clientExtensionResults = { ...json.clientExtensionResults, appid: false };
+      }
+      return json;
+    };
+  });
+  // After the shim, because a shim is installed by the next page load.
+  test.skip(!(await passkeysOn(page)), 'this instance derived no relying party, so passkeys are off');
+
+  const { cdp, authenticatorId } = await addAuthenticator(page);
+  try {
+    const sent = page.waitForRequest((r) => r.url().endsWith('/api/v1/auth/passkeys/login/finish'));
+    await registerThenSignIn(page, test.info(), 'Key on Safari');
+    expect((await sent).postDataJSON().credential.clientExtensionResults,
+      'the shim is in the way, so this is the case it says it is').toEqual({ appid: false });
+    await removePasskey(page, 'Key on Safari');
+  } finally {
+    await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId }).catch(() => {});
+  }
+});
+
+test('the passkey prompt is asked for inside the tap, not after a round trip', async ({ page }) => {
+  // Safari's rule, made strict: navigator.credentials works only in the same
+  // task as the event that asked for it. A fetch resolves in a later one, so a
+  // page that asks the server for a challenge between the tap and the call is
+  // refused, exactly as WebKit refuses it: NotAllowedError.
+  await page.addInitScript(() => {
+    let tapping = false;
+    for (const type of ['click', 'keydown', 'pointerup', 'touchend', 'submit']) {
+      window.addEventListener(type, () => {
+        tapping = true;
+        setTimeout(() => { tapping = false; }, 0);
+      }, true);
+    }
+    const container = navigator.credentials;
+    for (const name of ['create', 'get']) {
+      const real = container[name].bind(container);
+      container[name] = (options) => (tapping
+        ? real(options)
+        : Promise.reject(new DOMException('called outside a user gesture', 'NotAllowedError')));
+    }
+  });
+  // After the shim, because a shim is installed by the next page load.
+  test.skip(!(await passkeysOn(page)), 'this instance derived no relying party, so passkeys are off');
+
+  const { cdp, authenticatorId } = await addAuthenticator(page);
+  try {
+    await registerThenSignIn(page, test.info(), 'Strict browser');
+    await removePasskey(page, 'Strict browser');
+  } finally {
+    await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId }).catch(() => {});
+  }
+});
+
+test('a browser whose own JSON helpers are missing or broken still gets through', async ({ page }) => {
+  // Older Safari has neither parse*FromJSON nor toJSON, and a password
+  // manager's extension can leave a toJSON that throws. Both land on the
+  // hand-written translation, which no other test reaches: Chrome has the
+  // helpers, so the code that runs on the failing phones never ran here.
+  await page.addInitScript(() => {
+    delete PublicKeyCredential.parseCreationOptionsFromJSON;
+    delete PublicKeyCredential.parseRequestOptionsFromJSON;
+    PublicKeyCredential.prototype.toJSON = function toJSON() {
+      throw new TypeError('Can only call PublicKeyCredential.toJSON on instances of PublicKeyCredential');
+    };
+  });
+  // After the shim, because a shim is installed by the next page load.
+  test.skip(!(await passkeysOn(page)), 'this instance derived no relying party, so passkeys are off');
+
+  const { cdp, authenticatorId } = await addAuthenticator(page);
+  try {
+    await page.goto('/');
+    expect(await page.evaluate(() => typeof PublicKeyCredential.parseRequestOptionsFromJSON)).toBe('undefined');
+    await registerThenSignIn(page, test.info(), 'Older browser');
+    await removePasskey(page, 'Older browser');
+  } finally {
+    await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId }).catch(() => {});
+  }
+});
+
+test('a ceremony the browser refuses says what kind of refusal it was', async ({ page }) => {
+  // The challenge is canned and nothing here reaches the server: this is about
+  // what the page says, and the server has nothing to add to it.
+  await page.route('**/api/v1/auth/passkeys/login/begin', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ publicKey: { challenge: 'c29pcmVlLWUyZS1jaGFsbGVuZ2U', rpId: 'localhost', userVerification: 'preferred' } }),
+  }));
+  await page.addInitScript(() => {
+    window.refuseWith = { name: 'NotAllowedError', after: 0 };
+    navigator.credentials.get = () => new Promise((resolve, reject) => {
+      const { name, after } = window.refuseWith;
+      setTimeout(() => reject(new DOMException('the browser\'s own words, which are not shown', name)), after);
+    });
+  });
+  // After the shim, because a shim is installed by the next page load.
+  test.skip(!(await passkeysOn(page)), 'this instance derived no relying party, so passkeys are off');
+
+  await page.goto('/#/login');
+  const msg = page.locator('#loginMsg');
+  const tap = async (name, after) => {
+    await page.evaluate((next) => { window.refuseWith = next; }, { name, after });
+    await page.click('#loginPasskey');
+  };
+
+  // At once: no person dismissed that, so the browser did. It used to be
+  // swallowed whole, and the button simply did nothing.
+  await tap('NotAllowedError', 0);
+  await expect(msg).toHaveText(/refused to show the passkey prompt.*\(NotAllowedError\)$/);
+  await expect(msg).toHaveClass(/is-refusal/);
+
+  // After a while: somebody closed it. Said, but not as an error.
+  await tap('NotAllowedError', 1200);
+  await expect(msg).toHaveText(/closed or timed out.*\(NotAllowedError\)$/);
+  await expect(msg).not.toHaveClass(/is-refusal/);
+
+  await tap('SecurityError', 0);
+  await expect(msg).toHaveText(/address does not match.*\(SecurityError\)$/);
+
+  // A kind with no sentence of its own still names itself.
+  await tap('UnknownError', 0);
+  await expect(msg).toHaveText(/did not complete the sign-in.*\(UnknownError\)$/);
+  await expect(msg).not.toContainText('own words');
+  await expect(page.locator('#loginPasskey')).toBeEnabled();
 });
 
 /*

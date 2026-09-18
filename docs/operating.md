@@ -566,6 +566,22 @@ the first thing to check.
 A person's own credentials are at `GET /api/v1/auth/passkeys` with their
 session. There is no admin view of anybody else's, by design.
 
+When a passkey fails on somebody's device, there are two places to look, and
+which one has something in it says where the failure was:
+
+- **The page** names the kind of refusal the browser gave, in brackets after a
+  sentence about it — `(NotAllowedError)`, `(SecurityError)`,
+  `(InvalidStateError)` and so on. A message like that means the browser never
+  produced a credential and the server was never asked. `NotAllowedError` within
+  a second of the tap is the browser declining to open a prompt at all; later
+  than that, it is somebody closing one, or a timeout.
+- **The log** has `passkey login refused` or `passkey registration refused`
+  whenever the server was asked and said no, with `step` (`parse`, `challenge`,
+  `challenge-owner`, `challenge-ceremony`, `verify`, `counter`) and, for
+  `verify`, the library's `kind`, `err` and `detail`. The person sees only "that
+  passkey did not sign you in"; the reason is here and nowhere else. No line
+  carries an address.
+
 ## Backup and restore
 
 The container holds nothing. State is in PostgreSQL — and, if attachments are

@@ -1019,9 +1019,10 @@ out of a database: the columns hold public keys, which verify signatures and
 cannot produce them.
 
 The endpoints are `POST /api/v1/auth/passkeys/register/{begin,finish}` (session
-required), `POST /api/v1/auth/passkeys/login/{begin,finish}` (public, behind the
-same per-IP bucket as the password login, so alternating between the two does
-not buy twice the allowance), and `GET /api/v1/auth/passkeys` plus
+required), `POST /api/v1/auth/passkeys/login/{begin,finish}` (public; `finish`
+is the attempt and sits behind the same per-IP bucket as the password login, so
+alternating between the two does not buy twice the allowance, while `begin`
+checks nothing and has a bucket of its own), and `GET /api/v1/auth/passkeys` plus
 `DELETE /api/v1/auth/passkeys/{id}` for managing one's own credentials. Never
 anybody else's: there is no admin view of somebody's passkeys, because an admin
 has no use for the list and the person who does is the one holding the devices.
@@ -1062,6 +1063,23 @@ has an account and one that does not, because it never has to look. And
 make of authenticator somebody carries — a fact about a person that nothing here
 would act on — and verifying it properly means the FIDO metadata service and a
 trust store to keep current.
+
+Two accommodations for browsers that are not Chromium, both learned from a
+sign-in that worked with Windows Hello and not on an Apple device:
+
+- **The page asks for the challenge before anybody taps.** Safari wants
+  `navigator.credentials` called from inside the tap, and how much of a fetch
+  between the two WebKit forgives has changed from version to version. So the
+  options are fetched when the sign-in or account screen is
+  drawn, refreshed before the challenge's five minutes are up, and the tap calls
+  `navigator.credentials` in the same turn. That is why `login/begin` is not
+  charged to the login bucket: drawing the screen would otherwise spend the
+  allowance for using it.
+- **An extension output nobody requested is ignored, not refused.** The library
+  defaults to failing the ceremony over one, and WebKit reports `appid: false`
+  on every assertion from a security key while several password managers attach
+  `credProps` to every registration. This server requests no extensions and
+  reads no outputs, so there is nothing an unrequested one can change.
 
 The user handle stored on the authenticator is the account's uuid and not its
 email address. The handle travels with every assertion and appears in the
