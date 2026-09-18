@@ -16,6 +16,11 @@ type Plan struct {
 	Programme   []ProgrammeEntry
 	Tasks       []Task
 	Notes       []Note
+	// Confirmed files only, across both kinds of parent. A collection of its
+	// own rather than a list on each row: a budget line is sent back whole on
+	// an edit, the API refuses fields it does not know, and a line that carried
+	// its files would have to be stripped of them before every write.
+	Attachments []Attachment
 }
 
 // LoadPlan reads the whole plan.
@@ -69,6 +74,10 @@ func (s *Store) LoadPlan(ctx context.Context) (Plan, error) {
 	}
 	if plan.Notes, err = queryAll[Note](ctx, tx, "notes",
 		`SELECT `+noteColumns+` FROM notes ORDER BY position, id`); err != nil {
+		return Plan{}, err
+	}
+
+	if plan.Attachments, err = readyAttachments(ctx, tx); err != nil {
 		return Plan{}, err
 	}
 

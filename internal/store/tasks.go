@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,7 +89,31 @@ func (s *Store) UpdateTask(ctx context.Context, in Task, actor *uuid.UUID) (Task
 // DeleteTask removes a task, refusing if revision is no longer current. Its
 // history stays.
 func (s *Store) DeleteTask(ctx context.Context, id uuid.UUID, revision int64) error {
-	err := deleteAudited[Task](ctx, s, EntityTasks, taskColumns, id, revision)
+	// Not deleteAudited, which every other single-row delete uses: a task can
+	// have files, they go with it by cascade, and the change log only knows
+	// about that if it is told here. See lockAttachmentsOf.
+	actor := resolveActor(ctx, nil)
+	_, err := inTx(ctx, s, func(tx pgx.Tx) (struct{}, error) {
+		before, err := lockRow[Task](ctx, tx, EntityTasks, taskColumns, id)
+		if err != nil {
+			return struct{}{}, err
+		}
+		files, err := lockAttachmentsOf(ctx, tx, attachmentsOfTasks, []uuid.UUID{id})
+		if err != nil {
+			return struct{}{}, err
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM tasks WHERE id = $1 AND revision = $2`, id, revision)
+		if err != nil {
+			return struct{}{}, fmt.Errorf("tasks: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return struct{}{}, notFoundErr(EntityTasks)
+		}
+		if err := recordDelete(ctx, tx, EntityTasks, id, revisionOf(before), before, actor); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, recordAttachmentsLost(ctx, tx, files, actor)
+	})
 	if err == nil {
 		return nil
 	}
