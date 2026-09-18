@@ -27,7 +27,11 @@
       secondaryCurrency: '',
       secondaryLocale: 'en-US',
       ceiling: 0,
-      demoData: false
+      demoData: false,
+      // Read if the server ever sends it. Nothing in the Go config emits this
+      // key today, so the interface language falls back to the locale below —
+      // which already carries the language tag an operator has configured.
+      language: ''
     };
     try {
       var el = document.getElementById('soiree-config');
@@ -48,6 +52,391 @@
   var EVENT_DATE = CONFIG.eventDate ? new Date(CONFIG.eventDate) : null;
   if (EVENT_DATE && isNaN(EVENT_DATE.getTime())) EVENT_DATE = null;
 
+  /* ------------------------------------------------------------------
+   * INTERFACE LANGUAGE
+   * ------------------------------------------------------------------
+   * One table, one lookup, no dependency. English is the fallback in both
+   * directions: an unknown language falls back to it, and so does any single
+   * key a translation has not reached yet — so a half-finished language ships
+   * a mixed page rather than a page full of raw ids.
+   *
+   * Resolution order, first hit wins:
+   *   1. ?lang= in the URL   — makes a link shareable in one language, and is
+   *                            deliberately not persisted: it is a view of the
+   *                            page, not a setting on the planner.
+   *   2. config.language     — read if the server ever sends it.
+   *   3. config.locale       — what an operator already configures, and it
+   *                            carries the language tag: nl-NL -> nl.
+   *   4. 'en'
+   *
+   * Currency and date formatting stay on config.locale throughout. Language is
+   * what the interface is written in; locale is how numbers are spelled, and
+   * an event priced in one country can be read by people in another.
+   * ------------------------------------------------------------------ */
+  var LANGS = ['en', 'nl', 'id'];
+
+  var STRINGS = {
+    en: {
+      'nav.sections': 'Planner sections',
+      'tab.overview': 'Overview',
+      'tab.budget': 'Budget',
+      'tab.tasks': 'Tasks',
+      'cd.togo': 'days to go',
+      'cd.togo1': 'day to go',
+      'cd.none': 'no date set',
+      'cd.passed': 'the day has passed',
+      'cd.closed': 'the ledger is closed',
+      'fr.title': 'Nothing in the ledger yet',
+      'fr.body': 'This planner holds one event’s money and jobs in one place: what each thing costs, who is covering it, what has been paid and what is still owed. Everything stays in this browser until you export it.',
+      'fr.s1': 'Set the ceiling',
+      'fr.n1': 'The number the total should not cross.',
+      'fr.s2': 'Name who is paying',
+      'fr.n2': 'Short callsigns you can tag each cost with.',
+      'fr.b2': 'Add a sponsor',
+      'fr.s3': 'Enter the first cost',
+      'fr.n3': 'One line per quote, with what has been paid so far.',
+      'fr.b3': 'Add a budget line',
+      'f.committed': 'Committed',
+      'f.buffer': 'With buffer',
+      'f.paid': 'Paid',
+      'f.outstanding': 'Outstanding',
+      'f.headroom': 'Headroom',
+      'aria.money': 'Money at a glance',
+      'aria.totals': 'Budget totals',
+      'pr.title': 'Progress',
+      'pr.ceiling': 'Committed against ceiling',
+      'pr.paid': 'Paid against committed',
+      'pr.tasks': 'Tasks done',
+      'pr.tasksub': '{a} of {b} done',
+      'pr.noceiling': 'No ceiling set — set one in the Budget tab.',
+      'pr.of': '{a} of {b}',
+      'pr.ceilsub': '{a} of {b}, leaving {c} after the buffer',
+      'pr.quoted': '+{a}% on quoted',
+      'pr.ofcommitted': '{a}% of committed',
+      'w.title': 'Watch list',
+      'w.note': 'things to keep an eye on',
+      'w.empty': 'Nothing flagged yet.',
+      'w.add': 'Add note',
+      'w.ph': 'Something to keep an eye on…',
+      'w.del': 'Remove note',
+      'un.title': 'Up next',
+      'un.empty': 'No open tasks — add some in the Tasks tab.',
+      'un.untitled': '(untitled task)',
+      'b.ceiling': 'Ceiling',
+      'b.inflation': 'Inflation buffer (%)',
+      'b.rate': 'Exchange rate',
+      'b.rate2': 'Exchange rate ({a} per {b})',
+      'sp.title': 'Sponsors',
+      'sp.note': 'callsigns used in the “cost by” column',
+      'sp.add': 'Add sponsor',
+      'sp.code': 'Callsign',
+      'sp.who': 'Who this is',
+      'sp.del': 'Remove sponsor',
+      'sp.untitled': 'Untitled',
+      'sp.unassigned': 'Unassigned',
+      'sp.shared': '(shared)',
+      'sp.none': 'No sponsors yet — add one above.',
+      'sp.multi': 'Tick more than one for a shared cost.',
+      'c.item': 'Item',
+      'c.unit': 'Unit',
+      'c.qty': 'Qty',
+      'c.by': 'Cost by',
+      'c.remarks': 'Remarks',
+      'c.remove': 'Remove',
+      't.totals': 'Totals',
+      'b.empty': 'No budget lines yet. Add the first one below.',
+      'b.add': 'Add budget line',
+      'b.reset': 'Reset column & row sizes',
+      'b.del': 'Remove budget line',
+      'b.gripcol': 'Drag to resize column',
+      'b.griprow': 'Drag to resize row',
+      'sl.title': 'Who’s covering what',
+      'sl.even': 'Split shared lines evenly between their sponsors',
+      'k.task': 'Task',
+      'k.owner': 'Owner',
+      'k.due': 'Due date',
+      'k.status': 'Status',
+      'k.all': 'All',
+      'k.notstarted': 'Not started',
+      'k.inprogress': 'In progress',
+      'k.done': 'Done',
+      'k.add': 'Add task',
+      'k.empty': 'No tasks yet. Add the first one below.',
+      'k.nofilter': 'No tasks with that status.',
+      'k.del': 'Remove task',
+      'aria.filter': 'Filter tasks by status',
+      'd.export': 'Export data (JSON)',
+      'd.import': 'Import data…',
+      'd.exported': 'Exported {a}',
+      'd.exportfail': 'Could not export automatically — copy the JSON from the console instead.',
+      'd.imported': 'Imported {a}',
+      'd.notplanner': 'That file does not look like planner data.',
+      'd.unreadable': 'Could not read that file.',
+      'd.confirm': 'Replace everything currently in this planner with the imported data?',
+      'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
+      'ar.reopen': 'Reopen for editing',
+      'ar.open': 'Reopened for editing. Close it again once everything is settled.',
+      'ar.close': 'Close the planner',
+      'ar.settle': 'The final reckoning',
+      'ar.settlenote': 'what each person covered',
+      'ar.nothing': 'Nothing was recorded.'
+    },
+    nl: {
+      'nav.sections': 'Onderdelen van de planner',
+      'tab.overview': 'Overzicht',
+      'tab.budget': 'Budget',
+      'tab.tasks': 'Taken',
+      'cd.togo': 'dagen te gaan',
+      'cd.togo1': 'dag te gaan',
+      'cd.none': 'geen datum ingesteld',
+      'cd.passed': 'de dag is geweest',
+      'cd.closed': 'het kasboek is gesloten',
+      'fr.title': 'Nog niets in het kasboek',
+      'fr.body': 'Deze planner houdt het geld en de klussen van één feest bij elkaar: wat alles kost, wie het betaalt, wat er al betaald is en wat er nog openstaat. Alles blijft in deze browser totdat je het exporteert.',
+      'fr.s1': 'Stel het plafond in',
+      'fr.n1': 'Het bedrag waar het totaal onder moet blijven.',
+      'fr.s2': 'Noteer wie meebetaalt',
+      'fr.n2': 'Korte roepnamen om elke post aan te hangen.',
+      'fr.b2': 'Bijdrager toevoegen',
+      'fr.s3': 'Voer de eerste post in',
+      'fr.n3': 'Eén regel per offerte, met wat er tot nu toe betaald is.',
+      'fr.b3': 'Post toevoegen',
+      'f.committed': 'Vastgelegd',
+      'f.buffer': 'Met buffer',
+      'f.paid': 'Betaald',
+      'f.outstanding': 'Openstaand',
+      'f.headroom': 'Ruimte over',
+      'aria.money': 'Het geld in één oogopslag',
+      'aria.totals': 'Budgettotalen',
+      'pr.title': 'Voortgang',
+      'pr.ceiling': 'Vastgelegd ten opzichte van het plafond',
+      'pr.paid': 'Betaald ten opzichte van vastgelegd',
+      'pr.tasks': 'Taken afgerond',
+      'pr.tasksub': '{a} van {b} afgerond',
+      'pr.noceiling': 'Geen plafond ingesteld — stel er een in bij Budget.',
+      'pr.of': '{a} van {b}',
+      'pr.ceilsub': '{a} van {b}, na de buffer blijft {c} over',
+      'pr.quoted': '+{a}% op de offerte',
+      'pr.ofcommitted': '{a}% van vastgelegd',
+      'w.title': 'Aandachtspunten',
+      'w.note': 'dingen om in de gaten te houden',
+      'w.empty': 'Nog niets aangemerkt.',
+      'w.add': 'Notitie toevoegen',
+      'w.ph': 'Iets om in de gaten te houden…',
+      'w.del': 'Notitie verwijderen',
+      'un.title': 'Eerstvolgende taken',
+      'un.empty': 'Geen openstaande taken — voeg ze toe bij Taken.',
+      'un.untitled': '(taak zonder naam)',
+      'b.ceiling': 'Plafond',
+      'b.inflation': 'Inflatiebuffer (%)',
+      'b.rate': 'Wisselkoers',
+      'b.rate2': 'Wisselkoers ({a} per {b})',
+      'sp.title': 'Bijdragers',
+      'sp.note': 'roepnamen voor de kolom “rekening van”',
+      'sp.add': 'Bijdrager toevoegen',
+      'sp.code': 'Roepnaam',
+      'sp.who': 'Wie dit is',
+      'sp.del': 'Bijdrager verwijderen',
+      'sp.untitled': 'Naamloos',
+      'sp.unassigned': 'Niet toegewezen',
+      'sp.shared': '(gedeeld)',
+      'sp.none': 'Nog geen bijdragers — voeg er hierboven een toe.',
+      'sp.multi': 'Vink er meer dan één aan voor een gedeelde post.',
+      'c.item': 'Post',
+      'c.unit': 'Stukprijs',
+      'c.qty': 'Aantal',
+      'c.by': 'Rekening van',
+      'c.remarks': 'Opmerkingen',
+      'c.remove': 'Verwijderen',
+      't.totals': 'Totaal',
+      'b.empty': 'Nog geen posten. Voeg hieronder de eerste toe.',
+      'b.add': 'Post toevoegen',
+      'b.reset': 'Kolom- en rijafmetingen herstellen',
+      'b.del': 'Post verwijderen',
+      'b.gripcol': 'Sleep om de kolom breder te maken',
+      'b.griprow': 'Sleep om de rij hoger te maken',
+      'sl.title': 'Wie betaalt wat',
+      'sl.even': 'Gedeelde posten gelijk verdelen over de bijdragers',
+      'k.task': 'Taak',
+      'k.owner': 'Wie',
+      'k.due': 'Deadline',
+      'k.status': 'Status',
+      'k.all': 'Alles',
+      'k.notstarted': 'Nog niet begonnen',
+      'k.inprogress': 'Bezig',
+      'k.done': 'Klaar',
+      'k.add': 'Taak toevoegen',
+      'k.empty': 'Nog geen taken. Voeg hieronder de eerste toe.',
+      'k.nofilter': 'Geen taken met die status.',
+      'k.del': 'Taak verwijderen',
+      'aria.filter': 'Taken filteren op status',
+      'd.export': 'Gegevens exporteren (JSON)',
+      'd.import': 'Gegevens importeren…',
+      'd.exported': '{a} geëxporteerd',
+      'd.exportfail': 'Automatisch exporteren lukte niet — kopieer de JSON uit de console.',
+      'd.imported': '{a} geïmporteerd',
+      'd.notplanner': 'Dat bestand lijkt geen plannergegevens te bevatten.',
+      'd.unreadable': 'Dat bestand kon niet gelezen worden.',
+      'd.confirm': 'Alles wat nu in deze planner staat vervangen door de geïmporteerde gegevens?',
+      'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
+      'ar.reopen': 'Heropenen om te bewerken',
+      'ar.open': 'Weer opengesteld. Sluit de planner zodra alles is afgerekend.',
+      'ar.close': 'Planner sluiten',
+      'ar.settle': 'De eindafrekening',
+      'ar.settlenote': 'wat ieder heeft betaald',
+      'ar.nothing': 'Er is niets vastgelegd.'
+    },
+    id: {
+      'nav.sections': 'Bagian perencana',
+      'tab.overview': 'Ringkasan',
+      'tab.budget': 'Anggaran',
+      'tab.tasks': 'Tugas',
+      'cd.togo': 'hari lagi',
+      'cd.togo1': 'hari lagi',
+      'cd.none': 'tanggal belum diatur',
+      'cd.passed': 'harinya sudah lewat',
+      'cd.closed': 'buku kas sudah ditutup',
+      'fr.title': 'Buku kas masih kosong',
+      'fr.body': 'Perencana ini menyatukan uang dan pekerjaan untuk satu acara: berapa biaya setiap hal, siapa yang menanggungnya, apa yang sudah dibayar dan apa yang masih tersisa. Semuanya tersimpan di browser ini sampai kamu mengekspornya.',
+      'fr.s1': 'Tentukan batas anggaran',
+      'fr.n1': 'Angka yang tidak boleh dilewati oleh total.',
+      'fr.s2': 'Catat siapa yang ikut membayar',
+      'fr.n2': 'Nama panggilan singkat untuk menandai setiap biaya.',
+      'fr.b2': 'Tambah penyumbang',
+      'fr.s3': 'Masukkan biaya pertama',
+      'fr.n3': 'Satu baris per penawaran, dengan jumlah yang sudah dibayar.',
+      'fr.b3': 'Tambah baris anggaran',
+      'f.committed': 'Total biaya',
+      'f.buffer': 'Dengan cadangan',
+      'f.paid': 'Dibayar',
+      'f.outstanding': 'Sisa bayar',
+      'f.headroom': 'Sisa anggaran',
+      'aria.money': 'Ringkasan uang',
+      'aria.totals': 'Total anggaran',
+      'pr.title': 'Kemajuan',
+      'pr.ceiling': 'Total biaya terhadap batas anggaran',
+      'pr.paid': 'Dibayar terhadap total biaya',
+      'pr.tasks': 'Tugas selesai',
+      'pr.tasksub': '{a} dari {b} selesai',
+      'pr.noceiling': 'Batas anggaran belum diatur — atur di tab Anggaran.',
+      'pr.of': '{a} dari {b}',
+      'pr.ceilsub': '{a} dari {b}, tersisa {c} setelah cadangan',
+      'pr.quoted': '+{a}% dari penawaran',
+      'pr.ofcommitted': '{a}% dari total biaya',
+      'w.title': 'Perlu diperhatikan',
+      'w.note': 'hal yang perlu diawasi',
+      'w.empty': 'Belum ada catatan.',
+      'w.add': 'Tambah catatan',
+      'w.ph': 'Sesuatu yang perlu diawasi…',
+      'w.del': 'Hapus catatan',
+      'un.title': 'Berikutnya',
+      'un.empty': 'Tidak ada tugas terbuka — tambahkan di tab Tugas.',
+      'un.untitled': '(tugas tanpa nama)',
+      'b.ceiling': 'Batas anggaran',
+      'b.inflation': 'Cadangan inflasi (%)',
+      'b.rate': 'Kurs',
+      'b.rate2': 'Kurs ({a} per {b})',
+      'sp.title': 'Penyumbang',
+      'sp.note': 'nama panggilan untuk kolom “ditanggung”',
+      'sp.add': 'Tambah penyumbang',
+      'sp.code': 'Nama panggilan',
+      'sp.who': 'Siapa ini',
+      'sp.del': 'Hapus penyumbang',
+      'sp.untitled': 'Tanpa nama',
+      'sp.unassigned': 'Belum ditentukan',
+      'sp.shared': '(patungan)',
+      'sp.none': 'Belum ada penyumbang — tambahkan di atas.',
+      'sp.multi': 'Centang lebih dari satu untuk biaya patungan.',
+      'c.unit': 'Harga satuan',
+      'c.qty': 'Jumlah',
+      'c.by': 'Ditanggung',
+      'c.remarks': 'Catatan',
+      'c.remove': 'Hapus',
+      't.totals': 'Total',
+      'b.empty': 'Belum ada baris anggaran. Tambahkan yang pertama di bawah.',
+      'b.add': 'Tambah baris anggaran',
+      'b.reset': 'Atur ulang ukuran kolom & baris',
+      'b.del': 'Hapus baris anggaran',
+      'b.gripcol': 'Seret untuk mengubah lebar kolom',
+      'b.griprow': 'Seret untuk mengubah tinggi baris',
+      'sl.title': 'Siapa menanggung apa',
+      'sl.even': 'Bagi rata biaya patungan di antara penyumbangnya',
+      'k.task': 'Tugas',
+      'k.owner': 'Siapa',
+      'k.due': 'Tenggat',
+      'k.status': 'Status',
+      'k.all': 'Semua',
+      'k.notstarted': 'Belum mulai',
+      'k.inprogress': 'Sedang dikerjakan',
+      'k.done': 'Selesai',
+      'k.add': 'Tambah tugas',
+      'k.empty': 'Belum ada tugas. Tambahkan yang pertama di bawah.',
+      'k.nofilter': 'Tidak ada tugas dengan status itu.',
+      'k.del': 'Hapus tugas',
+      'aria.filter': 'Saring tugas menurut status',
+      'd.export': 'Ekspor data (JSON)',
+      'd.import': 'Impor data…',
+      'd.exported': '{a} diekspor',
+      'd.exportfail': 'Ekspor otomatis gagal — salin JSON dari konsol.',
+      'd.imported': '{a} diimpor',
+      'd.notplanner': 'Berkas itu sepertinya bukan data perencana.',
+      'd.unreadable': 'Berkas itu tidak bisa dibaca.',
+      'd.confirm': 'Ganti semua isi perencana ini dengan data yang diimpor?',
+      'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
+      'ar.reopen': 'Buka lagi untuk diubah',
+      'ar.open': 'Dibuka lagi untuk diubah. Tutup lagi setelah semuanya beres.',
+      'ar.close': 'Tutup perencana',
+      'ar.settle': 'Perhitungan akhir',
+      'ar.settlenote': 'berapa yang ditanggung tiap orang',
+      'ar.nothing': 'Tidak ada yang tercatat.'
+    }
+  };
+
+  var LANG = (function () {
+    function pick(v) {
+      var tag = String(v || '').toLowerCase().replace(/_/g, '-').split('-')[0];
+      return LANGS.indexOf(tag) !== -1 ? tag : '';
+    }
+    var q = '';
+    try {
+      q = (location.search.match(/[?&]lang=([^&]*)/) || [])[1] || '';
+      q = decodeURIComponent(q);
+    } catch (e) { q = ''; }
+    return pick(q) || pick(CONFIG.language) || pick(CONFIG.locale) || 'en';
+  })();
+
+  // Drives screen-reader pronunciation and hyphenation, so it has to be the
+  // language the page is actually written in rather than the one the server
+  // guessed at template time.
+  document.documentElement.lang = LANG;
+
+  function t(key, vars) {
+    var s = (STRINGS[LANG] || {})[key];
+    if (s === undefined) s = STRINGS.en[key];
+    if (s === undefined) return key;
+    if (!vars) return s;
+    return s.replace(/\{(\w)\}/g, function (m, k) {
+      return k in vars ? vars[k] : m;
+    });
+  }
+
+  /* Static markup carries its own key, so index.html stays readable English
+   * and the table stays the single place a translator works. */
+  function applyStrings() {
+    function each(sel, fn) {
+      Array.prototype.forEach.call(document.querySelectorAll(sel), fn);
+    }
+    each('[data-i18n]', function (el) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    each('[data-i18n-aria]', function (el) {
+      el.setAttribute('aria-label', t(el.getAttribute('data-i18n-aria')));
+    });
+    each('[data-i18n-label]', function (el) {
+      el.setAttribute('data-label', t(el.getAttribute('data-i18n-label')));
+    });
+  }
+
   function uid(prefix) {
     return prefix + Math.random().toString(36).slice(2, 9);
   }
@@ -59,7 +448,11 @@
     if (el) el.textContent = value;
   }
 
-  var DEFAULT_COL_WIDTHS = [230, 110, 70, 135, 110, 135, 135, 230, 40];
+  // Unit is the widest heading once translated — "Stukprijs (EUR)", "Harga
+  // satuan (EUR)" — and a header that ellipses away its currency code is a
+  // header that has stopped saying what the column holds. The width comes off
+  // remarks, which wraps rather than truncating. Total unchanged.
+  var DEFAULT_COL_WIDTHS = [230, 140, 70, 135, 110, 135, 135, 200, 40];
 
   function emptyState() {
     return {
@@ -67,6 +460,10 @@
       inflationPct: 0,
       fxRate: 0,
       splitEvenly: false,
+      // Set once, by hand, from the archive banner. Kept in the planner rather
+      // than in a per-browser preference because reopening a settled event is
+      // a decision about the event, not about the device looking at it.
+      reopened: false,
       colWidths: DEFAULT_COL_WIDTHS.slice(),
       rowHeights: {},
       sponsors: [],
@@ -154,6 +551,7 @@
     if (typeof state.inflationPct !== 'number') state.inflationPct = 0;
     if (typeof state.fxRate !== 'number') state.fxRate = 0;
     if (typeof state.splitEvenly !== 'boolean') state.splitEvenly = false;
+    if (typeof state.reopened !== 'boolean') state.reopened = false;
     if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) {
       state.colWidths = DEFAULT_COL_WIDTHS.slice();
     }
@@ -261,12 +659,12 @@
       el.textContent = CUR;
     });
     var rateField = document.getElementById('rateField');
-    if (!SECONDARY) {
-      if (rateField) rateField.style.display = 'none';
-    } else {
-      var lbl = document.getElementById('rateLabel');
-      if (lbl) lbl.textContent = 'Exchange rate (' + CUR + ' per ' + SECONDARY + ')';
-    }
+    // Set here rather than from a data-i18n key on the element: this label is
+    // the one that composes a translated string with two configured currency
+    // codes, and applyStrings() would flatten it back to the bare phrase.
+    var lbl = document.getElementById('rateLabel');
+    if (lbl) lbl.textContent = SECONDARY ? t('b.rate2', { a: CUR, b: SECONDARY }) : t('b.rate');
+    if (!SECONDARY && rateField) rateField.style.display = 'none';
     if (!SECONDARY) {
       ['mCommittedEur', 'mOutstandingEur'].forEach(function (id) {
         var el = document.getElementById(id);
@@ -315,19 +713,53 @@
     }
   }
 
-  // ---------- Countdown ----------
+  /* ---------- Countdown ----------
+   * daysLeft() is also the whole definition of "after the event": one place
+   * decides what day it is, so the countdown and the archive can never
+   * disagree about whether the evening has happened.
+   */
+  function daysLeft() {
+    if (!EVENT_DATE) return null;
+    // Whole UTC days between two calendar dates, not hours between two
+    // instants. Two things go wrong if this measures instants:
+    //
+    //   - from *local* midnight, the same planner reads a different number of
+    //     days to go on either side of UTC, which is the thing the parsing
+    //     comment above sets out to avoid;
+    //   - against an event date that carries a time — 19:00 for a dinner, the
+    //     realistic configuration here — any rounding is a day out on one side
+    //     or the other. On the evening's own date it would read "1 day to go",
+    //     and the day after it would still read "0".
+    //
+    // Both matter more now that this figure also decides when the ledger
+    // closes: getting it wrong leaves the planner open for a day after the
+    // event, or shuts it on the morning of.
+    var now = new Date();
+    var today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    var day = Date.UTC(EVENT_DATE.getUTCFullYear(), EVENT_DATE.getUTCMonth(), EVENT_DATE.getUTCDate());
+    return Math.round((day - today) / 86400000);
+  }
+
+  // The day itself is not "after": a planner is at its most useful on the
+  // morning of, so the ledger closes the day after the date, not on it.
+  function isPast() {
+    var d = daysLeft();
+    return d !== null && d < 0;
+  }
+  function isArchived() { return isPast() && !state.reopened; }
+
   function renderCountdown() {
-    if (!EVENT_DATE) {
+    var diffDays = daysLeft();
+    if (diffDays === null) {
       setText('daysNum', '–');
-      setText('daysLabel', 'no date set');
+      setText('daysLabel', t('cd.none'));
       setText('statDaysLabel', '');
       return;
     }
-    var today = new Date();
-    today.setHours(0, 0, 0, 0);
-    var diffDays = Math.ceil((EVENT_DATE - today) / 86400000);
     setText('daysNum', diffDays >= 0 ? diffDays : 0);
-    setText('daysLabel', diffDays >= 0 ? 'days to go' : 'the day has passed');
+    setText('daysLabel', diffDays < 0
+      ? (state.reopened ? t('cd.passed') : t('cd.closed'))
+      : (diffDays === 1 ? t('cd.togo1') : t('cd.togo')));
     var when = '';
     try {
       when = new Intl.DateTimeFormat(LOC, {
@@ -352,48 +784,49 @@
   // ---------- Overview ----------
   function renderOverview() {
     var total = state.tasks.length;
-    var done = state.tasks.filter(function (t) { return t.status === 'done'; }).length;
+    var done = state.tasks.filter(function (k) { return k.status === 'done'; }).length;
     var taskPct = total ? Math.round((done / total) * 100) : 0;
     setText('taskBarPct', taskPct + '%');
-    setText('statTasks', done + ' of ' + total + ' done');
+    setText('statTasks', t('pr.tasksub', { a: done, b: total }));
     document.getElementById('taskBarFill').style.width = taskPct + '%';
 
-    var t = totals();
+    var m = totals();
 
     // Exact figures, not compact ones. These four are the same numbers as the
     // budget table's totals row, and a page that shows "€5.7K" in one place
     // and "€5,660" in another is a page nobody trusts to reconcile against.
-    setText('mCommitted', fmtCur(t.total));
-    setText('mCommittedEur', fmtSecondary(t.total));
-    setText('mForecast', fmtCur(Math.round(t.forecast)));
-    setText('mForecastSub', '+' + (Number(state.inflationPct) || 0) + '% on quoted');
-    setText('mPaid', fmtCur(t.paid));
-    setText('mPaidSub', t.total ? Math.round((t.paid / t.total) * 100) + '% of committed' : '');
-    setText('mOutstanding', fmtCur(t.owing));
-    setText('mOutstandingEur', fmtSecondary(t.owing));
+    setText('mCommitted', fmtCur(m.total));
+    setText('mCommittedEur', fmtSecondary(m.total));
+    setText('mForecast', fmtCur(Math.round(m.forecast)));
+    setText('mForecastSub', t('pr.quoted', { a: Number(state.inflationPct) || 0 }));
+    setText('mPaid', fmtCur(m.paid));
+    setText('mPaidSub', m.total ? t('pr.ofcommitted', { a: Math.round((m.paid / m.total) * 100) }) : '');
+    setText('mOutstanding', fmtCur(m.owing));
+    setText('mOutstandingEur', fmtSecondary(m.owing));
 
     var budgetStatEl = document.getElementById('statBudget');
     var budgetFillEl = document.getElementById('budgetBarFill');
 
-    if (t.ceiling > 0) {
-      var pct = Math.round((t.total / t.ceiling) * 100);
+    if (m.ceiling > 0) {
+      var pct = Math.round((m.total / m.ceiling) * 100);
       budgetStatEl.textContent = pct + '%';
       budgetStatEl.classList.toggle('warn', pct > 100);
-      setText('statBudgetSub', fmtShort(t.total) + ' of ' + fmtShort(t.ceiling) +
-        ', leaving ' + fmtShort(t.ceiling - t.forecast) + ' after the buffer');
+      setText('statBudgetSub', t('pr.ceilsub', {
+        a: fmtShort(m.total), b: fmtShort(m.ceiling), c: fmtShort(m.ceiling - m.forecast)
+      }));
       budgetFillEl.style.width = Math.min(pct, 100) + '%';
       budgetFillEl.classList.toggle('over', pct > 100);
     } else {
-      budgetStatEl.textContent = fmtCur(t.total);
+      budgetStatEl.textContent = fmtCur(m.total);
       budgetStatEl.classList.remove('warn');
-      setText('statBudgetSub', 'No ceiling set — set one in the Budget tab.');
+      setText('statBudgetSub', t('pr.noceiling'));
       budgetFillEl.style.width = '0%';
       budgetFillEl.classList.remove('over');
     }
 
-    var paidPct = t.total ? Math.round((t.paid / t.total) * 100) : 0;
+    var paidPct = m.total ? Math.round((m.paid / m.total) * 100) : 0;
     setText('paidBarPct', paidPct + '%');
-    setText('paidBarSub', fmtShort(t.paid) + ' of ' + fmtShort(t.total));
+    setText('paidBarSub', t('pr.of', { a: fmtShort(m.paid), b: fmtShort(m.total) }));
     document.getElementById('paidBarFill').style.width = Math.min(paidPct, 100) + '%';
 
     var upcoming = state.tasks
@@ -413,7 +846,7 @@
     emptyNote.style.display = upcoming.length ? 'none' : 'block';
     upcoming.forEach(function (t3) {
       var li = document.createElement('li');
-      li.appendChild(cell('span', '', t3.name || '(untitled task)'));
+      li.appendChild(cell('span', '', t3.name || t('un.untitled')));
       li.appendChild(cell('span', 'who', t3.owner || ''));
       li.appendChild(cell('span', 'due', t3.due || ''));
       list.appendChild(li);
@@ -445,13 +878,13 @@
       var ta = document.createElement('textarea');
       ta.rows = 2;
       ta.value = note.text || '';
-      ta.placeholder = 'Something to keep an eye on…';
+      ta.placeholder = t('w.ph');
       ta.addEventListener('input', function () {
         state.notes[idx].text = ta.value;
         save();
       });
 
-      var del = delButton('Remove note', function () {
+      var del = delButton(t('w.del'), function () {
         state.notes.splice(idx, 1);
         save();
         renderNotes();
@@ -461,6 +894,7 @@
       row.appendChild(del);
       host.appendChild(row);
     });
+    relock();
     syncEmptyState();
   }
 
@@ -502,21 +936,23 @@
   });
 
   function renderBudgetTotals() {
-    var t = totals();
-    setText('sumTotal', fmtCur(t.total));
-    setText('sumPaid', fmtCur(t.paid));
-    setText('sumOwing', fmtCur(t.owing));
-    // Repeated below the table, which is the copy that survives on a phone
-    // once the grid has been scrolled sideways.
-    setText('sumTotalAlt', fmtCur(t.total));
-    setText('sumOwingAlt', fmtCur(t.owing));
-    setText('sumForecast', fmtCur(Math.round(t.forecast)));
-    setText('sumHeadroom', t.ceiling > 0 ? fmtCur(Math.round(t.ceiling - t.forecast)) : '–');
+    var m = totals();
+    setText('sumTotal', fmtCur(m.total));
+    setText('sumPaid', fmtCur(m.paid));
+    setText('sumOwing', fmtCur(m.owing));
+    // Repeated below the table. On a wide screen the grid scrolls sideways and
+    // takes its own tfoot with it; on a narrow one the buffer and the headroom
+    // are not in the tfoot at all. Either way this is the copy that survives.
+    setText('sumTotalAlt', fmtCur(m.total));
+    setText('sumOwingAlt', fmtCur(m.owing));
+    setText('sumForecast', fmtCur(Math.round(m.forecast)));
+    setText('sumHeadroom', m.ceiling > 0 ? fmtCur(Math.round(m.ceiling - m.forecast)) : '–');
 
     // Rust means outstanding, so it only appears while something is.
     var owingEls = [document.getElementById('sumOwing'), document.getElementById('sumOwingAlt')];
-    owingEls.forEach(function (el) { if (el) el.classList.toggle('owing', t.owing > 0); });
+    owingEls.forEach(function (el) { if (el) el.classList.toggle('owing', m.owing > 0); });
     renderSplit();
+    renderSettlement();
   }
 
   // ---------- Sponsors ----------
@@ -526,9 +962,9 @@
     }
     return null;
   }
-  function sponsorCode(s) { return (s && s.code ? s.code : '').trim() || 'Untitled'; }
+  function sponsorCode(s) { return (s && s.code ? s.code : '').trim() || t('sp.untitled'); }
   function sponsorLabel(s) {
-    if (!s) return 'Unassigned';
+    if (!s) return t('sp.unassigned');
     var n = (s.name || '').trim();
     return n ? sponsorCode(s) + ' — ' + n : sponsorCode(s);
   }
@@ -548,7 +984,7 @@
       var code = document.createElement('input');
       code.type = 'text';
       code.className = 'code-input';
-      code.placeholder = 'Callsign';
+      code.placeholder = t('sp.code');
       code.value = sp.code || '';
       code.addEventListener('input', function () {
         state.sponsors[idx].code = code.value;
@@ -560,7 +996,7 @@
       var name = document.createElement('input');
       name.type = 'text';
       name.className = 'name-input';
-      name.placeholder = 'Who this is';
+      name.placeholder = t('sp.who');
       name.value = sp.name || '';
       name.addEventListener('input', function () {
         state.sponsors[idx].name = name.value;
@@ -572,7 +1008,7 @@
       amt.className = 'sp-amt';
       amt.textContent = fmtCur(sponsorShare(sp.id));
 
-      var del = delButton('Remove sponsor', function () {
+      var del = delButton(t('sp.del'), function () {
         var id = state.sponsors[idx].id;
         state.sponsors.splice(idx, 1);
         state.budgetItems.forEach(function (i) {
@@ -590,6 +1026,7 @@
       row.appendChild(del);
       grid.appendChild(row);
     });
+    relock();
     syncEmptyState();
   }
 
@@ -631,13 +1068,15 @@
       state.budgetItems.forEach(function (i) {
         var ids = i.sponsors || [];
         var tot = lineTotal(i);
-        if (!ids.length) { add('Unassigned', tot); return; }
+        if (!ids.length) { add(t('sp.unassigned'), tot); return; }
         ids.forEach(function (id) { add(sponsorLabel(sponsorById(id)), tot / ids.length); });
       });
     } else {
       state.budgetItems.forEach(function (i) {
         var codes = itemCodes(i);
-        var key = codes.length ? codes.join(' + ') + (codes.length > 1 ? ' (shared)' : '') : 'Unassigned';
+        var key = codes.length
+          ? codes.join(' + ') + (codes.length > 1 ? ' ' + t('sp.shared') : '')
+          : t('sp.unassigned');
         add(key, lineTotal(i));
       });
     }
@@ -660,6 +1099,98 @@
       if (rows[idx]) rows[idx].querySelector('.sp-amt').textContent = fmtCur(sponsorShare(sp.id));
     });
   }
+
+  /* ---------- After the event ----------
+   * A dated, one-shot thing. The day after, this stops being a plan and
+   * becomes the record of what happened, so it reads as one: the closing
+   * figures, who covered what, and no control that implies anything can still
+   * be changed. Recoverable in one deliberate click, because a date in an
+   * environment variable is as likely to be wrong as anything else here — and
+   * because "something still needs settling" is the normal case, not the
+   * exception.
+   *
+   * With no event date configured there is no "after": every branch below is
+   * gated on isPast(), which is false forever when EVENT_DATE is null.
+   */
+  function renderSettlement() {
+    var list = document.getElementById('settleList');
+    if (!list || !isPast()) return;
+
+    // Always split shared lines between the people who share them: the
+    // question this list answers is "what did each person cover", and a joint
+    // line attributed to nobody in particular does not answer it. That is the
+    // same arithmetic as the figure beside each sponsor, so the two agree.
+    var rows = state.sponsors.map(function (sp) {
+      return { label: sponsorLabel(sp), amount: sponsorShare(sp.id) };
+    });
+    var loose = 0;
+    state.budgetItems.forEach(function (i) {
+      if (!(i.sponsors || []).length) loose += lineTotal(i);
+    });
+    if (loose) rows.push({ label: t('sp.unassigned'), amount: Math.round(loose) });
+
+    var grand = totals().total;
+    list.innerHTML = '';
+    rows.sort(function (a, b) { return b.amount - a.amount; }).forEach(function (r) {
+      var li = document.createElement('li');
+      li.appendChild(cell('span', '', r.label));
+      li.appendChild(cell('span', 'amt', fmtCur(r.amount)));
+      li.appendChild(cell('span', 'pct', (grand ? Math.round((r.amount / grand) * 100) : 0) + '%'));
+      list.appendChild(li);
+    });
+    var empty = document.getElementById('settleEmpty');
+    if (empty) empty.style.display = rows.length ? 'none' : 'block';
+  }
+
+  /* readOnly rather than disabled wherever the control supports it: a closed
+   * ledger still has to be readable, selectable and copyable, and a disabled
+   * input is none of those. Selects and checkboxes have no readonly, so those
+   * are disabled outright. */
+  var editingLocked = false;
+
+  function lockEditing(on) {
+    if (!on && !editingLocked) return;
+    editingLocked = on;
+    var wrap = document.querySelector('.wrap');
+    Array.prototype.forEach.call(wrap.querySelectorAll('input, textarea, select'), function (el) {
+      if (el.id === 'importFile') return;
+      if (el.tagName === 'SELECT' || el.type === 'checkbox') el.disabled = on;
+      else el.readOnly = on;
+    });
+    Array.prototype.forEach.call(wrap.querySelectorAll('.by-btn'), function (b) { b.disabled = on; });
+    // Export stays open — an archive nobody can take a copy of is a worse
+    // archive. Import does not: replacing the planner is an edit.
+    var imp = document.getElementById('importData');
+    if (imp) imp.disabled = on;
+  }
+
+  // Rows are rebuilt from scratch on every render, so the lock has to be
+  // re-applied to the new controls. Free when nothing is locked.
+  function relock() { if (editingLocked) lockEditing(true); }
+
+  function applyMode() {
+    var past = isPast();
+    var locked = past && !state.reopened;
+    document.body.classList.toggle('is-archived', locked);
+    document.body.classList.toggle('is-reopened', past && !locked);
+    setText('archiveLine', locked ? t('ar.closed') : t('ar.open'));
+    setText('reopenPlanner', locked ? t('ar.reopen') : t('ar.close'));
+    lockEditing(locked);
+    renderCountdown();
+  }
+
+  (function () {
+    var btn = document.getElementById('reopenPlanner');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      state.reopened = !state.reopened;
+      // Written immediately rather than on the debounce: this is the one
+      // setting someone is likely to change and then close the tab.
+      flushSave();
+      applyMode();
+      renderSettlement();
+    });
+  })();
 
   /* ---------- Cost-by picker ----------
    * The popup is appended to the body, so without moving focus into it a
@@ -706,7 +1237,7 @@
       var none = document.createElement('div');
       none.className = 'pop-note';
       none.style.borderTop = 'none';
-      none.textContent = 'No sponsors yet — add one above.';
+      none.textContent = t('sp.none');
       pop.appendChild(none);
     }
 
@@ -733,7 +1264,7 @@
 
     var note = document.createElement('div');
     note.className = 'pop-note';
-    note.textContent = 'Tick more than one for a shared cost.';
+    note.textContent = t('sp.multi');
     pop.appendChild(note);
 
     pop.tabIndex = -1;
@@ -764,7 +1295,7 @@
 
   function setByLabel(btn, item) {
     var codes = itemCodes(item);
-    btn.textContent = codes.length ? codes.join(' · ') : 'Unassigned';
+    btn.textContent = codes.length ? codes.join(' · ') : t('sp.unassigned');
     btn.classList.toggle('none', !codes.length);
   }
 
@@ -792,7 +1323,7 @@
       if (th.querySelector('.col-grip')) return;
       var grip = document.createElement('div');
       grip.className = 'col-grip';
-      grip.title = 'Drag to resize column';
+      grip.title = t('b.gripcol');
       grip.addEventListener('pointerdown', function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -823,7 +1354,7 @@
   function attachRowGrip(td, tr, item) {
     var grip = document.createElement('div');
     grip.className = 'row-grip';
-    grip.title = 'Drag to resize row';
+    grip.title = t('b.griprow');
     grip.addEventListener('pointerdown', function (e) {
       e.preventDefault();
       e.stopPropagation();
@@ -875,7 +1406,7 @@
     var body = document.getElementById('budgetBody');
     body.innerHTML = '';
     if (!state.budgetItems.length) {
-      emptyRow(body, 9, 'No budget lines yet. Add the first one below.');
+      emptyRow(body, 9, t('b.empty'));
     }
     state.budgetItems.forEach(function (item, idx) {
       var tr = document.createElement('tr');
@@ -942,7 +1473,18 @@
 
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
-      tdDel.appendChild(delButton('Remove budget line', function () {
+      // The column heading travels with the cell. A phone stacks this row into
+      // a card with no header above it, and the label has to come from the
+      // string table rather than from the stylesheet to stay translatable.
+      label(tdUnit, 'c.unit');
+      label(tdQty, 'c.qty');
+      label(tdTotal, 'f.committed');
+      label(tdPaid, 'f.paid');
+      label(tdOwing, 'f.outstanding');
+      label(tdBy, 'c.by');
+      label(tdNote, 'c.remarks');
+      label(tdDel, 'c.remove');
+      tdDel.appendChild(delButton(t('b.del'), function () {
         state.budgetItems.splice(idx, 1);
         save();
         renderBudgetTable();
@@ -965,8 +1507,11 @@
       attachRowGrip(tdItem, tr, item);
       refreshRow(tr, item);
     });
+    relock();
     syncEmptyState();
   }
+
+  function label(td, key) { td.setAttribute('data-label', t(key)); }
 
   function refreshRow(tr, item) {
     var tot = lineTotal(item);
@@ -986,7 +1531,7 @@
 
   // ---------- Tasks ----------
   var currentFilter = 'all';
-  var STATUS_LABELS = { 'not-started': 'Not started', 'in-progress': 'In progress', 'done': 'Done' };
+  var STATUS_KEYS = { 'not-started': 'k.notstarted', 'in-progress': 'k.inprogress', 'done': 'k.done' };
 
   function setFilter(name) {
     currentFilter = name;
@@ -1046,10 +1591,10 @@
       var tdStatus = document.createElement('td');
       var statusSelect = document.createElement('select');
       statusSelect.className = 'status-select';
-      Object.keys(STATUS_LABELS).forEach(function (key) {
+      Object.keys(STATUS_KEYS).forEach(function (key) {
         var opt = document.createElement('option');
         opt.value = key;
-        opt.textContent = STATUS_LABELS[key];
+        opt.textContent = t(STATUS_KEYS[key]);
         if (task.status === key) opt.selected = true;
         statusSelect.appendChild(opt);
       });
@@ -1063,7 +1608,7 @@
 
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
-      tdDel.appendChild(delButton('Remove task', function () {
+      tdDel.appendChild(delButton(t('k.del'), function () {
         state.tasks.splice(idx, 1);
         save();
         renderTasksTable();
@@ -1078,10 +1623,9 @@
       body.appendChild(tr);
     });
     if (!shown) {
-      emptyRow(body, 5, state.tasks.length
-        ? 'No tasks with that status.'
-        : 'No tasks yet. Add the first one below.');
+      emptyRow(body, 5, t(state.tasks.length ? 'k.nofilter' : 'k.empty'));
     }
+    relock();
     syncEmptyState();
   }
 
@@ -1132,6 +1676,7 @@
     renderTasksTable();
     renderNotes();
     renderOverview();
+    applyMode();
   }
 
   function flash(msg) {
@@ -1154,9 +1699,9 @@
       a.click();
       document.body.removeChild(a);
       setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-      flash('Exported ' + filename);
+      flash(t('d.exported', { a: filename }));
     } catch (e) {
-      flash('Could not export automatically — copy the JSON from the console instead.');
+      flash(t('d.exportfail'));
       console.log(json);
     }
   });
@@ -1178,27 +1723,29 @@
       try {
         var incoming = JSON.parse(reader.result);
         if (!incoming || !Array.isArray(incoming.budgetItems) || !Array.isArray(incoming.tasks)) {
-          flash('That file does not look like planner data.');
+          flash(t('d.notplanner'));
           return;
         }
-        if (!window.confirm('Replace everything currently in this planner with the imported data?')) return;
+        if (!window.confirm(t('d.confirm'))) return;
         state = incoming;
         if (!Array.isArray(state.sponsors)) state.sponsors = [];
         if (!Array.isArray(state.notes)) state.notes = [];
         if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) state.colWidths = DEFAULT_COL_WIDTHS.slice();
         if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
         if (typeof state.fxRate !== 'number') state.fxRate = Number(state.eurRate) || 0;
+        if (typeof state.reopened !== 'boolean') state.reopened = false;
         flushSave();
         renderAll();
-        flash('Imported ' + f.name);
+        flash(t('d.imported', { a: f.name }));
       } catch (e) {
-        flash('Could not read that file.');
+        flash(t('d.unreadable'));
       }
     };
     reader.readAsText(f);
   });
 
   // ---------- Init ----------
+  applyStrings();
   renderCountdown();
   initColGrips();
   renderAll();
