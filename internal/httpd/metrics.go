@@ -144,6 +144,7 @@ func routeClass(path string) string {
 var apiRoutes = map[string]string{
 	"plan":              "api-plan",
 	"settings":          "api-settings",
+	"events":            "api-events",
 	"budget-items":      "api-budget-items",
 	"sponsors":          "api-sponsors",
 	"tasks":             "api-tasks",

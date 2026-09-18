@@ -122,6 +122,11 @@ func main() {
 		WriteTimeout:      httpd.WriteTimeout,
 		IdleTimeout:       httpd.IdleTimeout,
 	}
+	// Shutdown closes the listeners and then waits for connections to go idle.
+	// A live-sync stream blocked on its request context never does, so without
+	// this one connected browser turns every SIGTERM into a ten-second hang
+	// followed by a non-zero exit.
+	hs.RegisterOnShutdown(srv.StopLiveSync)
 
 	// The metrics exposition, on a port of its own. The public ingress route
 	// carries no path constraint, so /metrics on the main listener would be
