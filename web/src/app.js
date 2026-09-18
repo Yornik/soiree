@@ -504,6 +504,57 @@
   }
 
   /* ------------------------------------------------------------------
+   * MONEY ARITHMETIC
+   * ------------------------------------------------------------------
+   * The page works in major units as plain numbers, because that is what an
+   * <input type="number"> gives back. Arithmetic does not: every sum below
+   * accumulates whole minor units as integers and converts once at the end.
+   * Adding major-unit floats drifts — 45.33 × 40 is 1813.1999999999998 — and a
+   * budget is the one place a cent per line is not acceptable. It also rides
+   * into the export, which is the copy people keep.
+   *
+   * MINOR_UNIT_EXPONENT mirrors internal/store/money.go and must stay
+   * mirrored. It is NOT ISO 4217 and it is not what Intl reports: IDR is
+   * treated as zero-decimal here, because the sen has not circulated in
+   * decades and no Indonesian price carries one. Intl says 2. Deriving the
+   * exponent from Intl would therefore disagree with the server on precisely
+   * the currency this is deployed with, and every figure would be out by a
+   * factor of a hundred the moment it crossed the wire.
+   * ------------------------------------------------------------------ */
+  var MINOR_UNIT_EXPONENT = {
+    IDR: 0, // see above — deliberately not the ISO 4217 value
+
+    // Zero-decimal per ISO 4217.
+    BIF: 0, CLP: 0, DJF: 0, GNF: 0, ISK: 0, JPY: 0,
+    KMF: 0, KRW: 0, PYG: 0, RWF: 0, UGX: 0, UYI: 0,
+    VND: 0, VUV: 0, XAF: 0, XOF: 0, XPF: 0,
+
+    // Three-decimal per ISO 4217.
+    BHD: 3, IQD: 3, JOD: 3, KWD: 3, LYD: 3, OMR: 3, TND: 3,
+
+    // Four-decimal per ISO 4217.
+    CLF: 4
+  };
+
+  var MONEY_EXP = (function () {
+    var code = String(CONFIG.currency || 'EUR').trim().toUpperCase();
+    // hasOwnProperty rather than a truthiness test: an exponent of 0 is the
+    // interesting case, and `||` would send every zero-decimal currency back
+    // to the two-decimal default.
+    return Object.prototype.hasOwnProperty.call(MINOR_UNIT_EXPONENT, code)
+      ? MINOR_UNIT_EXPONENT[code]
+      : 2;
+  })();
+  var MINOR = Math.pow(10, MONEY_EXP);
+
+  function toMinor(n) {
+    var v = Number(n);
+    if (!isFinite(v)) return 0;
+    return Math.round(v * MINOR);
+  }
+  function toMajor(minor) { return minor / MINOR; }
+
+  /* ------------------------------------------------------------------
    * PERSISTENCE ADAPTER
    * ------------------------------------------------------------------
    * Every read and write of planner data goes through Store. Nothing else in
@@ -641,16 +692,29 @@
     return fmtSecondaryImpl((Number(n) || 0) / rate);
   }
 
-  function lineTotal(i) { return (Number(i.unit) || 0) * (Number(i.qty) || 0); }
+  // Whole minor units. Qty is not money and can carry three decimals, so the
+  // product is rounded back to a whole minor unit here rather than being
+  // carried as a fraction into every sum downstream.
+  function lineTotalMinor(i) {
+    return Math.round(toMinor(i.unit) * (Number(i.qty) || 0));
+  }
+  function lineTotal(i) { return toMajor(lineTotalMinor(i)); }
 
   function totals() {
     var t = 0, p = 0;
     state.budgetItems.forEach(function (i) {
-      t += lineTotal(i);
-      p += Number(i.paid) || 0;
+      t += lineTotalMinor(i);
+      p += toMinor(i.paid);
     });
-    var buffer = t * (1 + (Number(state.inflationPct) || 0) / 100);
-    return { total: t, paid: p, owing: t - p, forecast: buffer, ceiling: Number(state.ceiling) || 0 };
+    var buffer = Math.round(t * (1 + (Number(state.inflationPct) || 0) / 100));
+    return {
+      total: toMajor(t), paid: toMajor(p), owing: toMajor(t - p),
+      forecast: toMajor(buffer), ceiling: Number(state.ceiling) || 0,
+      // The same figure in minor units, for the callers that go on to divide
+      // it between people and would otherwise start their arithmetic from a
+      // float.
+      totalMinor: t
+    };
   }
 
   /* ---------- Static labels driven by config ---------- */
@@ -1030,14 +1094,15 @@
     syncEmptyState();
   }
 
-  // Amount attributed to one sponsor, shared lines divided evenly.
+  // Amount attributed to one sponsor, shared lines divided evenly. Summed in
+  // minor units and converted once, so a dozen shared lines cannot drift.
   function sponsorShare(id) {
     var sum = 0;
     state.budgetItems.forEach(function (i) {
       var ids = i.sponsors || [];
-      if (ids.indexOf(id) !== -1) sum += lineTotal(i) / ids.length;
+      if (ids.indexOf(id) !== -1) sum += lineTotalMinor(i) / ids.length;
     });
-    return Math.round(sum);
+    return Math.round(toMajor(sum));
   }
 
   document.getElementById('addSponsor').addEventListener('click', function () {
@@ -1063,11 +1128,13 @@
       groups[key] += amount;
     }
 
+    // Every amount below is minor units, so the division between sponsors and
+    // the percentages further down all run on integers.
     if (state.splitEvenly) {
       state.sponsors.forEach(function (sp) { add(sponsorLabel(sp), 0); });
       state.budgetItems.forEach(function (i) {
         var ids = i.sponsors || [];
-        var tot = lineTotal(i);
+        var tot = lineTotalMinor(i);
         if (!ids.length) { add(t('sp.unassigned'), tot); return; }
         ids.forEach(function (id) { add(sponsorLabel(sponsorById(id)), tot / ids.length); });
       });
@@ -1077,18 +1144,18 @@
         var key = codes.length
           ? codes.join(' + ') + (codes.length > 1 ? ' ' + t('sp.shared') : '')
           : t('sp.unassigned');
-        add(key, lineTotal(i));
+        add(key, lineTotalMinor(i));
       });
     }
 
     var list = document.getElementById('splitList');
     list.innerHTML = '';
-    var grand = totals().total;
+    var grand = totals().totalMinor;
     order.sort(function (a, b) { return groups[b] - groups[a]; }).forEach(function (k) {
       var li = document.createElement('li');
       var share = grand ? Math.round((groups[k] / grand) * 100) : 0;
       li.appendChild(cell('span', '', k));
-      li.appendChild(cell('span', 'amt', fmtCur(Math.round(groups[k]))));
+      li.appendChild(cell('span', 'amt', fmtCur(Math.round(toMajor(groups[k])))));
       li.appendChild(cell('span', 'pct', share + '%'));
       list.appendChild(li);
     });
@@ -1125,9 +1192,9 @@
     });
     var loose = 0;
     state.budgetItems.forEach(function (i) {
-      if (!(i.sponsors || []).length) loose += lineTotal(i);
+      if (!(i.sponsors || []).length) loose += lineTotalMinor(i);
     });
-    if (loose) rows.push({ label: t('sp.unassigned'), amount: Math.round(loose) });
+    if (loose) rows.push({ label: t('sp.unassigned'), amount: Math.round(toMajor(loose)) });
 
     var grand = totals().total;
     list.innerHTML = '';
