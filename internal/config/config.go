@@ -56,6 +56,13 @@ type Config struct {
 	Ceiling  int64
 	DemoData bool
 
+	// AllowIndexing opts this deployment in to search engines. Off by default,
+	// and the default is the interesting part: a planner holds people's names
+	// against amounts of money they owe each other, and none of them chose to
+	// publish that. Opting in should be a decision somebody made, not the
+	// consequence of never having thought about it.
+	AllowIndexing bool
+
 	// BaseURL is the origin this deployment is reached at, e.g.
 	// https://soiree.example.test. Set-password links are built from it and
 	// never from the request's Host header: a Host header is attacker-supplied,
@@ -183,6 +190,14 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("SOIREE_BUDGET_CEILING must not be negative, got %d", n)
 		}
 		c.Ceiling = n
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SOIREE_ALLOW_INDEXING")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("SOIREE_ALLOW_INDEXING must be a boolean, got %q", v)
+		}
+		c.AllowIndexing = b
 	}
 
 	if v := strings.TrimSpace(os.Getenv("SOIREE_DEMO_DATA")); v != "" {

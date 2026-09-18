@@ -410,3 +410,55 @@ func TestSecurityHeaders(t *testing.T) {
 		}
 	}
 }
+
+// Not indexed unless somebody says so. A planner holds names against amounts
+// of money they owe each other, and none of those people chose to publish it.
+func TestNotIndexedByDefault(t *testing.T) {
+	h := newTestServer(t, config.Config{EventName: "X"})
+
+	res := get(t, h, "/robots.txt", nil)
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("/robots.txt -> %d", res.StatusCode)
+	}
+	if !strings.Contains(string(body), "Disallow: /") {
+		t.Errorf("robots.txt does not disallow: %q", body)
+	}
+	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want text/plain", ct)
+	}
+
+	// robots.txt only asks. The header is what keeps a page that was fetched
+	// anyway — from a link, a referrer log, a shared screenshot — out of an
+	// index, so it has to be on every response rather than just that one.
+	for _, path := range []string{"/", "/robots.txt", "/healthz"} {
+		r := get(t, h, path, nil)
+		_ = r.Body.Close()
+		if got := r.Header.Get("X-Robots-Tag"); got != "noindex, nofollow" {
+			t.Errorf("%s X-Robots-Tag = %q, want noindex", path, got)
+		}
+	}
+}
+
+func TestIndexingCanBeAllowed(t *testing.T) {
+	h := newTestServer(t, config.Config{EventName: "X", AllowIndexing: true})
+
+	res := get(t, h, "/robots.txt", nil)
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	if !strings.Contains(string(body), "Allow: /") {
+		t.Errorf("robots.txt does not allow: %q", body)
+	}
+	if strings.Contains(string(body), "Disallow") {
+		t.Errorf("robots.txt still disallows: %q", body)
+	}
+
+	r := get(t, h, "/", nil)
+	_ = r.Body.Close()
+	if got := r.Header.Get("X-Robots-Tag"); got != "" {
+		t.Errorf("X-Robots-Tag = %q, want it absent when indexing is allowed", got)
+	}
+}

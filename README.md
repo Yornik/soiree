@@ -47,6 +47,7 @@ Then open <http://localhost:8080>.
 | `SOIREE_SECONDARY_LOCALE` | *primary locale* | Formatting for the second currency |
 | `SOIREE_BUDGET_CEILING` | `0` | Starting spending ceiling |
 | `SOIREE_DEMO_DATA` | `false` | Seed obviously-fake sample data |
+| `SOIREE_ALLOW_INDEXING` | `false` | Let search engines index the site. Off by default: a planner holds people's names against money they owe, and none of them chose to publish it. While off, `robots.txt` disallows everything **and** every response carries `X-Robots-Tag: noindex, nofollow` — the header matters because `robots.txt` only asks, and says nothing to a crawler that already has the URL from a link or a shared screenshot. |
 | `SOIREE_BOOTSTRAP_ADMIN` | *(unset)* | Email address that becomes the first admin on an empty database. Ignored once any admin exists. |
 | `SOIREE_BOOTSTRAP_PASSWORD` | *(unset)* | Gives that first admin a password so they can log in without waiting for mail. At least 12 characters. Also ignored once an admin exists — safe to leave set. |
 | `SOIREE_LISTEN_ADDR` | `:8080` | Bind address for the site |

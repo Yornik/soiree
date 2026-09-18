@@ -43,6 +43,9 @@ type Server struct {
 
 	// auth is the accounts surface, nil when the deployment has no database.
 	auth *Auth
+
+	// robots is rendered once from the configuration, like the shell.
+	robots *Asset
 }
 
 // WithAuth attaches the accounts, sessions and roles surface.
@@ -85,6 +88,7 @@ func New(cfg config.Config, srcFS fs.FS, opts ...Option) (*Server, error) {
 	if err := s.renderServiceWorker(srcFS); err != nil {
 		return nil, err
 	}
+	s.renderRobots()
 	return s, nil
 }
 
@@ -172,6 +176,19 @@ func (s *Server) renderServiceWorker(srcFS fs.FS) error {
 	return nil
 }
 
+// renderRobots builds robots.txt from the configuration.
+//
+// The disallowing form names no paths and no crawlers: a list of paths worth
+// excluding is a map of where to look, and naming individual bots means
+// maintaining a list that is out of date the week it is written.
+func (s *Server) renderRobots() {
+	body := "User-agent: *\nDisallow: /\n"
+	if s.cfg.AllowIndexing {
+		body = "User-agent: *\nAllow: /\n"
+	}
+	s.robots = NewDocument("robots.txt", []byte(body))
+}
+
 // Handler returns the routed handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -212,9 +229,11 @@ func (s *Server) Handler() http.Handler {
 		s.auth.Register(mux)
 	}
 
+	mux.HandleFunc("/robots.txt", s.serveRobots)
+
 	mux.HandleFunc("/", s.serveIndex)
 
-	return securityHeaders(s.metrics.instrument(mux))
+	return securityHeaders(s.cfg.AllowIndexing)(s.metrics.instrument(mux))
 }
 
 // MetricsHandler returns the handler for the private metrics listener.
@@ -260,14 +279,39 @@ func (s *Server) serveReadyz(w http.ResponseWriter, r *http.Request) {
 // securityHeaders sets the headers that do not depend on the reverse proxy.
 // HSTS and CSP are applied at the ingress in the deployed setup, but a bare
 // `docker run` should not be wide open either.
-func securityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("X-Frame-Options", "DENY")
-		next.ServeHTTP(w, r)
-	})
+func securityHeaders(allowIndexing bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "no-referrer")
+			h.Set("X-Frame-Options", "DENY")
+
+			// robots.txt is a request, not a control: it asks a crawler not to
+			// fetch, and says nothing to one that already has the URL from a
+			// link, a referrer log or a shared screenshot. X-Robots-Tag is the
+			// instruction that keeps a page out of an index once it has been
+			// fetched anyway, which is the case that matters here.
+			if !allowIndexing {
+				h.Set("X-Robots-Tag", "noindex, nofollow")
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// serveRobots answers crawlers.
+//
+// Served from here rather than as a static asset because it is the one file
+// whose content depends on configuration, and because it must live at a fixed
+// path: a content-addressed /assets/robots.<hash>.txt is not a place any
+// crawler looks.
+func (s *Server) serveRobots(w http.ResponseWriter, r *http.Request) {
+	// Short, not immutable. Flipping SOIREE_ALLOW_INDEXING should take effect
+	// in an hour rather than whenever a crawler happens to forget.
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	serveBody(w, r, "text/plain; charset=utf-8", s.robots.ETag,
+		s.robots.Raw, s.robots.Gzip, s.robots.Brotli)
 }
 
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
