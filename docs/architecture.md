@@ -77,8 +77,9 @@ the worker is a script, so they go through `text/template`, and every value
 they take is written with the `json` template function. Do not move them to
 `html/template`: it escapes a template's own text as the text of a page, and a
 `<` in the worker reaches the browser as `&lt;`, which is a syntax error that
-no server-side check reports. `e2e/tests/service-worker.spec.js` is the one
-spec that runs a real worker, and it is there for this.
+no server-side check reports. Only a browser that runs the worker finds it:
+`e2e/tests/service-worker.spec.js` does, and so does the test of the reminders
+switch in `api.spec.js`; every other spec blocks service workers.
 
 Every text asset is gzip- and brotli-compressed once at startup, and a
 compressed variant is kept only when it is actually smaller. `woff2` is skipped
@@ -1262,19 +1263,42 @@ device already holds on every load so that a restored database gets its devices
 back. `web/src/sw.js` handles `push` and `notificationclick`: it always shows a
 notification, because the subscription is `userVisibleOnly`, replaces the
 previous digest rather than stacking on it by reusing the `tag`, and brings an
-open planner to the front rather than opening a second one. The payload's four
+open planner to the front rather than opening a second one — without navigating
+it, when it is already the planner: every screen is a fragment of one page, the
+digest opens `/`, and navigating from a fragment to `/` is a reload that takes
+somebody's half-typed form with it. The payload's four
 fields (`title`, `body`, `url`, `tag`) are a contract between the server and
 that handler: adding a field is safe, renaming one is not.
 
 The offer is a good moment to ask and a bad thing to depend on, so the account
 screen has the standing switch: on, off, and an honest line when neither is
-possible — the browser has no Push API, or its prompt was refused and only its
-own site settings can undo that. `app.js` owns what the switch does
-(`window.soiree.push`: `state`, `enable`, `disable`) and `auth.js` only draws
-it, for admins alone, because `NotifiablePushSubscriptions` sends to active
-admins alone and a switch connected to nothing is worse than none. Turning off
-tells the server first and the browser second: the other order leaves a row the
-digest keeps sending to until the push service reports it gone.
+possible. `app.js` owns what the switch does (`window.soiree.push`: `state`,
+`enable`, `disable`, `why`) and `auth.js` only draws it, for admins alone,
+because `NotifiablePushSubscriptions` sends to active admins alone and a switch
+connected to nothing is worse than none. Turning off tells the server first and
+the browser second: the other order leaves a row the digest keeps sending to
+until the push service reports it gone.
+
+"Honest" is one sentence per situation, and that was learnt the hard way. There
+used to be one sentence — this browser cannot receive notifications, and on an
+iPhone add the page to the Home Screen — for everything that was not on, off or
+blocked, including a wait on `navigator.serviceWorker.ready` that ran out. For
+three releases the worker did not parse, so that wait always ran out, and Chrome
+on a Windows PC was sent to look for a Home Screen. The states now keep apart
+what the browser lacks from what this site failed to do:
+
+| state | what is true | what is said |
+|---|---|---|
+| `unsupported` | no `serviceWorker`, `PushManager` or `Notification` | by `why`: Safari tab on iOS (Home Screen, step by step), another browser or an in-app one on iOS (open in Safari first), a Home Screen app that still has none (iOS older than 16.4), plain http, or any other browser (say so; a private window is the usual reason) |
+| `starting` | the browser can; no worker is active yet | still being set up — and `soiree:push` redraws the switch when `ready` settles, however long that takes |
+| `noworker` | the browser can; `register()` rejected | a security error is the browser blocking site data; anything else is this site's fault and is said to be |
+| `blocked` | permission is `denied` | how to allow it again: the address bar, Safari's settings, or the phone's Settings for a Home Screen app |
+| `refused` | permission given, `subscribe()` rejected | push is switched off in the browser — Brave until its setting is on |
+
+`why` reads the user-agent string for one thing, whether this is an iPhone or
+iPad (an iPad says it is a Mac; a Mac has no touch screen), because a Safari tab
+there and an old desktop browser lack exactly the same things and need opposite
+advice. Everything else is a feature check.
 
 #### The reminder digest
 

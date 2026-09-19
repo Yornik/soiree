@@ -33,7 +33,7 @@
  *    same collision by another route.
  */
 const fs = require('fs/promises');
-const { test, expect } = require('@playwright/test');
+const { test, expect, chromium } = require('@playwright/test');
 const {
   API_URL,
   STORAGE_KEY,
@@ -951,9 +951,9 @@ test('signing out with changes that never reached the server asks first', async 
  * with a 404 to keep its pages out of the shared plan. A page told there is no
  * API rightly draws no switch for a feature that needs one.
  */
-async function stubPush(page) {
-  await page.addInitScript(() => {
-    const state = { sub: null, permission: 'default' };
+async function stubPush(page, { permission = 'default', subscribes = true } = {}) {
+  await page.addInitScript((opts) => {
+    const state = { sub: null, permission: opts.permission };
     const made = {
       endpoint: 'https://push.example.test/send/e2e-device',
       unsubscribe: async () => { state.sub = null; return true; },
@@ -964,7 +964,13 @@ async function stubPush(page) {
     const reg = {
       pushManager: {
         getSubscription: async () => state.sub,
-        subscribe: async () => { state.sub = made; return made; },
+        subscribe: async () => {
+          // What Brave does until its push setting is on, and any browser with
+          // no push service behind it: permission granted, and then this.
+          if (!opts.subscribes) throw new DOMException('Registration failed - push service not available', 'AbortError');
+          state.sub = made;
+          return made;
+        },
       },
     };
     Object.defineProperty(navigator, 'serviceWorker', {
@@ -973,10 +979,13 @@ async function stubPush(page) {
     });
     window.PushManager = window.PushManager || function PushManager() {};
     function FakeNotification() {}
-    FakeNotification.requestPermission = async () => { state.permission = 'granted'; return 'granted'; };
+    FakeNotification.requestPermission = async () => {
+      if (state.permission === 'default') state.permission = 'granted';
+      return state.permission;
+    };
     Object.defineProperty(FakeNotification, 'permission', { get: () => state.permission });
     window.Notification = FakeNotification;
-  });
+  }, { permission, subscribes });
 }
 
 test('an admin can turn reminders on for a device, and off again, from their account', async ({ page }) => {
@@ -1012,6 +1021,265 @@ test('somebody the digest is never sent to is not offered a switch for it', asyn
   await page.goto('/#/account');
   await expect(page.locator('#signOutBtn')).toBeVisible();
   await expect(page.locator('#remindersSection')).toBeHidden();
+});
+
+/*
+ * What the switch says when it cannot be one.
+ *
+ * It had a single sentence for that — "This browser cannot receive
+ * notifications from a web page. On an iPhone, add this page to the Home
+ * Screen first" — and showed it for everything that was not on, off or
+ * blocked. The person who reported it was reading it in Chrome on a Windows
+ * PC, where none of it was true: the browser could, and the service worker the
+ * server handed out did not parse (internal/httpd renders it; see
+ * TestServiceWorkerIsServedAsWritten), so `ready` never settled and the wait
+ * on it was reported as the browser's shortcoming.
+ *
+ * The stubbed tests above cannot see any of that, because a stub is always
+ * ready. These let the real worker register, which the suite otherwise blocks
+ * (playwright.config.js; service-worker.spec.js is the worker's own spec, and
+ * these are here because they need an admin and so a database).
+ *
+ * In the full Chromium rather than the headless shell the rest of the suite
+ * runs in, and for one reason: the shell reports Notification.permission as
+ * "denied" whatever the context was granted, so every page in it is "blocked"
+ * before the worker is ever asked about. `playwright install chromium` fetches
+ * both.
+ */
+const SAYS_CANNOT = /cannot receive|Home Screen|iPhone/;
+
+let fullChromium = null;
+test.afterAll(async () => {
+  if (fullChromium) await fullChromium.close();
+  fullChromium = null;
+});
+
+async function accountWithRealWorker(before) {
+  fullChromium = fullChromium || await chromium.launch({ channel: 'chromium' });
+  const context = await fullChromium.newContext({ baseURL: API_URL, serviceWorkers: 'allow', permissions: ['notifications'] });
+  const page = await context.newPage();
+  if (before) await before(page);
+  await openSharedPlanner(page, '/#/account');
+  return { context, page };
+}
+
+test('a browser that can receive reminders is offered the switch, with the real service worker behind it', async () => {
+  // Opened straight at the account screen, which is the load where the screen
+  // asks before anything else has happened.
+  const { context, page } = await accountWithRealWorker();
+  try {
+    const line = page.locator('#remindersState');
+    await expect(line).toHaveText('Reminders are off on this device.', { timeout: 15_000 });
+    await expect(page.locator('#remindersToggle')).toBeVisible();
+    await expect(page.locator('#remindersToggle')).toHaveText('Turn on');
+    // The worker itself, not a stand-in for it: active, and the one with the
+    // push handler in it.
+    const worker = await page.evaluate(() => navigator.serviceWorker.ready.then((reg) => reg.active && reg.active.scriptURL));
+    expect(worker).toBe(`${API_URL}/sw.js`);
+
+    // And as far as turning it on goes without a push service, which a test
+    // browser does not have: the real permission, the real worker, the real
+    // subscribe() with this run's VAPID key — refused by the browser with
+    // "Registration failed". That is exactly the refusal Brave gives until its
+    // setting is on, and it used to be answered with "Try again".
+    await page.click('#remindersToggle');
+    await expect(line).toHaveText(/this browser could not turn reminders on/, { timeout: 15_000 });
+    await expect(page.locator('#remindersToggle')).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
+test('a service worker that is slow to start is waited for, not called a browser that cannot', async () => {
+  // A first visit on a slow line: the worker has eleven files to fetch before
+  // it is active, and the account screen asks once, three seconds in. Held
+  // here rather than slowed, so that nothing in the test is a clock.
+  const { context, page } = await accountWithRealWorker((p) => p.addInitScript(() => {
+    const real = ServiceWorkerContainer.prototype.register;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    window.__releaseWorker = release;
+    ServiceWorkerContainer.prototype.register = function register(...args) {
+      return held.then(() => real.apply(this, args));
+    };
+  }));
+  try {
+    const line = page.locator('#remindersState');
+    await expect(line).toHaveText(/still being set up/, { timeout: 15_000 });
+    await expect(line).not.toHaveText(SAYS_CANNOT);
+    await expect(line).not.toHaveClass(/is-refusal/);
+    await expect(page.locator('#remindersToggle')).toBeHidden();
+
+    // And the verdict is revisited: nobody reloads, the worker arrives, and
+    // the switch is drawn.
+    await page.evaluate(() => window.__releaseWorker());
+    await expect(line).toHaveText('Reminders are off on this device.', { timeout: 15_000 });
+    await expect(page.locator('#remindersToggle')).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
+for (const [name, error, sentence] of [
+  ['set to block site data', ['SecurityError', 'The operation is insecure.'], /did not let the page set up reminders.*cookies and site data/],
+  ['handed a worker that does not run', ['TypeError', 'ServiceWorker script evaluation failed'], /could not start on this device.*fault is with this site/],
+  // Registered, and then the install fails: nothing rejects at all.
+  ['whose worker registers and then fails to install', ['redundant', ''], /could not start on this device.*fault is with this site/],
+]) {
+  test(`a browser ${name} is told that, and not that it cannot receive notifications`, async () => {
+    const { context, page } = await accountWithRealWorker((p) => p.addInitScript(([kind, message]) => {
+      ServiceWorkerContainer.prototype.register = function register() {
+        if (kind === 'redundant') {
+          // Fails the moment somebody is listening, so there is no order of
+          // events for the page to win or lose.
+          const installing = new EventTarget();
+          installing.state = 'installing';
+          const listen = installing.addEventListener.bind(installing);
+          installing.addEventListener = (type, fn) => {
+            listen(type, fn);
+            queueMicrotask(() => {
+              installing.state = 'redundant';
+              installing.dispatchEvent(new Event('statechange'));
+            });
+          };
+          return Promise.resolve({ active: null, waiting: null, installing });
+        }
+        return Promise.reject(kind === 'TypeError' ? new TypeError(message) : new DOMException(message, kind));
+      };
+    }, error));
+    try {
+      const line = page.locator('#remindersState');
+      await expect(line).toHaveText(sentence, { timeout: 15_000 });
+      await expect(line).not.toHaveText(SAYS_CANNOT);
+      await expect(page.locator('#remindersToggle')).toBeHidden();
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+/*
+ * And the browsers that really cannot, each told the thing that is true of it.
+ *
+ * Nothing here is an iPhone: it is Chromium with an iPhone's user-agent string
+ * and the three things iOS leaves out of a Safari tab taken away, which is all
+ * the page has to go on as well.
+ */
+const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)';
+const DEVICES = [{
+  name: 'Safari on an iPhone, in a tab',
+  userAgent: `${IPHONE} Version/17.5 Mobile/15E148 Safari/604.1`,
+  says: /on the Home Screen\. Tap the Share button.*Add to Home Screen.*open the planner from its new icon/,
+}, {
+  name: 'an iPad, which says it is a Mac',
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+  touchPoints: 5,
+  says: /on the Home Screen\. Tap the Share button/,
+}, {
+  name: 'Chrome on an iPhone',
+  userAgent: `${IPHONE} CriOS/126.0.6478.54 Mobile/15E148 Safari/604.1`,
+  says: /^On an iPhone or iPad, reminders start in Safari\. Open this page in Safari/,
+}, {
+  name: 'a link opened inside another app on an iPhone',
+  userAgent: `${IPHONE} Mobile/15E148`,
+  says: /^On an iPhone or iPad, reminders start in Safari\./,
+}, {
+  name: 'the Home Screen app on an iOS older than 16.4',
+  userAgent: `${IPHONE} Version/16.3 Mobile/15E148 Safari/604.1`,
+  standalone: true,
+  says: /needs iOS 16\.4 or newer/,
+}, {
+  name: 'a Mac whose Safari is too old, which is not an iPad',
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Safari/605.1.15',
+  touchPoints: 0,
+  says: /^This browser cannot receive reminders from a web page\./,
+  never: /iPhone|iPad|Home Screen/,
+}, {
+  name: 'a Windows PC whose browser has no Push API',
+  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+  says: /^This browser cannot receive reminders from a web page\. If this is a private window/,
+  never: /iPhone|iPad|Home Screen/,
+}];
+
+for (const device of DEVICES) {
+  test(`reminders, to ${device.name}, say what is true there`, async ({ browser }) => {
+    const context = await browser.newContext({ baseURL: API_URL, serviceWorkers: 'block', userAgent: device.userAgent });
+    const page = await context.newPage();
+    await page.addInitScript((d) => {
+      for (const gone of ['PushManager', 'Notification']) {
+        delete window[gone];
+        if (window[gone]) Object.defineProperty(window, gone, { configurable: true, value: undefined });
+      }
+      if (d.touchPoints !== undefined) Object.defineProperty(Navigator.prototype, 'maxTouchPoints', { configurable: true, get: () => d.touchPoints });
+      if (d.standalone) Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true });
+    }, { touchPoints: device.touchPoints, standalone: device.standalone });
+    try {
+      await openSharedPlanner(page, '/#/account');
+      const line = page.locator('#remindersState');
+      await expect(line).toHaveText(device.says);
+      if (device.never) await expect(line).not.toHaveText(device.never);
+      await expect(line).toHaveClass(/is-refusal/);
+      await expect(page.locator('#remindersToggle')).toBeHidden();
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+test('blocked notifications come with the way to unblock them, which is not the same on an iPhone', async ({ page, browser }) => {
+  await stubPush(page, { permission: 'denied' });
+  await openSharedPlanner(page, '/#/account');
+  await expect(page.locator('#remindersState')).toHaveText(/^Notifications are blocked for this site\. Click or tap the icon at the start of the address bar.*choose Allow/);
+  await expect(page.locator('#remindersToggle')).toBeHidden();
+
+  // There is no address bar in a Home Screen app, and no site settings: the
+  // switch is in the phone's own Settings.
+  const context = await browser.newContext({ baseURL: API_URL, serviceWorkers: 'block', userAgent: `${IPHONE} Version/17.5 Mobile/15E148 Safari/604.1` });
+  const phone = await context.newPage();
+  try {
+    await stubPush(phone, { permission: 'denied' });
+    await phone.addInitScript(() => Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true }));
+    await openSharedPlanner(phone, '/#/account');
+    await expect(phone.locator('#remindersState')).toHaveText(/^Notifications are turned off for this app\. Open the Settings app, tap Notifications/);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a browser that says yes and then will not subscribe is told where to look, not to try again', async ({ page }) => {
+  await stubPush(page, { subscribes: false });
+  await openSharedPlanner(page, '/#/account');
+  await expect(page.locator('#remindersState')).toHaveText('Reminders are off on this device.');
+  await page.click('#remindersToggle');
+  await expect(page.locator('#remindersState')).toHaveText(/this browser could not turn reminders on.*switched off in its settings/);
+  // Still there: the setting is changed elsewhere and this is what to press after.
+  await expect(page.locator('#remindersToggle')).toBeVisible();
+  await expect(page.locator('#remindersToggle')).toHaveText('Turn on');
+  // Pressed again with nothing changed, it says the same and not "try again".
+  await page.click('#remindersToggle');
+  await expect(page.locator('#remindersToggle')).toBeEnabled();
+  await expect(page.locator('#remindersState')).toHaveText(/switched off in its settings/);
+});
+
+test('the one-time offer only says "blocked" when that is what happened', async ({ page }) => {
+  // It said it for everything that was not "on", so a browser with push
+  // switched off sent somebody to a notification setting that was fine.
+  await stubPush(page, { subscribes: false });
+  let planReads = 0;
+  page.on('response', (res) => {
+    if (res.url().endsWith('/api/v1/plan') && res.status() === 200) planReads += 1;
+  });
+  await openSharedPlanner(page);
+  // Both of a load's reads, so the row below is not redrawn under the click.
+  await expect.poll(() => planReads, { message: 'the adopt and the post-subscribe resync' }).toBeGreaterThanOrEqual(2);
+
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Confirm the caterer', due: '2030-05-01' });
+  const offer = page.locator('p.empty-note', { hasText: 'Want a reminder here' });
+  await expect(offer).toBeVisible();
+  await offer.getByRole('button', { name: 'Turn on' }).click();
+
+  await expect(page.locator('#dataMsg')).toHaveText('Reminders are not on yet. “Your account” has the switch, and says what is in the way.');
 });
 
 /*

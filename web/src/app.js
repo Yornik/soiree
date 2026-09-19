@@ -284,7 +284,8 @@
       'n.on': 'Turn on',
       'n.later': 'Not now',
       'n.done': 'Reminders are on for this device.',
-      'n.no': 'Notifications are blocked for this site. Your browser’s site settings can undo that.'
+      'n.no': 'Notifications are blocked for this site. Your browser’s site settings can undo that.',
+      'n.why': 'Reminders are not on yet. “Your account” has the switch, and says what is in the way.'
     },
     nl: {
       'nav.sections': 'Onderdelen van de planner',
@@ -428,7 +429,8 @@
       'n.on': 'Aanzetten',
       'n.later': 'Nu niet',
       'n.done': 'Herinneringen staan aan op dit apparaat.',
-      'n.no': 'Meldingen zijn geblokkeerd voor deze site. Dat kun je terugdraaien bij de site-instellingen van je browser.'
+      'n.no': 'Meldingen zijn geblokkeerd voor deze site. Dat kun je terugdraaien bij de site-instellingen van je browser.',
+      'n.why': 'Herinneringen staan nog niet aan. Bij “Je account” vind je de schakelaar, en wat er in de weg zit.'
     },
     id: {
       'nav.sections': 'Bagian perencana',
@@ -571,7 +573,8 @@
       'n.on': 'Nyalakan',
       'n.later': 'Nanti saja',
       'n.done': 'Pengingat aktif di perangkat ini.',
-      'n.no': 'Notifikasi diblokir untuk situs ini. Kamu bisa membatalkannya di pengaturan situs browser.'
+      'n.no': 'Notifikasi diblokir untuk situs ini. Kamu bisa membatalkannya di pengaturan situs browser.',
+      'n.why': 'Pengingat belum aktif. Di “Akunmu” ada tombolnya, dan penjelasan apa yang menghalangi.'
     }
   };
 
@@ -4190,28 +4193,70 @@
 
   /* Turning reminders on and off, for the one-time offer below and for the
    * standing control on the account screen (auth.js draws it; this owns what
-   * it does). Five states:
+   * it does). The states:
    *
    *   unavailable — no VAPID key or no API. Not this deployment's feature;
    *                 nothing should be drawn at all.
-   *   unsupported — the browser has no Push API. On an iPhone that means the
-   *                 page is in a Safari tab rather than on the Home Screen.
+   *   unsupported — the browser has no Push API, and that is all it means. On
+   *                 an iPhone the page is in a Safari tab rather than on the
+   *                 Home Screen; anywhere else the browser is old, or private.
+   *   starting    — the browser can, and the service worker is not active yet.
+   *                 A first visit has to fetch and install it, which on a slow
+   *                 line outlasts the wait below. Not a verdict: `soiree:push`
+   *                 is dispatched when that changes and the switch is redrawn.
+   *   noworker    — the browser can, and the service worker did not register.
    *   blocked     — the person said no to the browser's prompt. Only the
    *                 browser's own site settings can undo that.
+   *   refused     — enable() only: permission was given and the browser still
+   *                 would not subscribe. Brave, until its push setting is on.
    *   off, on     — whether this device holds a subscription.
+   *
+   * "starting" and "noworker" used to be reported as "unsupported", which is
+   * how desktop Chrome came to be told it cannot receive notifications and to
+   * try an iPhone's Home Screen: the worker the server handed out did not
+   * parse, register() rejected into a catch that said nothing, and `ready`
+   * never settled. Whatever is wrong with the worker is this site's problem or
+   * a setting's, and the sentence has to be able to say which.
    *
    * `ready` never settles on a page whose service worker did not register, so
    * everything that waits on it is bounded: a control that spins for ever is
    * worse than one that says it cannot.
    */
+  var swProblem = '';   // '' | 'storage' | 'failed', from register() rejecting
+  var swGaveUp;         // settles swRejected, which is the only way it settles
+  var swRejected = new Promise(function (resolve) { swGaveUp = resolve; });
+
   function pushRegistration() {
     return new Promise(function (resolve) {
       var done = false;
       function finish(reg) { if (!done) { done = true; resolve(reg || null); } }
+      if (swProblem) { finish(null); return; }
       setTimeout(function () { finish(null); }, 3000);
+      // A rejection that arrives during the wait ends it: there is nothing
+      // left to wait for.
+      swRejected.then(function () { finish(null); });
       try { navigator.serviceWorker.ready.then(finish, function () { finish(null); }); }
       catch (e) { finish(null); }
     });
+  }
+
+  var pushWatching = false;
+
+  // Not ready within the bound is not the same as never. Keep waiting, without
+  // one, and say so when the answer changes — either way it goes.
+  function pushStarting() {
+    if (!pushWatching) {
+      pushWatching = true;
+      var changed = function () {
+        if (!pushWatching) return;
+        pushWatching = false;
+        document.dispatchEvent(new CustomEvent('soiree:push'));
+      };
+      swRejected.then(changed);
+      try { navigator.serviceWorker.ready.then(changed, function () { /* stays as it is */ }); }
+      catch (e) { /* stays as it is */ }
+    }
+    return 'starting';
   }
 
   function pushState() {
@@ -4226,9 +4271,59 @@
     }
     if (Notification.permission === 'denied') return Promise.resolve('blocked');
     return pushRegistration().then(function (reg) {
-      if (!reg) return 'unsupported';
+      if (!reg) return swProblem ? 'noworker' : pushStarting();
       return reg.pushManager.getSubscription().then(function (sub) { return sub ? 'on' : 'off'; });
     }).catch(function () { return 'off'; });
+  }
+
+  /* Why, for the states that need explaining. auth.js has the sentences; this
+   * has the facts they are chosen by, because every one of them is a question
+   * about the browser and this is the file that talks to it.
+   *
+   * Feature checks wherever one exists: `navigator.standalone` and the
+   * display-mode query for "opened from the Home Screen", `isSecureContext`,
+   * `window.safari` (macOS Safari and nothing else), `navigator.brave`.
+   *
+   * The user-agent string is read for one thing, because nothing else tells it:
+   * whether this is an iPhone or iPad. Safari in a tab there has no PushManager
+   * and neither has a ten-year-old desktop browser, and the advice is opposite
+   * — "put it on your Home Screen" against "use another browser". An iPad says
+   * it is a Mac, so a Mac with a touch screen, which does not exist, is one.
+   * And, only once that is known, whether it is Safari: every browser on iOS
+   * is WebKit and says "Safari", so the others are told by the token they add.
+   * An in-app browser adds none and drops "Version/". A wrong guess is cheap,
+   * since both sentences end in the same place: Safari, then the Home Screen.
+   */
+  function appleTouch() {
+    var ua = navigator.userAgent || '';
+    return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  }
+
+  function onHomeScreen() {
+    if (navigator.standalone === true) return true;
+    try { return !!window.matchMedia && window.matchMedia('(display-mode: standalone)').matches; }
+    catch (e) { return false; }
+  }
+
+  function pushWhy(state) {
+    var ua = navigator.userAgent || '';
+    if (state === 'unsupported') {
+      if (appleTouch()) {
+        // Already an app and still no push: an iOS from before 16.4.
+        if (onHomeScreen()) return 'ios-app';
+        return /Version\/[\d.]+.*Safari\//.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|OPT\/|DuckDuckGo|GSA\//.test(ua)
+          ? 'ios-safari' : 'ios-other';
+      }
+      // A page on plain http has no service worker whatever the browser.
+      return window.isSecureContext === false ? 'insecure' : '';
+    }
+    if (state === 'blocked') {
+      if (appleTouch()) return 'ios-app';
+      return window.safari ? 'safari' : '';
+    }
+    if (state === 'refused') return navigator.brave ? 'brave' : '';
+    if (state === 'noworker') return swProblem;
+    return '';
   }
 
   // Must be called from inside a click: the permission prompt is only shown
@@ -4242,13 +4337,19 @@
     return asked.then(function (verdict) {
       if (verdict !== 'granted') return 'blocked';
       return pushRegistration().then(function (reg) {
-        if (!reg) return 'unsupported';
+        if (!reg) return swProblem ? 'noworker' : pushStarting();
         return reg.pushManager.getSubscription().then(function (existing) {
           return existing || reg.pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: vapidKey(VAPID)
           });
-        }).then(pushSave).then(function (res) { return res.status === 204 ? 'on' : 'off'; });
+        }).then(function (sub) {
+          return pushSave(sub).then(function (res) { return res.status === 204 ? 'on' : 'off'; });
+        }, function () {
+          // Permission given, a worker running, and the browser says no: push
+          // is switched off in the browser itself. "Try again" would be a lie.
+          return 'refused';
+        });
       });
     }).catch(function () { return pushState(); });
   }
@@ -4258,7 +4359,7 @@
   // leaves, at worst, a browser subscription nobody sends to.
   function pushDisable() {
     return pushRegistration().then(function (reg) {
-      if (!reg) return 'unsupported';
+      if (!reg) return swProblem ? 'noworker' : pushStarting();
       return reg.pushManager.getSubscription().then(function (sub) {
         if (!sub) return 'off';
         return api('DELETE', '/push/subscriptions?endpoint=' + encodeURIComponent(sub.endpoint))
@@ -4271,7 +4372,7 @@
   }
 
   window.soiree = window.soiree || {};
-  window.soiree.push = { state: pushState, enable: pushEnable, disable: pushDisable };
+  window.soiree.push = { state: pushState, enable: pushEnable, disable: pushDisable, why: pushWhy };
 
   var pushAsked = false;
 
@@ -4312,7 +4413,13 @@
     button(t('n.on'), function () {
       note.remove();
       // Inside the click, so the browser still counts it as a gesture.
-      pushEnable().then(function (now) { flash(t(now === 'on' ? 'n.done' : 'n.no')); });
+      // "Blocked" only when that is what happened. Everything else that is
+      // not "on" — a worker still installing, one that failed, a browser with
+      // push switched off — has its own sentence on the account screen, and
+      // calling those "blocked" sends somebody to a setting that is fine.
+      pushEnable().then(function (now) {
+        flash(t(now === 'on' ? 'n.done' : now === 'blocked' ? 'n.no' : 'n.why'));
+      });
     });
     button(t('n.later'), function () { note.remove(); });
 
@@ -4331,9 +4438,39 @@
   connect(0);
 
   // Offline shell. Registered last so it never delays first paint.
+  //
+  // Non-fatal, and no longer silent: the rejection is kept, because reminders
+  // wait on this worker and "it did not register" is a different sentence from
+  // "this browser cannot". A browser set to block cookies and site data for the
+  // site refuses with a security error (so does a private window in some);
+  // anything else — a worker that does not parse, a bad answer from the server
+  // — is this site's fault and is said to be. The name is all that is read:
+  // the message carries the address and goes nowhere.
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', function () {
-      navigator.serviceWorker.register('/sw.js').catch(function () { /* non-fatal */ });
-    });
+    var registerWorker = function () {
+      var attempt;
+      try { attempt = navigator.serviceWorker.register('/sw.js'); }
+      catch (e) { attempt = Promise.reject(e); }
+      Promise.resolve(attempt).then(function (reg) {
+        // Registered is not installed. A first worker whose install fails goes
+        // "redundant" and that is the end of it: nothing rejects, `ready`
+        // never settles, and it is the same silence by another door.
+        var first = reg && !reg.active && (reg.installing || reg.waiting);
+        if (!first) return;
+        first.addEventListener('statechange', function () {
+          if (first.state !== 'redundant' || reg.active) return;
+          swProblem = 'failed';
+          swGaveUp();
+        });
+      }, function (err) {
+        var name = (err && err.name) || '';
+        swProblem = /^(SecurityError|NotAllowedError|NotSupportedError)$/.test(name) ? 'storage' : 'failed';
+        swGaveUp();
+      });
+    };
+    // `load` has usually not fired yet. Where it has, waiting for it is
+    // waiting for ever, and the page would never have a worker at all.
+    if (document.readyState === 'complete') registerWorker();
+    else window.addEventListener('load', registerWorker);
   }
 })();
