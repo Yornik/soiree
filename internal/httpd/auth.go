@@ -102,6 +102,11 @@ const (
 	// public endpoint that writes a row, so it is still bounded.
 	passkeyBeginIPBurst  = 30
 	passkeyBeginIPWindow = time.Minute
+	// A page reports a passkey prompt its browser refused, once per refusal.
+	// Anybody can post one, and each is a log line, so the allowance is what a
+	// person failing repeatedly would use and no more.
+	passkeyReportIPBurst  = 10
+	passkeyReportIPWindow = time.Minute
 
 	// sweepInterval is how often expired sessions and spent links are cleared
 	// out. Nothing depends on it for correctness — both lookups already refuse
@@ -155,11 +160,12 @@ type Auth struct {
 	// mailLanguage.
 	defaultLanguage string
 
-	loginIP        *limiter
-	loginAcct      *limiter
-	resetIP        *limiter
-	redeemIP       *limiter
-	passkeyBeginIP *limiter
+	loginIP         *limiter
+	loginAcct       *limiter
+	resetIP         *limiter
+	redeemIP        *limiter
+	passkeyBeginIP  *limiter
+	passkeyReportIP *limiter
 
 	// passkeys is the WebAuthn surface, nil unless WithPasskeys turned it on.
 	// Nil is what leaves its routes unmounted; see passkeys.go.
@@ -195,13 +201,14 @@ func NewAuth(o AuthOptions) *Auth {
 
 		defaultLanguage: languageOfLocale(o.Locale),
 
-		loginIP:        newLimiter(loginIPBurst, loginIPWindow),
-		loginAcct:      newLimiter(loginAcctBurst, loginAcctWindow),
-		resetIP:        newLimiter(resetIPBurst, resetIPWindow),
-		redeemIP:       newLimiter(redeemIPBurst, redeemIPWindow),
-		passkeyBeginIP: newLimiter(passkeyBeginIPBurst, passkeyBeginIPWindow),
-		params:         auth.DefaultParams,
-		now:            time.Now,
+		loginIP:         newLimiter(loginIPBurst, loginIPWindow),
+		loginAcct:       newLimiter(loginAcctBurst, loginAcctWindow),
+		resetIP:         newLimiter(resetIPBurst, resetIPWindow),
+		redeemIP:        newLimiter(redeemIPBurst, redeemIPWindow),
+		passkeyBeginIP:  newLimiter(passkeyBeginIPBurst, passkeyBeginIPWindow),
+		passkeyReportIP: newLimiter(passkeyReportIPBurst, passkeyReportIPWindow),
+		params:          auth.DefaultParams,
+		now:             time.Now,
 		background: func(fn func(context.Context)) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), backgroundTimeout)
