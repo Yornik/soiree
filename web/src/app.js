@@ -174,6 +174,9 @@
       'ov.todo': 'To do',
       'ru.today': 'today',
       'ru.overdue': '{n} overdue',
+      'ru.aria': 'What is due, from today to the day',
+      'ru.many': '{n} tasks, {a} to {b}',
+      'ru.sameday': '{n} tasks, {a}',
       'pr.ceiling': 'Committed against ceiling',
       'pr.paid': 'Paid against committed',
       'pr.tasks': 'Tasks done',
@@ -319,6 +322,9 @@
       'ov.todo': 'Te doen',
       'ru.today': 'vandaag',
       'ru.overdue': '{n} te laat',
+      'ru.aria': 'Wat er moet gebeuren, van vandaag tot de dag',
+      'ru.many': '{n} taken, {a} tot {b}',
+      'ru.sameday': '{n} taken, {a}',
       'pr.ceiling': 'Vastgelegd ten opzichte van het plafond',
       'pr.paid': 'Betaald ten opzichte van vastgelegd',
       'pr.tasks': 'Taken afgerond',
@@ -464,6 +470,9 @@
       'ov.todo': 'Yang harus dikerjakan',
       'ru.today': 'hari ini',
       'ru.overdue': '{n} terlambat',
+      'ru.aria': 'Yang jatuh tempo, dari hari ini sampai harinya',
+      'ru.many': '{n} tugas, {a} sampai {b}',
+      'ru.sameday': '{n} tugas, {a}',
       'pr.ceiling': 'Total biaya terhadap batas anggaran',
       'pr.paid': 'Dibayar terhadap total biaya',
       'pr.tasks': 'Tugas selesai',
@@ -2409,73 +2418,492 @@
 
   /* ---------- The run-up ----------
    * A scale from today to the day, with every open task that has a due date
-   * pinned where it falls. It is a picture of what "Up next" says in words,
-   * which is why the markup hides it from assistive technology.
+   * pinned where it falls.
    *
    * Positions are reckoned in whole days at the event's own offset, exactly as
    * daysLeft() does, so a task due "tomorrow" sits one day along for every
-   * reader. A task that is already late is pinned at today, in the alarm
-   * colour, and counted: a scale that quietly dropped what was overdue would
-   * flatter precisely the plan that most needs looking at.
+   * reader, and the scale is linear from end to end. A task that is already
+   * late is pinned at today, in the alarm colour, and counted: a scale that
+   * quietly dropped what was overdue would flatter precisely the plan that
+   * most needs looking at.
    *
-   * Only the nearest few marks are named, and a name is skipped when it would
-   * run into the one before it. The rest are dots, with the task in a title.
+   * Real plans are front-loaded - six things in the next month, two in the
+   * spring - and a linear scale puts those six in a fifth of the line. Three
+   * things keep that legible without bending time to do it:
+   *
+   *   - Names sit in lanes. A name that would run into its neighbour goes a
+   *     lane higher instead of being dropped or cut, tied to its date by a
+   *     leader. The soonest ends up on top, so a crowded month reads as a
+   *     flight of steps down to the line, in the order the work is due. Near
+   *     the day a name runs leftward from its leader rather than off the end.
+   *   - Marks that would touch are merged, and say so: one bead as long as the
+   *     dates it covers, with the count in it. Two dots a pixel apart read as
+   *     one dot, which is a wrong picture; "2" is a right one.
+   *   - Every mark is a button that lists what is due there. A name that did
+   *     not get a lane, or is inside a bead, is one press away rather than in
+   *     a hover title a phone never shows.
+   *
+   * What was weighed and left out: a scale that gives the near term more room
+   * (it misdraws distance in the one picture whose job is distance, and does
+   * nothing for two tasks due the same day), and a cap that simply hides the
+   * crowd behind a count (it hides exactly the month people came to see).
    */
+  var RUNUP = {
+    dot: 4,     // the radius of a lone mark
+    bead: 8,    // and of a counted one
+    lamp: 9,    // how far today's lamp reaches along the line
+    air: 3,     // the least paper between two marks before they are merged
+    base: 18,   // from the foot of the scale to the foot of the lowest name
+    pitch: 18,  // one lane
+    name: 15,   // the height of a name: 12px at a line-height of 1.25
+    clear: 8    // the least paper between a name and another mark's leader
+  };
+  var runupDrawn = '';
+  var runupWatched = false;
+  var runupFormats = {};
+
+  function runupDate(kind, ms) {
+    var options = {
+      day: { day: 'numeric', month: 'short', timeZone: 'UTC' },
+      full: { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' },
+      month: { month: 'short', timeZone: 'UTC' }
+    }[kind];
+    try {
+      if (!runupFormats[kind]) runupFormats[kind] = new Intl.DateTimeFormat(LOC, options);
+      return runupFormats[kind].format(new Date(ms));
+    } catch (e) {
+      return new Date(ms).toISOString().slice(kind === 'month' ? 5 : 0, kind === 'month' ? 7 : 10);
+    }
+  }
+
   function renderRunUp(diffDays) {
     var scale = document.getElementById('runupScale');
     var marks = document.getElementById('runupMarks');
     var from = document.getElementById('runupFrom');
     if (!scale || !marks) return;
 
+    if (!runupWatched) {
+      runupWatched = true;
+      marks.addEventListener('keydown', runupKeys);
+      // The names are laid out in pixels, so the scale is drawn again whenever
+      // its width changes - a window resized, the display face arriving and
+      // narrowing the count beside it, or the planner appearing from behind a
+      // sign-in, before which there was no width to lay anything out in.
+      // On the next frame, not in the callback: drawing can change the height
+      // of the very element being observed, which a browser reports as a loop.
+      if (window.ResizeObserver) {
+        var queued = false;
+        new ResizeObserver(function () {
+          if (queued) return;
+          queued = true;
+          requestAnimationFrame(function () { queued = false; renderRunUp(daysLeft()); });
+        }).observe(scale);
+      }
+    }
+
     var usable = EVENT && diffDays !== null && diffDays > 0 && !isArchived();
     document.getElementById('runup').classList.toggle('no-scale', !usable);
-    marks.textContent = '';
     if (from) from.textContent = t('ru.today');
-    if (!usable) return;
+    if (!usable) {
+      runupClear(scale, marks);
+      if (from) from.classList.remove('late');
+      return;
+    }
 
     var there = new Date(Date.now() + EVENT.offsetMinutes * 60000);
     var today = Date.UTC(there.getUTCFullYear(), there.getUTCMonth(), there.getUTCDate());
     var span = EVENT.day - today;
 
-    var overdue = 0;
-    var pinned = [];
+    var late = [];
+    var ahead = [];
     state.tasks.forEach(function (task) {
       if (task.status === 'done' || !task.due) return;
       var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(task.due));
       if (!m) return;
       var due = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-      if (due < today) overdue += 1;
-      pinned.push({ task: task, at: Math.max(0, Math.min(1, (due - today) / span)), late: due < today, due: due });
+      (due < today ? late : ahead).push({ task: task, due: due, at: Math.max(0, Math.min(1, (due - today) / span)) });
     });
-    pinned.sort(function (a, b) { return a.due - b.due; });
+    late.sort(function (a, b) { return a.due - b.due; });
+    ahead.sort(function (a, b) { return a.due - b.due; });
 
-    // How far apart two names have to be, as a share of the scale: the width a
-    // name may take (150px, 96px on a phone - see .runup-label) plus a little
-    // air, over the width the scale really has. A fixed share let two names
-    // run into each other on a phone, where a sixth of the scale is 55px.
-    var width = scale.clientWidth || 800;
-    var minGap = ((width < 480 ? 96 : 150) + 12) / width;
-    var lastLabelAt = -1;
-    var named = 0;
-    pinned.forEach(function (p) {
-      var mark = document.createElement('span');
-      mark.className = 'runup-mark' + (p.late ? ' late' : '');
-      mark.style.left = (p.at * 100).toFixed(2) + '%';
-      mark.title = (p.task.name || t('un.untitled')) + ' \u2013 ' + p.task.due;
-      // Room for a name: not late (those are counted instead), among the
-      // first four, clear of the previous name, and not under the day itself.
-      if (!p.late && named < 4 && p.at - lastLabelAt > minGap && p.at < 1 - minGap * 0.6) {
-        var label = document.createElement('span');
-        label.className = 'runup-label';
-        label.textContent = p.task.name || t('un.untitled');
-        mark.appendChild(label);
-        lastLabelAt = p.at;
-        named += 1;
-      }
-      marks.appendChild(mark);
+    if (late.length && from) from.textContent = t('ru.today') + ' \u2013 ' + t('ru.overdue', { n: late.length });
+    if (from) from.classList.toggle('late', late.length > 0);
+
+    // Hidden, so there is nothing to measure; the observer calls back when
+    // there is. Without one, guess, as this always did.
+    var width = scale.clientWidth || (window.ResizeObserver ? 0 : 800);
+    if (!width) { runupClear(scale, marks); return; }
+
+    // Drawn already, and nothing it shows has changed: leave it alone. This is
+    // called on every render of the overview and every resize event, and
+    // rebuilding the marks would take the focus and any open list with them.
+    var drawn = [LANG, width, today, EVENT.day].concat(late.concat(ahead).map(function (p) {
+      return [p.task.id, p.due, p.task.name, p.task.owner].join('\u001f');
+    })).join('\u001e');
+    if (drawn === runupDrawn) return;
+    runupDrawn = drawn;
+
+    var held = marks.contains(document.activeElement) ? document.activeElement.getAttribute('data-key') : null;
+    if (openBtn && marks.contains(openBtn)) closePop(false);
+    marks.textContent = '';
+
+    var groups = runupGroups(late, ahead, width);
+    groups.forEach(function (g, i) {
+      g.el = runupMark(g, i === 0);
+      marks.appendChild(g.el);
     });
-    if (overdue && from) from.textContent = t('ru.today') + ' \u2013 ' + t('ru.overdue', { n: overdue });
-    if (from) from.classList.toggle('late', overdue > 0);
+    var lanes = runupNames(groups, width);
+    // A mark with no name beside it says what it is when pointed at.
+    groups.forEach(function (g) {
+      if (!g.el.querySelector('.runup-label')) g.el.title = g.el.getAttribute('aria-label');
+    });
+    scale.style.height = Math.max(44, RUNUP.base + lanes * RUNUP.pitch) + 'px';
+    runupMonths(today, span, width);
+
+    if (groups.length) {
+      marks.setAttribute('role', 'toolbar');
+      marks.setAttribute('aria-label', t('ru.aria'));
+    } else {
+      marks.removeAttribute('role');
+      marks.removeAttribute('aria-label');
+    }
+    if (held) {
+      var again = marks.querySelector('[data-key="' + held.replace(/["\\]/g, '\\$&') + '"]');
+      if (again) { runupRove(marks, again); again.focus(); }
+    }
+  }
+
+  function runupClear(scale, marks) {
+    if (openBtn && marks.contains(openBtn)) closePop(false);
+    runupDrawn = '';
+    marks.textContent = '';
+    marks.removeAttribute('role');
+    marks.removeAttribute('aria-label');
+    scale.style.height = '';
+    ['runupTicks', 'runupMonths'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = '';
+    });
+  }
+
+  /* Which tasks share a mark. Everything late is one mark, at today. Ahead of
+   * today a task gets a mark of its own unless that would touch the one before
+   * it, and then the two are one bead from the first date to the last. Merging
+   * makes a mark longer and so can bring the next one into reach, which is why
+   * this runs until nothing moves. */
+  function runupGroups(late, ahead, width) {
+    var groups = [];
+    ahead.forEach(function (p) {
+      var x = p.at * width;
+      var last = groups[groups.length - 1];
+      if (last && last.x1 === x) last.tasks.push(p);
+      else groups.push({ x0: x, x1: x, tasks: [p] });
+    });
+    function radius(g) { return g.tasks.length > 1 ? RUNUP.bead : RUNUP.dot; }
+    for (var i = 1; i < groups.length;) {
+      var a = groups[i - 1];
+      var b = groups[i];
+      if (b.x0 - radius(b) - runupEnd(a) < RUNUP.air) {
+        a.x1 = b.x1;
+        a.tasks = a.tasks.concat(b.tasks);
+        groups.splice(i, 1);
+        if (i > 1) i -= 1;   // the longer bead may now reach the one before it
+      } else {
+        i += 1;
+      }
+    }
+    if (late.length) groups.unshift({ x0: 0, x1: 0, tasks: late, late: true });
+    return groups;
+  }
+
+  // Today's lamp is never covered, so a bead that starts under it keeps its
+  // count clear of it, and is drawn that much longer if it has to be.
+  function runupTuck(g) {
+    return g.tasks.length > 1 ? Math.max(0, RUNUP.lamp - (g.x0 - RUNUP.bead)) : 0;
+  }
+  // Where a mark's drawing ends, which is what the next one must stay clear of.
+  function runupEnd(g) {
+    if (g.tasks.length < 2) return g.x1 + RUNUP.dot;
+    return g.x0 - RUNUP.bead + Math.max(g.x1 - g.x0, runupTuck(g)) + RUNUP.bead * 2;
+  }
+
+  function runupMark(g, first) {
+    var many = g.tasks.length > 1;
+    var head = g.tasks[0];
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'runup-mark' + (g.late ? ' late' : many ? ' many' : '');
+    btn.style.left = (head.at * 100).toFixed(2) + '%';
+    btn.tabIndex = first ? 0 : -1;
+    btn.setAttribute('data-key', (g.late ? 'late' : 'due') + ':' + head.task.id);
+    btn.setAttribute('aria-expanded', 'false');
+
+    var what;
+    if (g.late) {
+      what = t('ru.overdue', { n: g.tasks.length });
+    } else if (!many) {
+      what = runupDate('day', head.due) + ', ' + (head.task.name || t('un.untitled'));
+    } else {
+      var lastDue = g.tasks[g.tasks.length - 1].due;
+      what = lastDue === head.due
+        ? t('ru.sameday', { n: g.tasks.length, a: runupDate('day', head.due) })
+        : t('ru.many', { n: g.tasks.length, a: runupDate('day', head.due), b: runupDate('day', lastDue) });
+    }
+    btn.setAttribute('aria-label', what);
+
+    if (many && !g.late) {
+      var tuck = runupTuck(g);
+      btn.style.width = Math.round(Math.max(g.x1 - g.x0, tuck) + RUNUP.bead * 2) + 'px';
+      if (tuck) btn.style.paddingLeft = Math.round(tuck) + 'px';
+      var count = document.createElement('span');
+      count.className = 'runup-count';
+      count.textContent = String(g.tasks.length);
+      btn.appendChild(count);
+    }
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openRunUpList(btn, g);
+    });
+    btn.addEventListener('focus', function () { runupRove(btn.parentNode, btn); });
+    return btn;
+  }
+
+  /* Names, in lanes. Returns how many lanes were used.
+   *
+   * Candidates are taken soonest first and each is kept only if the whole set
+   * still has a layout, so when something has to give it is the later name. A
+   * layout is an order of heights: a name that passes over another mark's
+   * leader has to be above the end of it, and two names that overlap have to
+   * be in different lanes. Those "above" relations are relaxed into the lowest
+   * lanes that satisfy them. Two names that each pass over the other's leader
+   * have no such order, and the newcomer is shortened until it stops short of
+   * the leader instead - at a word, never through one.
+   */
+  function runupNames(groups, width) {
+    var phone = width < 480;
+    var mostNames = phone ? 5 : 8;
+    var mostLanes = phone ? 5 : 6;
+    var least = phone ? 96 : 120;
+    var edge = 7;                       // the scale's own side margin is free
+    var kept = [];
+
+    groups.forEach(function (g, i) {
+      if (g.late || kept.length >= mostNames) return;
+      var head = g.tasks[0];
+      var label = document.createElement('span');
+      label.className = 'runup-label';
+      var when = document.createElement('span');
+      when.className = 'runup-when';
+      when.textContent = runupDate('day', head.due);
+      var name = document.createElement('span');
+      name.className = 'runup-name';
+      name.textContent = head.task.name || t('un.untitled');
+      label.appendChild(when);
+      label.appendChild(document.createTextNode(' '));
+      label.appendChild(name);
+      // The next thing due is the one name set in ink; measured as set.
+      if (!kept.length && (i === 0 || groups[i - 1].late)) g.el.classList.add('next');
+      g.el.appendChild(label);
+      var natural = Math.ceil(label.getBoundingClientRect().width) + 1;
+
+      var tries = [];
+      [1, -1].forEach(function (dir) {
+        var room = dir > 0 ? width + edge - g.x0 : g.x0 + edge;
+        kept.forEach(function (k) {
+          var between = (k.g.x0 - g.x0) * dir;
+          // Would pass over k's leader while k passes over this one.
+          if (between > 0 && k.lo - RUNUP.clear < g.x0 && g.x0 < k.hi + RUNUP.clear) {
+            room = Math.min(room, between - RUNUP.clear);
+          }
+        });
+        var w = Math.min(natural, Math.floor(room));
+        if (w >= Math.min(natural, least)) tries.push({ dir: dir, w: w, whole: w >= natural });
+      });
+      tries.sort(function (a, b) { return (b.whole - a.whole) || (b.w - a.w) || (b.dir - a.dir); });
+
+      for (var n = 0; n < tries.length; n++) {
+        var c = {
+          g: g, label: label, name: name, dir: tries[n].dir, w: tries[n].w, whole: tries[n].whole,
+          lo: tries[n].dir > 0 ? g.x0 : g.x0 - tries[n].w,
+          hi: tries[n].dir > 0 ? g.x0 + tries[n].w : g.x0
+        };
+        if (runupLanes(kept.concat([c]), mostLanes)) { kept.push(c); return; }
+      }
+      runupLanes(kept, mostLanes);      // put back the lanes the attempt moved
+      g.el.classList.remove('next');
+      label.remove();
+    });
+
+    var lanes = 0;
+    kept.forEach(function (c) {
+      var many = c.g.tasks.length > 1;
+      var foot = many ? -1 : 3;                                     // the mark's own foot above the scale's
+      var top = many ? RUNUP.bead * 2 - 1 : 3 + RUNUP.dot * 2;      // and its top
+      var bottom = RUNUP.base + c.lane * RUNUP.pitch;
+      if (c.dir < 0) c.g.el.classList.add('flip');
+      c.label.style.bottom = (bottom - foot) + 'px';
+      var leader = document.createElement('span');
+      leader.className = 'runup-leader';
+      leader.style.height = (bottom + RUNUP.name - top) + 'px';
+      c.g.el.insertBefore(leader, c.label);
+      if (!c.whole) runupShorten(c.label, c.name, c.w);
+      lanes = Math.max(lanes, c.lane + 1);
+    });
+    return lanes;
+  }
+
+  // Sets .lane on every name, lowest lanes first. False when there is no
+  // layout: a cycle, or more lanes than the scale is allowed to grow.
+  function runupLanes(names, most) {
+    var over = [];
+    for (var i = 0; i < names.length; i++) {
+      for (var j = 0; j < names.length; j++) {
+        if (i === j) continue;
+        var a = names[i];
+        var b = names[j];
+        var passes = a.lo - RUNUP.clear < b.g.x0 && b.g.x0 < a.hi + RUNUP.clear;
+        var back = b.lo - RUNUP.clear < a.g.x0 && a.g.x0 < b.hi + RUNUP.clear;
+        var overlap = a.lo < b.hi + RUNUP.clear && b.lo < a.hi + RUNUP.clear;
+        // Overlapping with neither over the other's leader: the sooner on top.
+        if (passes || (overlap && !back && i < j)) over.push([a, b]);
+      }
+    }
+    names.forEach(function (n) { n.lane = 0; });
+    for (var pass = 0; pass <= names.length; pass++) {
+      var moved = false;
+      over.forEach(function (pair) {
+        if (pair[0].lane <= pair[1].lane) { pair[0].lane = pair[1].lane + 1; moved = true; }
+      });
+      if (!moved) break;
+      if (pass === names.length) return false;
+    }
+    return names.every(function (n) { return n.lane < most; });
+  }
+
+  // Shortened at a word. One word too long for the room is left to the
+  // stylesheet's ellipsis, which is the only case a name is cut through.
+  function runupShorten(label, name, w) {
+    label.style.maxWidth = w + 'px';
+    var words = name.textContent.split(/\s+/);
+    // A flipped name is a flex item and does the overflowing itself.
+    function spills() {
+      return label.scrollWidth > label.clientWidth || (name.clientWidth > 0 && name.scrollWidth > name.clientWidth);
+    }
+    while (words.length > 1 && spills()) {
+      words.pop();
+      name.textContent = words.join(' ').replace(/[\s,;:.\u2013\u2014-]+$/, '') + '\u2026';
+    }
+  }
+
+  /* The months, so that distance along the line reads as time: a tick at each
+   * first of the month, named under the line as often as there is room for,
+   * and not where "today" or the date already stands. January carries the
+   * year, since it is the one month that says which year the others are in. */
+  function runupMonths(today, span, width) {
+    var ticks = document.getElementById('runupTicks');
+    var names = document.getElementById('runupMonths');
+    if (!ticks || !names) return;
+    ticks.textContent = '';
+    names.textContent = '';
+
+    var start = new Date(today);
+    var firsts = [];
+    for (var y = start.getUTCFullYear(), m = start.getUTCMonth() + 1; ; m++) {
+      var first = Date.UTC(y, m, 1);
+      if (first >= today + span) break;
+      firsts.push(first);
+      if (firsts.length > 240) break;
+    }
+    var perMonth = width / (span / 86400000 / 30.44);
+    var every = [1, 2, 3, 6, 12].filter(function (n) { return perMonth * n >= 44; })[0] || 12;
+
+    var taken = [document.getElementById('runupFrom'), document.getElementById('statDaysLabel')]
+      .filter(Boolean).map(function (el) { return el.getBoundingClientRect(); });
+    firsts.forEach(function (first) {
+      var at = ((first - today) / span * 100).toFixed(2) + '%';
+      var tick = document.createElement('span');
+      tick.className = 'runup-tick';
+      tick.style.left = at;
+      ticks.appendChild(tick);
+
+      var d = new Date(first);
+      if (d.getUTCMonth() % every !== 0) return;
+      var label = document.createElement('span');
+      label.className = 'runup-month';
+      label.style.left = at;
+      label.textContent = d.getUTCMonth() === 0 ? String(d.getUTCFullYear()) : runupDate('month', first);
+      names.appendChild(label);
+      var box = label.getBoundingClientRect();
+      var clash = taken.some(function (r) { return box.left < r.right + 10 && r.left < box.right + 10; });
+      if (clash) label.remove();
+    });
+  }
+
+  // One stop in the tab order for the whole scale; the arrow keys walk it.
+  function runupRove(marks, to) {
+    Array.prototype.forEach.call(marks.querySelectorAll('.runup-mark'), function (b) {
+      b.tabIndex = b === to ? 0 : -1;
+    });
+  }
+  function runupKeys(e) {
+    var all = Array.prototype.slice.call(e.currentTarget.querySelectorAll('.runup-mark'));
+    var at = all.indexOf(document.activeElement);
+    if (at < 0) return;
+    var to = at;
+    if (e.key === 'ArrowRight') to = Math.min(all.length - 1, at + 1);
+    else if (e.key === 'ArrowLeft') to = Math.max(0, at - 1);
+    else if (e.key === 'Home') to = 0;
+    else if (e.key === 'End') to = all.length - 1;
+    else return;
+    e.preventDefault();
+    all[to].focus();
+  }
+
+  /* What is due at a mark. The same popover as the cost-by picker and the
+   * files list, with the same manners: focus moves in, Escape closes it and
+   * hands focus back to the mark, tabbing away or pressing elsewhere closes
+   * it, and pressing the mark again closes it too. */
+  function openRunUpList(btn, g) {
+    var wasOpen = openBtn === btn;
+    closePop(wasOpen);
+    if (wasOpen) return;
+
+    var pop = document.createElement('div');
+    pop.className = 'sp-pop runup-pop';
+    pop.setAttribute('role', 'group');
+    pop.setAttribute('aria-label', btn.getAttribute('aria-label'));
+    var list = document.createElement('ul');
+    g.tasks.forEach(function (p) {
+      var li = document.createElement('li');
+      li.appendChild(cell('span', 'when' + (g.late ? ' late' : ''), runupDate('full', p.due)));
+      li.appendChild(cell('span', 'what', p.task.name || t('un.untitled')));
+      li.appendChild(cell('span', 'who', p.task.owner || ''));
+      list.appendChild(li);
+    });
+    pop.appendChild(list);
+
+    pop.tabIndex = -1;
+    pop.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.stopPropagation(); closePop(true); }
+    });
+    pop.addEventListener('focusout', function (e) {
+      // Focus going to the mark itself is a press on it, and the click that
+      // follows closes the list; closing here would have that click reopen it.
+      if (e.relatedTarget === btn) return;
+      if (!pop.contains(e.relatedTarget)) closePop(false);
+    });
+
+    document.body.appendChild(pop);
+    var r = btn.getBoundingClientRect();
+    var top = r.bottom + 10;
+    if (top + pop.offsetHeight > window.innerHeight - 8) top = Math.max(8, r.top - pop.offsetHeight - 10);
+    var left = Math.min(r.left - 12, window.innerWidth - pop.offsetWidth - 8);
+    pop.style.top = top + 'px';
+    pop.style.left = Math.max(8, left) + 'px';
+    openPop = pop;
+    openBtn = btn;
+    btn.setAttribute('aria-expanded', 'true');
+    pop.focus();
   }
 
   /* ---------- Empty state ----------

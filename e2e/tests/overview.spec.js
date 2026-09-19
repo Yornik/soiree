@@ -8,12 +8,77 @@
  * The server under test is configured for 12 June 2030 at +09:00.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, addTask, gotoTab } = require('./helpers');
+const { STORAGE_KEY, addBudgetLine, addTask, gotoTab } = require('./helpers');
 
-/** The left offset of each mark on the scale, as a percentage. */
+/** The left offset of each mark on the scale, as a percentage, and the name beside it. */
 const marks = (page) => page.locator('#runupMarks .runup-mark').evaluateAll(
-  (els) => els.map((el) => ({ at: parseFloat(el.style.left), late: el.classList.contains('late'), label: el.textContent })),
+  (els) => els.map((el) => {
+    const name = el.querySelector('.runup-name');
+    return { at: parseFloat(el.style.left), late: el.classList.contains('late'), label: name ? name.textContent : '' };
+  }),
 );
+
+/**
+ * Where everything on the scale actually is, in page pixels: each mark, and
+ * its name and leader if it has them. `clipped` is a name the stylesheet cut
+ * off, as opposed to one the page shortened at a word.
+ */
+const geometry = (page) => page.locator('#runupMarks .runup-mark').evaluateAll((els) => els.map((el) => {
+  const box = (node) => {
+    if (!node) return null;
+    const r = node.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  };
+  const label = el.querySelector('.runup-label');
+  const name = el.querySelector('.runup-name') || label;
+  const count = el.querySelector('.runup-count');
+  return {
+    mark: box(el),
+    label: box(label),
+    leader: box(el.querySelector('.runup-leader')),
+    name: name ? name.textContent : null,
+    clipped: !!label && (label.scrollWidth > label.clientWidth + 1 || (name !== label && name.clientWidth > 0 && name.scrollWidth > name.clientWidth + 1)),
+    count: count ? Number(count.textContent) : 1,
+    late: el.classList.contains('late'),
+  };
+}));
+
+const overlap = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+/** Opens the planner with a planted set of tasks, at a given instant. */
+async function openWith(page, when, tasks) {
+  await page.clock.setFixedTime(new Date(when));
+  await page.addInitScript(([key, payload]) => {
+    try {
+      if (!localStorage.getItem(key)) localStorage.setItem(key, payload);
+    } catch (e) {
+      /* not on the origin yet */
+    }
+  }, [STORAGE_KEY, JSON.stringify({
+    ceiling: 0, inflationPct: 0, fxRate: 0, splitEvenly: false, sponsors: [], budgetItems: [], notes: [],
+    tasks: tasks.map(([name, due, owner], i) => ({ id: 't' + i, name, owner: owner || '', due, status: 'not-started' })),
+  })]);
+  await page.goto('/');
+  await expect(page.locator('body')).not.toHaveClass(/is-empty/);
+}
+
+/*
+ * The shape real plans have, and the one a linear scale is worst at: 155 days
+ * to go, six tasks in the first fifth of them - two only three days apart,
+ * two only two - then nothing for three months, then two on consecutive days.
+ * Three of the names are long enough that the scale used to cut them.
+ */
+const CROWDED_NOW = '2030-01-08T03:00:00Z';
+const CROWDED = [
+  ['Choose the menu and confirm the allergies', '2030-01-11', 'Ada'],
+  ['Confirm the band', '2030-01-14', 'Grace'],
+  ['Send the save-the-date cards to everyone', '2030-01-28', 'Ada'],
+  ['Order the cake', '2030-02-02', 'Grace'],
+  ['Book the photographer for the whole evening', '2030-02-04', 'Ada'],
+  ['Pay the florist', '2030-02-08', 'Grace'],
+  ['Print the seating plan and the place cards', '2030-05-04', 'Ada'],
+  ['Collect the suits', '2030-05-05', 'Grace'],
+];
 
 test('open tasks are pinned on the run-up where their dates fall, and late ones are counted', async ({ page }) => {
   // Noon on 3 June where the event is: nine days to go.
@@ -66,16 +131,182 @@ test('names on the run-up never overlap, on a phone either', async ({ page }) =>
   }
   await gotoTab(page, 'overview');
   await expect(page.locator('#runupMarks .runup-mark')).toHaveCount(4);
-  const boxes = await page.locator('.runup-label').evaluateAll((els) => els.map((el) => {
+  // Names that would have run into each other are in lanes now, one above the
+  // other, so "overlap" is a question about rectangles rather than about left
+  // and right edges: two names may share a stretch of the scale, not a place.
+  const boxes = (await geometry(page)).map((m) => m.label).filter(Boolean);
+  expect(boxes.length).toBeGreaterThan(0);
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      expect(overlap(boxes[i], boxes[j]), `names ${i} and ${j} are in the same place`).toBe(false);
+    }
+  }
+  const scale = await page.locator('#runupScale').evaluate((el) => {
     const r = el.getBoundingClientRect();
     return { left: r.left, right: r.right };
-  }));
-  expect(boxes.length).toBeGreaterThan(0);
-  for (let i = 1; i < boxes.length; i++) {
-    expect(boxes[i].left, `label ${i} starts after label ${i - 1} ends`).toBeGreaterThanOrEqual(boxes[i - 1].right);
+  });
+  for (const b of boxes) {
+    expect(b.right, 'a name stays inside the scale').toBeLessThanOrEqual(scale.right + 8);
+    expect(b.left, 'a name stays inside the scale').toBeGreaterThanOrEqual(scale.left - 8);
   }
-  const scale = await page.locator('#runupScale').evaluate((el) => el.getBoundingClientRect().right);
-  expect(boxes[boxes.length - 1].right, 'the last name stays inside the scale').toBeLessThanOrEqual(scale + 8);
+});
+
+for (const [width, height] of [[1280, 900], [390, 844]]) {
+  test.describe(`a crowded month on the run-up, at ${width}px`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await openWith(page, CROWDED_NOW, CROWDED);
+      await expect(page.locator('#daysNum')).toHaveText('155');
+    });
+
+    test('no two names share a place, and none lies across another mark\'s leader', async ({ page }) => {
+      const drawn = await geometry(page);
+      const named = drawn.filter((m) => m.label);
+      // The near term is the part people came to see, so it is named, not
+      // dotted. A desktop has seven marks - the six, and the pair in May as
+      // one - and a phone, at two pixels to the day, has three: the first two
+      // tasks, the next four, and the pair. Every one of them carries a name.
+      expect(drawn.length).toBe(width >= 1280 ? 7 : 3);
+      expect(named.length).toBe(drawn.length);
+      expect(named[0].name.startsWith('Choose the menu')).toBe(true);
+      for (let i = 0; i < named.length; i++) {
+        for (let j = 0; j < named.length; j++) {
+          if (i === j) continue;
+          if (i < j) expect(overlap(named[i].label, named[j].label), `"${named[i].name}" and "${named[j].name}" overlap`).toBe(false);
+          expect(overlap(named[i].label, named[j].leader), `"${named[i].name}" lies across the leader of "${named[j].name}"`).toBe(false);
+        }
+      }
+    });
+
+    test('no two marks touch: they are apart, or they are one mark with a count', async ({ page }) => {
+      const drawn = (await geometry(page)).sort((a, b) => a.mark.left - b.mark.left);
+      for (let i = 1; i < drawn.length; i++) {
+        expect(drawn[i].mark.left - drawn[i - 1].mark.right, `paper between marks ${i - 1} and ${i}`).toBeGreaterThanOrEqual(2);
+      }
+      // Merging hides nothing: the counts add up to the tasks there are.
+      expect(drawn.reduce((n, m) => n + m.count, 0)).toBe(CROWDED.length);
+      // The two on consecutive days in May are one mark that says "2".
+      expect(drawn[drawn.length - 1].count).toBe(2);
+    });
+
+    test('a name is never cut through a word', async ({ page }) => {
+      const full = CROWDED.map(([name]) => name);
+      for (const m of (await geometry(page)).filter((g) => g.label)) {
+        expect(m.clipped, `"${m.name}" is cut off by the stylesheet`).toBe(false);
+        if (full.includes(m.name)) continue;
+        // Shortened, then: a whole number of words of a real name, and the mark.
+        expect(m.name.endsWith('\u2026'), `"${m.name}" is neither a task nor a shortened one`).toBe(true);
+        const kept = m.name.slice(0, -1);
+        expect(full.some((name) => name.startsWith(kept + ' ')), `"${m.name}" stops inside a word`).toBe(true);
+      }
+      // With a desktop's worth of room nothing needs shortening at all.
+      if (width >= 1280) {
+        const names = (await geometry(page)).map((g) => g.name).filter(Boolean);
+        expect(names.every((name) => full.includes(name)), names.join(' | ')).toBe(true);
+      }
+    });
+
+    test('every task can be reached from the scale', async ({ page }) => {
+      const found = new Set();
+      const all = page.locator('#runupMarks .runup-mark');
+      const n = await all.count();
+      for (let i = 0; i < n; i++) {
+        await all.nth(i).click();
+        const pop = page.locator('.runup-pop');
+        await expect(pop).toBeVisible();
+        for (const name of await pop.locator('li .what').allTextContents()) found.add(name);
+        await page.keyboard.press('Escape');
+        await expect(pop).toHaveCount(0);
+      }
+      expect([...found].sort()).toEqual(CROWDED.map(([name]) => name).sort());
+    });
+  });
+}
+
+test('the scale is one stop for the keyboard, and a mark opens and closes like the other popovers', async ({ page }) => {
+  await openWith(page, CROWDED_NOW, CROWDED);
+  const bar = page.locator('#runupMarks');
+  await expect(bar).toHaveAttribute('role', 'toolbar');
+  await expect(bar).toHaveAttribute('aria-label', 'What is due, from today to the day');
+  await expect(page.locator('#runupScale')).not.toHaveAttribute('aria-hidden', 'true');
+  // Seven marks, one of them in the tab order.
+  await expect(bar.locator('.runup-mark')).toHaveCount(7);
+  await expect(bar.locator('.runup-mark[tabindex="0"]')).toHaveCount(1);
+  for (const label of await bar.locator('.runup-mark').evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')))) {
+    expect(label).toBeTruthy();
+  }
+
+  const first = bar.locator('.runup-mark').first();
+  await first.focus();
+  await page.keyboard.press('End');
+  const last = bar.locator('.runup-mark').last();
+  await expect(last).toBeFocused();
+  await expect(last).toHaveAttribute('aria-label', '2 tasks, May 4 to May 5');
+  await page.keyboard.press('ArrowLeft');
+  await expect(bar.locator('.runup-mark').nth(5)).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(last).toBeFocused();
+  // Wherever the arrows leave it is where Tab comes back to.
+  await expect(bar.locator('.runup-mark[tabindex="0"]')).toHaveCount(1);
+  await expect(last).toHaveAttribute('tabindex', '0');
+
+  await page.keyboard.press('Enter');
+  const pop = page.locator('.runup-pop');
+  await expect(pop).toBeFocused();
+  await expect(last).toHaveAttribute('aria-expanded', 'true');
+  await expect(pop.locator('li')).toHaveText([/May 4.*Print the seating plan and the place cards.*Ada/, /May 5.*Collect the suits.*Grace/]);
+  await page.keyboard.press('Escape');
+  await expect(pop).toHaveCount(0);
+  await expect(last).toBeFocused();
+  await expect(last).toHaveAttribute('aria-expanded', 'false');
+
+  // Pressing a mark that is open closes it rather than opening it again.
+  await last.click();
+  await expect(pop).toBeVisible();
+  await last.click();
+  await expect(pop).toHaveCount(0);
+});
+
+test('everything late is one mark at today, and it says what is late', async ({ page }) => {
+  await openWith(page, CROWDED_NOW, [
+    ['Pay the florist', '2029-12-20', 'Grace'],
+    ['Sign the venue contract', '2030-01-02', 'Ada'],
+    ['Order the cake', '2030-03-01', 'Grace'],
+  ]);
+  await expect(page.locator('#runupFrom')).toHaveText('today \u2013 2 overdue');
+  const pinned = await marks(page);
+  expect(pinned.map((m) => m.late)).toEqual([true, false]);
+  expect(pinned[0].at).toBe(0);
+
+  const late = page.locator('#runupMarks .runup-mark.late');
+  await expect(late).toHaveAttribute('aria-label', '2 overdue');
+  await late.click();
+  await expect(page.locator('.runup-pop li .what')).toHaveText(['Pay the florist', 'Sign the venue contract']);
+  await expect(page.locator('.runup-pop li .when.late')).toHaveCount(2);
+});
+
+test('the months are ticked where they fall and named where there is room', async ({ page }) => {
+  await openWith(page, CROWDED_NOW, CROWDED);
+  const ticks = await page.locator('#runupTicks .runup-tick').evaluateAll((els) => els.map((el) => parseFloat(el.style.left)));
+  // 1 February to 1 June, out of 155 days from 8 January: 24, 52, 83, 113, 144.
+  expect(ticks.map((at) => Math.round(at * 155 / 100))).toEqual([24, 52, 83, 113, 144]);
+  await expect(page.locator('#runupMonths .runup-month')).toHaveText(['Feb', 'Mar', 'Apr', 'May']);
+
+  // On a phone the same ticks, and no month named on top of either end. Loaded
+  // at that width rather than resized to it, so there is no redraw to wait on.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.locator('#runupTicks .runup-tick')).toHaveCount(5);
+  await expect(page.locator('#runupMonths .runup-month').first()).toHaveText('Feb');
+  const taken = await page.evaluate(() => ['runupFrom', 'statDaysLabel'].map((id) => {
+    const r = document.getElementById(id).getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  }));
+  const months = await page.locator('#runupMonths .runup-month').evaluateAll((els) => els.map((el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  }));
+  for (const m of months) for (const end of taken) expect(overlap(m, end)).toBe(false);
 });
 
 test('the money bar draws paid and owed against the ceiling', async ({ page }) => {
