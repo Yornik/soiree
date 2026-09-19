@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.1](https://github.com/Yornik/soiree/compare/v1.2.0...v1.2.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **passkeys:** ask for the prompt inside the tap, and say why it failed ([6685703](https://github.com/Yornik/soiree/commit/668570330813291ff115f14f0491af1aa5eb575b))
+* **passkeys:** sign-in on Safari - ask inside the tap, say why it failed, ignore unrequested extension outputs ([702d695](https://github.com/Yornik/soiree/commit/702d695115c22e56fc35cdca4762104b1fc9f160))
+* **passkeys:** stop refusing sign-ins over extension outputs nobody requested ([1be2952](https://github.com/Yornik/soiree/commit/1be2952a10d1400e31fcb2d7e11a3ebaf384218b))
+* **push:** a tapped reminder no longer reloads the open planner ([f789258](https://github.com/Yornik/soiree/commit/f789258c929f9c9b48eb19167e497bd12cf6bf05))
+* **push:** say what is actually wrong when reminders cannot be turned on ([2ee9a15](https://github.com/Yornik/soiree/commit/2ee9a15c0f82b594870471cc719fb564819b7c61))
+* **push:** say what is actually wrong when reminders cannot be turned on; a tapped reminder no longer reloads the planner ([b56a232](https://github.com/Yornik/soiree/commit/b56a2328001fc9ce4682d8da303d6713a1d0a2b7))
+* **web:** keep the run-up legible when due dates crowd together ([8ffd3a0](https://github.com/Yornik/soiree/commit/8ffd3a08a6120364b868aa0832a91bd12e974d97))
+* **web:** keep the run-up legible when due dates crowd together ([9e65ffc](https://github.com/Yornik/soiree/commit/9e65ffcb7e54ca59e1016b5bdd08dc4b8763eead))
+* **web:** serve the service worker and the manifest as written ([b76736d](https://github.com/Yornik/soiree/commit/b76736d1f99f6379a9de1a8b921d2f8584831a1c))
+* **web:** the service worker has never parsed in any browser ([75fb7ea](https://github.com/Yornik/soiree/commit/75fb7ea7829b52ee3be03ff86a850aede4b80663))
+* **web:** the worker answers only the planner from its cache ([39890be](https://github.com/Yornik/soiree/commit/39890be1d93d95a3490e7cbd03937edfdd4e6dc8))
+
 ## [1.2.0](https://github.com/Yornik/soiree/compare/v1.1.1...v1.2.0) (2026-09-18)
 
 
