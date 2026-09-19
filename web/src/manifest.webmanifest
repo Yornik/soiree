@@ -1,5 +1,5 @@
 {
-  "name": "{{ .EventName }}",
+  "name": {{ json .EventName }},
   "short_name": "soiree",
   "description": "Shared budget and task planner for a group event.",
   "start_url": "/",
@@ -9,25 +9,25 @@
   "theme_color": "#231B3A",
   "icons": [
     {
-      "src": "{{ .Asset "favicon.svg" }}",
+      "src": {{ json (.Asset "favicon.svg") }},
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "{{ .Asset "icon-192.png" }}",
+      "src": {{ json (.Asset "icon-192.png") }},
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "{{ .Asset "icon-512.png" }}",
+      "src": {{ json (.Asset "icon-512.png") }},
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "{{ .Asset "icon-maskable-512.png" }}",
+      "src": {{ json (.Asset "icon-maskable-512.png") }},
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

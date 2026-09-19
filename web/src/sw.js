@@ -6,15 +6,16 @@
  * planner keeps working with no connection at all.
  *
  * Rendered from a template: VERSION changes whenever the HTML shell changes,
- * which is what retires the previous cache.
+ * which is what retires the previous cache. Everything outside the two
+ * substitutions reaches the browser byte for byte.
  */
-var VERSION = '{{ .Version }}';
+var VERSION = {{ json .Version }};
 var CACHE = 'soiree-' + VERSION;
 
 /* Content-addressed asset URLs, safe to cache forever. */
 var PRECACHE = [
 {{- range .Assets }}
-  '{{ . }}',
+  {{ json . }},
 {{- end }}
   '/'
 ];
@@ -124,8 +125,14 @@ self.addEventListener('fetch', function (event) {
   /* The shell: serve the cached copy immediately, refresh in the background.
    * A deploy is picked up on the next visit rather than blocking this one,
    * which is the right trade when the origin is 300ms away. Asset URLs are
-   * hashed, so an older shell still references assets that are still cached. */
-  if (req.mode === 'navigate' || url.pathname === '/') {
+   * hashed, so an older shell still references assets that are still cached.
+   *
+   * Only "/" is the shell. Not every navigation is: a link to a file
+   * (/api/v1/attachments/<id>/content) is one too, and answered from here it
+   * would open the planner where the file should be. The server has no other
+   * page - the screens are all behind the "#" - so everything else goes to
+   * the network untouched. */
+  if (url.pathname === '/') {
     event.respondWith(
       caches.match('/').then(function (hit) {
         var network = fetch(req).then(function (res) {
