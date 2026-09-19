@@ -249,6 +249,12 @@
       'pk.e.setup': 'Your device did not complete the setup. Try again.',
       'pk.e.nologin': 'That passkey did not sign you in. Try your password instead.',
       'pk.e.signin': 'Your device did not complete the sign-in. Try again.',
+      'pk.e.blocked': 'This browser refused to show the passkey prompt. Tap the button once more; if it keeps happening, use your password.',
+      'pk.e.dismissed': 'The passkey prompt was closed or timed out before it finished.',
+      'pk.e.unsupported': 'This device cannot make the kind of passkey this site uses.',
+      'pk.e.constraint': 'This device cannot store a passkey, or has no screen lock to protect one with.',
+      'pk.e.abort': 'The passkey prompt was interrupted. Try again.',
+      'pk.e.kind': '{message} ({kind})',
       'rem.title': 'Reminders',
       'rem.body': 'One notification on this device when a deadline is near, listing what is coming up. Reminders go to admins, and each device is turned on by itself.',
       'rem.on': 'Reminders are on for this device.',
@@ -444,6 +450,12 @@
       'pk.e.setup': 'Je apparaat heeft de installatie niet afgerond. Probeer het opnieuw.',
       'pk.e.nologin': 'Met die passkey ben je niet aangemeld. Probeer je wachtwoord.',
       'pk.e.signin': 'Je apparaat heeft het aanmelden niet afgerond. Probeer het opnieuw.',
+      'pk.e.blocked': 'Deze browser weigerde het passkey-venster te tonen. Tik nog een keer op de knop; blijft het gebeuren, gebruik dan je wachtwoord.',
+      'pk.e.dismissed': 'Het passkey-venster is gesloten of verlopen voordat het klaar was.',
+      'pk.e.unsupported': 'Dit apparaat kan het soort passkey dat deze site gebruikt niet maken.',
+      'pk.e.constraint': 'Dit apparaat kan geen passkey bewaren, of heeft geen schermvergrendeling om hem mee te beveiligen.',
+      'pk.e.abort': 'Het passkey-venster werd onderbroken. Probeer het opnieuw.',
+      'pk.e.kind': '{message} ({kind})',
       'rem.title': 'Herinneringen',
       'rem.body': 'Eén melding op dit apparaat als een deadline nadert, met wat eraan komt. Herinneringen gaan naar beheerders, en elk apparaat zet je apart aan.',
       'rem.on': 'Herinneringen staan aan op dit apparaat.',
@@ -639,6 +651,12 @@
       'pk.e.setup': 'Perangkatmu tidak menyelesaikan pengaturan. Coba lagi.',
       'pk.e.nologin': 'Kunci sandi itu tidak berhasil memasukkanmu. Coba pakai kata sandi.',
       'pk.e.signin': 'Perangkatmu tidak menyelesaikan proses masuk. Coba lagi.',
+      'pk.e.blocked': 'Browser ini menolak menampilkan permintaan kunci sandi. Ketuk tombolnya sekali lagi; kalau terus terjadi, pakai kata sandi.',
+      'pk.e.dismissed': 'Permintaan kunci sandi ditutup atau kehabisan waktu sebelum selesai.',
+      'pk.e.unsupported': 'Perangkat ini tidak bisa membuat jenis kunci sandi yang dipakai situs ini.',
+      'pk.e.constraint': 'Perangkat ini tidak bisa menyimpan kunci sandi, atau tidak punya kunci layar untuk melindunginya.',
+      'pk.e.abort': 'Permintaan kunci sandi terputus. Coba lagi.',
+      'pk.e.kind': '{message} ({kind})',
       'rem.title': 'Pengingat',
       'rem.body': 'Satu notifikasi di perangkat ini kalau tenggat sudah dekat, berisi apa yang akan datang. Pengingat dikirim ke admin, dan setiap perangkat dinyalakan sendiri-sendiri.',
       'rem.on': 'Pengingat aktif di perangkat ini.',
@@ -956,6 +974,10 @@
   function isAdmin() { return state === 'in' && user && user.role === 'admin'; }
 
   function setSession(next, who, reason) {
+    // A registration begun for one account is refused when another finishes
+    // it, so options fetched ahead of time do not outlive whose they were.
+    if ((who && who.id) !== (user && user.id)) registerCeremony.drop();
+
     state = next;
     user = who || null;
 
@@ -1420,6 +1442,7 @@
     showPanel('panelLogin', t('signin'), lede);
     show(byId('loginPasskey'), PASSKEYS_OFFERED);
     say(byId('loginMsg'), '');
+    loginCeremony.warm();
     var email = byId('loginEmail');
     if (email && !email.value) email.focus();
   }
@@ -2000,6 +2023,7 @@
     show(byId('passkeySection'), PASSKEYS_OFFERED);
     say(byId('passkeyMsg'), '');
     if (PASSKEYS_OFFERED) loadPasskeys();
+    registerCeremony.warm();
     renderReminders();
   }
 
@@ -2143,6 +2167,9 @@
           if (res.status === 204) {
             passkeys = passkeys.filter(function (x) { return x.id !== k.id; });
             drawPasskeys();
+            // The options in hand still tell this device not to make a second
+            // key, for a key the server has just forgotten.
+            registerCeremony.renew();
             say(byId('passkeyMsg'), t('pk.removed'));
             return;
           }
@@ -2169,10 +2196,22 @@
    * is the good outcome, but only if it never ships.
    */
 
+  /* The browser's own translation first, the written-out one if it is missing
+   * or if it throws. It throws more often than it should: a password manager's
+   * extension can stand in for navigator.credentials and hand back something
+   * shaped like a credential whose toJSON refuses to run on it — Safari says
+   * "Can only call PublicKeyCredential.toJSON on instances of
+   * PublicKeyCredential" — and the buffers the manual path reads are still
+   * there when that happens. */
+  function native(fn, self, arg) {
+    if (typeof fn !== 'function') return null;
+    try { return fn.call(self, arg) || null; } catch (e) { return null; }
+  }
+
   function creationOptions(json) {
-    if (typeof window.PublicKeyCredential.parseCreationOptionsFromJSON === 'function') {
-      return window.PublicKeyCredential.parseCreationOptionsFromJSON(json);
-    }
+    var PKC = window.PublicKeyCredential;
+    var done = native(PKC.parseCreationOptionsFromJSON, PKC, json);
+    if (done) return done;
     var opts = {};
     for (var k in json) if (Object.prototype.hasOwnProperty.call(json, k)) opts[k] = json[k];
     opts.challenge = fromB64url(json.challenge);
@@ -2188,9 +2227,9 @@
   }
 
   function requestOptions(json) {
-    if (typeof window.PublicKeyCredential.parseRequestOptionsFromJSON === 'function') {
-      return window.PublicKeyCredential.parseRequestOptionsFromJSON(json);
-    }
+    var PKC = window.PublicKeyCredential;
+    var done = native(PKC.parseRequestOptionsFromJSON, PKC, json);
+    if (done) return done;
     var opts = {};
     for (var k in json) if (Object.prototype.hasOwnProperty.call(json, k)) opts[k] = json[k];
     opts.challenge = fromB64url(json.challenge);
@@ -2207,7 +2246,8 @@
   }
 
   function registrationJSON(cred) {
-    if (typeof cred.toJSON === 'function') return cred.toJSON();
+    var done = native(cred.toJSON, cred);
+    if (done) return done;
     var r = cred.response;
     return {
       id: cred.id,                                  // already base64url
@@ -2224,7 +2264,8 @@
   }
 
   function assertionJSON(cred) {
-    if (typeof cred.toJSON === 'function') return cred.toJSON();
+    var done = native(cred.toJSON, cred);
+    if (done) return done;
     var r = cred.response;
     return {
       id: cred.id,                                  // already base64url
@@ -2243,13 +2284,166 @@
     };
   }
 
-  // A ceremony the person waved away is not a failure worth shouting about.
-  function ceremonyMessage(err, fallback) {
-    var name = err && err.name;
-    if (name === 'NotAllowedError') return '';
-    if (name === 'InvalidStateError') return t('pk.e.device');
-    if (name === 'SecurityError') return t('pk.e.origin');
-    return fallback;
+  /* ---------- What the browser said, in words ----------
+   *
+   * A ceremony that fails on somebody's phone fails where nobody can see a
+   * console, so the page has to say what kind of failure it was. Each kind the
+   * specification names gets a sentence, and the kind itself goes on the end in
+   * brackets: it is the one word a person can read out to whoever is helping
+   * them, and it is a name from a fixed list, never the browser's own message
+   * or a stack.
+   *
+   * NotAllowedError is the awkward one. It is what a person closing the prompt
+   * produces, and also what a browser refusing to open one produces, and the
+   * specification makes them the same on purpose. The clock tells them apart
+   * well enough: nobody reads and dismisses a system prompt in under a second,
+   * so a refusal that fast was the browser's. It used to be swallowed entirely,
+   * as "the person waved it away" — which made the second case a button that
+   * did nothing at all.
+   */
+  var PROMPT_REFUSED_WITHIN_MS = 1000;
+
+  var CEREMONY_KINDS = {
+    SecurityError: 'pk.e.origin',
+    NotSupportedError: 'pk.e.unsupported',
+    ConstraintError: 'pk.e.constraint',
+    AbortError: 'pk.e.abort'
+  };
+
+  // Returns { text, bad }: a dismissed prompt is said, and not as a refusal.
+  function ceremonyMessage(err, ceremony, startedAt) {
+    // Letters only, and not many: a name, whatever handed it over.
+    var kind = String((err && err.name) || 'Error').replace(/[^A-Za-z]/g, '').slice(0, 40) || 'Error';
+    var key = Object.prototype.hasOwnProperty.call(CEREMONY_KINDS, kind) ? CEREMONY_KINDS[kind] : '';
+    // Only at registration, where it is how an authenticator says it was on
+    // the exclusion list.
+    if (kind === 'InvalidStateError' && ceremony === 'register') key = 'pk.e.device';
+    var bad = true;
+    if (kind === 'NotAllowedError') {
+      bad = Date.now() - startedAt < PROMPT_REFUSED_WITHIN_MS;
+      key = bad ? 'pk.e.blocked' : 'pk.e.dismissed';
+    }
+    if (!key) key = ceremony === 'register' ? 'pk.e.setup' : 'pk.e.signin';
+    return { text: t('pk.e.kind', { message: t(key), kind: kind }), bad: bad };
+  }
+
+  /* ---------- A ceremony that is ready before it is asked for ----------
+   *
+   * Safari wants navigator.credentials asked from inside the tap. Asking the
+   * server for a challenge first puts a round trip between the two, and WebKit
+   * has forgiven that in different ways at different times: carrying the tap
+   * across a fetch for ten seconds, allowing a page one call without it,
+   * rationing calls made without it. A slow link, a second read of the body, or
+   * an earlier attempt on the same page can each land on the wrong side of
+   * whichever rule applies, and the refusal is a NotAllowedError that looks
+   * like a person closing the prompt. Chromium does not mind, which is how
+   * this went unnoticed. None of it needs predicting if the round trip comes
+   * first — when the screen is drawn — so that the tap finds the options
+   * waiting and calls the browser in the same turn of the event loop.
+   *
+   * A challenge lives five minutes on the server (passkeyChallengeTTL), so one
+   * older than four is discarded and fetched again for as long as the screen is
+   * up. One that has been handed to the browser is never handed over twice.
+   * And a tap that beats the fetch, or follows a refusal, takes the old road:
+   * fetch, then call. That is no worse than it was, and it is where a refusal
+   * from the server gets said, because until somebody asks there is nobody to
+   * say it to.
+   */
+  var PASSKEY_FRESH_MS = 4 * 60 * 1000;
+
+  function preparedCeremony(path, parse, showing) {
+    var ready = null;      // { options, at }
+    var pending = null;    // the begin request in flight
+    var generation = 0;    // bumped when what is in flight stopped being wanted
+    var timer = 0;
+
+    function fresh() {
+      return !!ready && Date.now() - ready.at < PASSKEY_FRESH_MS;
+    }
+
+    function begin() {
+      return request('POST', path).then(function (res) {
+        if (res.status !== 200 || !res.body || !res.body.publicKey) return { res: res };
+        try {
+          return { options: parse(res.body.publicKey) };
+        } catch (e) {
+          return { unreadable: true };
+        }
+      });
+    }
+
+    function warm() {
+      if (fresh() || pending || !showing()) return;
+      var mine = generation;
+      ready = null;
+      pending = begin().then(function (got) {
+        if (mine !== generation) return;
+        pending = null;
+        if (!got.options) return;
+        ready = { options: got.options, at: Date.now() };
+        clearTimeout(timer);
+        timer = setTimeout(function () { ready = null; warm(); }, PASSKEY_FRESH_MS);
+      });
+    }
+
+    // Synchronous, because the whole point is what happens in the tap.
+    function take() {
+      var options = fresh() ? ready.options : null;
+      ready = null;
+      return options;
+    }
+
+    function later() {
+      return (pending || Promise.resolve()).then(function () {
+        var options = take();
+        return options ? { options: options } : begin();
+      });
+    }
+
+    function drop() {
+      generation += 1;
+      ready = null;
+      pending = null;
+    }
+
+    // For when the answer would now be different — the exclusion list after a
+    // passkey is added or removed — and for after any attempt, used or not.
+    function renew() {
+      drop();
+      warm();
+    }
+
+    return { warm: warm, take: take, later: later, drop: drop, renew: renew };
+  }
+
+  function panelShowing(id) {
+    var panel = byId(id);
+    var screen = byId('authScreen');
+    return PASSKEYS_OFFERED && !!panel && !panel.hasAttribute('hidden') &&
+      !!screen && !screen.hasAttribute('hidden') && document.visibilityState !== 'hidden';
+  }
+
+  var registerCeremony = preparedCeremony('/auth/passkeys/register/begin', creationOptions,
+    function () { return state === 'in' && panelShowing('panelAccount'); });
+  var loginCeremony = preparedCeremony('/auth/passkeys/login/begin', requestOptions,
+    function () { return panelShowing('panelLogin'); });
+
+  // A phone that was in a pocket comes back with timers that never fired.
+  document.addEventListener('visibilitychange', function () {
+    registerCeremony.warm();
+    loginCeremony.warm();
+  });
+
+  // Called now, in the caller's turn, and never from a then(): the tap has to
+  // still be on the stack. What it buys is that a stand-in for
+  // navigator.credentials which throws instead of rejecting is reported like
+  // any other refusal, rather than leaving the button disabled for good.
+  function asked(call) {
+    try {
+      return Promise.resolve(call());
+    } catch (e) {
+      return Promise.reject(e);
+    }
   }
 
   function bindPasskeys() {
@@ -2270,21 +2464,9 @@
     add.disabled = true;
     say(msg, t('pk.follow'));
 
-    request('POST', '/auth/passkeys/register/begin').then(function (res) {
-      if (res.status !== 200 || !res.body || !res.body.publicKey) {
-        add.disabled = false;
-        say(msg, problem(res, {}), true);
-        return null;
-      }
-      var options;
-      try {
-        options = creationOptions(res.body.publicKey);
-      } catch (e) {
-        add.disabled = false;
-        say(msg, t('pk.e.readsetup'), true);
-        return null;
-      }
-      return navigator.credentials.create({ publicKey: options })
+    function create(options) {
+      var startedAt = Date.now();
+      return asked(function () { return navigator.credentials.create({ publicKey: options }); })
         .then(function (cred) {
           return request('POST', '/auth/passkeys/register/finish', {
             label: label,
@@ -2293,6 +2475,7 @@
         })
         .then(function (fin) {
           add.disabled = false;
+          registerCeremony.renew();
           if (fin.status === 201 && fin.body) {
             labelField.value = '';
             passkeys.push(fin.body);
@@ -2303,8 +2486,22 @@
           say(msg, problem(fin, {}), true);
         }, function (err) {
           add.disabled = false;
-          say(msg, ceremonyMessage(err, t('pk.e.setup')), true);
+          registerCeremony.renew();
+          var said = ceremonyMessage(err, 'register', startedAt);
+          say(msg, said.text, said.bad);
         });
+    }
+
+    var options = registerCeremony.take();
+    if (options) {
+      create(options);
+      return;
+    }
+    registerCeremony.later().then(function (got) {
+      if (got.options) return create(got.options);
+      add.disabled = false;
+      say(msg, got.unreadable ? t('pk.e.readsetup') : problem(got.res, {}), true);
+      return null;
     });
   }
 
@@ -2314,25 +2511,9 @@
     btn.disabled = true;
     say(msg, t('pk.follow'));
 
-    // No email is sent and none is needed: the server never looks one up, and
-    // a list of credentials for an address — full for a real account, empty
-    // for a stranger — is the account enumeration this whole surface avoids.
-    // The authenticator shows its own picker.
-    request('POST', '/auth/passkeys/login/begin').then(function (res) {
-      if (res.status !== 200 || !res.body || !res.body.publicKey) {
-        btn.disabled = false;
-        say(msg, problem(res, {}), true);
-        return null;
-      }
-      var options;
-      try {
-        options = requestOptions(res.body.publicKey);
-      } catch (e) {
-        btn.disabled = false;
-        say(msg, t('pk.e.readchallenge'), true);
-        return null;
-      }
-      return navigator.credentials.get({ publicKey: options })
+    function get(options) {
+      var startedAt = Date.now();
+      return asked(function () { return navigator.credentials.get({ publicKey: options }); })
         .then(function (cred) {
           return request('POST', '/auth/passkeys/login/finish', { credential: assertionJSON(cred) });
         })
@@ -2342,11 +2523,30 @@
             loginSucceeded(fin.body);
             return;
           }
+          loginCeremony.renew();
           say(msg, problem(fin, { invalid_credentials: t('pk.e.nologin') }), true);
         }, function (err) {
           btn.disabled = false;
-          say(msg, ceremonyMessage(err, t('pk.e.signin')), true);
+          loginCeremony.renew();
+          var said = ceremonyMessage(err, 'login', startedAt);
+          say(msg, said.text, said.bad);
         });
+    }
+
+    // No email is sent and none is needed: the server never looks one up, and
+    // a list of credentials for an address — full for a real account, empty
+    // for a stranger — is the account enumeration this whole surface avoids.
+    // The authenticator shows its own picker.
+    var options = loginCeremony.take();
+    if (options) {
+      get(options);
+      return;
+    }
+    loginCeremony.later().then(function (got) {
+      if (got.options) return get(got.options);
+      btn.disabled = false;
+      say(msg, got.unreadable ? t('pk.e.readchallenge') : problem(got.res, {}), true);
+      return null;
     });
   }
 

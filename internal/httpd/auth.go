@@ -94,6 +94,14 @@ const (
 	// is not a race anybody wins; the limit is here so the attempt costs
 	// something rather than because it could ever succeed.
 	redeemIPWindow = time.Hour
+	// Asking for a passkey challenge is not an attempt to get in: nothing is
+	// checked until login/finish, which is charged to the login bucket like a
+	// password. The page asks for one whenever the sign-in screen is drawn, so
+	// that the tap finds it waiting, and charging that to loginIP would let
+	// looking at the screen spend the allowance for using it. It is still a
+	// public endpoint that writes a row, so it is still bounded.
+	passkeyBeginIPBurst  = 30
+	passkeyBeginIPWindow = time.Minute
 
 	// sweepInterval is how often expired sessions and spent links are cleared
 	// out. Nothing depends on it for correctness — both lookups already refuse
@@ -147,10 +155,11 @@ type Auth struct {
 	// mailLanguage.
 	defaultLanguage string
 
-	loginIP   *limiter
-	loginAcct *limiter
-	resetIP   *limiter
-	redeemIP  *limiter
+	loginIP        *limiter
+	loginAcct      *limiter
+	resetIP        *limiter
+	redeemIP       *limiter
+	passkeyBeginIP *limiter
 
 	// passkeys is the WebAuthn surface, nil unless WithPasskeys turned it on.
 	// Nil is what leaves its routes unmounted; see passkeys.go.
@@ -186,12 +195,13 @@ func NewAuth(o AuthOptions) *Auth {
 
 		defaultLanguage: languageOfLocale(o.Locale),
 
-		loginIP:   newLimiter(loginIPBurst, loginIPWindow),
-		loginAcct: newLimiter(loginAcctBurst, loginAcctWindow),
-		resetIP:   newLimiter(resetIPBurst, resetIPWindow),
-		redeemIP:  newLimiter(redeemIPBurst, redeemIPWindow),
-		params:    auth.DefaultParams,
-		now:       time.Now,
+		loginIP:        newLimiter(loginIPBurst, loginIPWindow),
+		loginAcct:      newLimiter(loginAcctBurst, loginAcctWindow),
+		resetIP:        newLimiter(resetIPBurst, resetIPWindow),
+		redeemIP:       newLimiter(redeemIPBurst, redeemIPWindow),
+		passkeyBeginIP: newLimiter(passkeyBeginIPBurst, passkeyBeginIPWindow),
+		params:         auth.DefaultParams,
+		now:            time.Now,
 		background: func(fn func(context.Context)) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), backgroundTimeout)

@@ -126,6 +126,18 @@ func (a *Auth) WithPasskeys(cfg config.Config) error {
 			// authenticator with no biometric and no PIN into no passkey at all.
 			UserVerification: protocol.VerificationPreferred,
 		},
+		// An extension output nobody asked for is ignored, not refused. The
+		// library's default is to fail the ceremony over one, and real clients
+		// send them: WebKit reports `appid: false` on every assertion from a
+		// security key whether or not appid was requested, and several password
+		// managers attach `credProps` to every registration. This server
+		// requests no extensions and reads no outputs, so there is nothing an
+		// unrequested one could change — while refusing it locks out every
+		// Safari user holding such a key, with a signature that verified. The
+		// specification leaves the choice to the relying party: it "MUST be
+		// prepared to handle such situations, whether it be to ignore the
+		// unsolicited extensions or reject" the response.
+		ExtensionsUnsolicitedOutputPolicy: protocol.UnsolicitedOutputPolicyIgnore,
 	})
 	if err != nil {
 		return fmt.Errorf("passkeys: %w", err)
@@ -154,11 +166,13 @@ func (a *Auth) registerPasskeyRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/auth/passkeys/register/finish",
 		a.RequireAuth(http.HandlerFunc(a.handlePasskeyRegisterFinish)))
 
-	// Public, and behind the same per-IP bucket as the password login. One
-	// budget for "attempts to get in from this address", rather than a second
-	// mechanism that a client can alternate with to get twice the allowance.
+	// Public. The attempt is login/finish, and it sits behind the same per-IP
+	// bucket as the password login: one budget for "attempts to get in from
+	// this address", rather than a second mechanism that a client can alternate
+	// with to get twice the allowance. login/begin checks nothing and has a
+	// bucket of its own — see passkeyBeginIPBurst.
 	mux.Handle("POST /api/v1/auth/passkeys/login/begin",
-		a.limitIP(a.loginIP, http.HandlerFunc(a.handlePasskeyLoginBegin)))
+		a.limitIP(a.passkeyBeginIP, http.HandlerFunc(a.handlePasskeyLoginBegin)))
 	mux.Handle("POST /api/v1/auth/passkeys/login/finish",
 		a.limitIP(a.loginIP, http.HandlerFunc(a.handlePasskeyLoginFinish)))
 
@@ -328,12 +342,16 @@ func (a *Auth) handlePasskeyRegisterFinish(w http.ResponseWriter, r *http.Reques
 
 	parsed, err := protocol.ParseCredentialCreationResponseBytes(req.Credential)
 	if err != nil {
+		a.logPasskeyRefusal("passkey registration refused", "parse", err, "user", user.ID)
 		writeError(w, http.StatusBadRequest, "invalid_passkey", "that is not a usable registration response")
 		return
 	}
 
 	ch, ok := a.consumePasskeyChallenge(w, r, parsed.Response.CollectedClientData.Challenge,
-		store.PasskeyCeremonyRegister, func() { writePasskeyChallengeRefused(w) })
+		store.PasskeyCeremonyRegister, func() {
+			a.logPasskeyRefusal("passkey registration refused", "challenge", nil, "user", user.ID)
+			writePasskeyChallengeRefused(w)
+		})
 	if !ok {
 		return
 	}
@@ -341,6 +359,7 @@ func (a *Auth) handlePasskeyRegisterFinish(w http.ResponseWriter, r *http.Reques
 	// person could finish a registration somebody else started and end up with
 	// a credential attached to the wrong account.
 	if ch.UserID == nil || *ch.UserID != user.ID {
+		a.logPasskeyRefusal("passkey registration refused", "challenge-owner", nil, "user", user.ID)
 		writePasskeyChallengeRefused(w)
 		return
 	}
@@ -364,7 +383,7 @@ func (a *Auth) handlePasskeyRegisterFinish(w http.ResponseWriter, r *http.Reques
 	// the origin, and the public key is extracted.
 	cred, err := a.passkeys.wa.CreateCredential(newPasskeyUser(user, rows), session, parsed)
 	if err != nil {
-		a.log.Info("passkey registration refused", "user", user.ID, "err", err)
+		a.logPasskeyRefusal("passkey registration refused", "verify", err, "user", user.ID)
 		writeError(w, http.StatusBadRequest, "invalid_passkey", "that registration could not be verified")
 		return
 	}
@@ -472,13 +491,13 @@ func (a *Auth) handlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request) 
 
 	parsed, err := protocol.ParseCredentialRequestResponseBytes(req.Credential)
 	if err != nil {
-		a.refusePasskeyLogin(w, "the assertion could not be parsed", err)
+		a.refusePasskeyLogin(w, "parse", err)
 		return
 	}
 
 	ch, ok := a.consumePasskeyChallenge(w, r, parsed.Response.CollectedClientData.Challenge,
 		store.PasskeyCeremonyLogin, func() {
-			a.refusePasskeyLogin(w, "challenge unknown, expired or already spent", nil)
+			a.refusePasskeyLogin(w, "challenge", nil)
 		})
 	if !ok {
 		return
@@ -486,7 +505,7 @@ func (a *Auth) handlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request) 
 	// A login challenge is begun by nobody, so a row carrying an account is a
 	// registration challenge being presented here.
 	if ch.UserID != nil {
-		a.refusePasskeyLogin(w, "challenge was not minted for a login", nil)
+		a.refusePasskeyLogin(w, "challenge-ceremony", nil)
 		return
 	}
 
@@ -553,7 +572,7 @@ func (a *Auth) handlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		a.refusePasskeyLogin(w, "the assertion did not verify", err)
+		a.refusePasskeyLogin(w, "verify", err)
 		return
 	}
 
@@ -573,7 +592,7 @@ func (a *Auth) handlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request) 
 		a.log.Warn("passkey signature counter did not advance",
 			"user", owner.ID, "credential", matched.ID,
 			"stored", matched.SignCount, "presented", parsed.Response.AuthenticatorData.Counter)
-		a.refusePasskeyLogin(w, "the signature counter did not advance", nil)
+		a.refusePasskeyLogin(w, "counter", nil)
 		return
 	}
 
@@ -607,13 +626,34 @@ func (a *Auth) handlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request) 
 // bad signature and a counter that did not advance are indistinguishable to the
 // caller. The reason goes to the log, where an operator can see it and a
 // stranger cannot.
-func (a *Auth) refusePasskeyLogin(w http.ResponseWriter, why string, err error) {
-	if err != nil {
-		a.log.Info("passkey login refused", "reason", why, "err", err)
-	} else {
-		a.log.Info("passkey login refused", "reason", why)
-	}
+func (a *Auth) refusePasskeyLogin(w http.ResponseWriter, step string, err error) {
+	a.logPasskeyRefusal("passkey login refused", step, err)
 	writeError(w, http.StatusUnauthorized, "invalid_credentials", "")
+}
+
+// logPasskeyRefusal is the one line an operator gets when a ceremony fails at
+// finish, and it has to be enough to tell a broken client from a broken server
+// without a device in hand.
+//
+// step names where it stopped: "parse" (the body was not a credential),
+// "challenge" (unknown, expired or spent), "challenge-owner" and
+// "challenge-ceremony" (a good challenge presented by the wrong party or to the
+// wrong endpoint), "verify" (the library refused it) and "counter".
+//
+// The library's errors come in three parts and only the vaguest is what Error()
+// returns — "Error validating origin" — while the part that says which origin
+// is in DevInfo. All three are logged. None of them carries an address or a
+// user handle: they describe the response, not the person.
+func (a *Auth) logPasskeyRefusal(msg, step string, err error, attrs ...any) {
+	attrs = append(attrs, "step", step)
+	var pe *protocol.Error
+	switch {
+	case errors.As(err, &pe):
+		attrs = append(attrs, "kind", pe.Type, "err", pe.Details, "detail", pe.DevInfo)
+	case err != nil:
+		attrs = append(attrs, "err", err.Error())
+	}
+	a.log.Info(msg, attrs...)
 }
 
 // --- managing one's own passkeys --------------------------------------------
