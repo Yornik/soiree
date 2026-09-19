@@ -535,6 +535,34 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /auth/passkeys/report:
+    post:
+      tags: [passkeys]
+      operationId: reportPasskeyRefusal
+      summary: Tell the server that the browser refused a passkey operation.
+      description: |
+        When `navigator.credentials` refuses a request, the server is not asked
+        anything, and its log is empty. The page sends the refusal here. The
+        server writes one log line: the operation, the name and message of the
+        error, the time that the operation took, and the user agent. The line
+        contains no account and no address.
+
+        A session is unnecessary. The answer is `204` for each body, also for a
+        body that the server cannot read. The server shortens each text field
+        and removes characters that are not printable ASCII.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasskeyRefusal'
+      responses:
+        '204':
+          description: The server accepted the report. There is no body.
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /auth/passkeys:
     get:
       tags: [passkeys]
@@ -2737,6 +2765,42 @@ components:
           description: |
             The last sign-in with this passkey. It is `null` for a passkey
             that nobody has used.
+
+    PasskeyRefusal:
+      type: object
+      description: |
+        A passkey operation that the browser refused. Each property is
+        optional. The server ignores a property that it does not know.
+      properties:
+        ceremony:
+          type: string
+          enum: [login, register]
+          description: The operation. A different value is read as `login`.
+        kind:
+          type: string
+          maxLength: 40
+          description: The `name` of the error from `navigator.credentials`.
+          examples: [NotAllowedError]
+        message:
+          type: string
+          maxLength: 240
+          description: |
+            The `message` of the error, as the browser gave it. The page does
+            not show this text to the person.
+        elapsedMs:
+          type: integer
+          minimum: 0
+          description: |
+            The time from the call to the refusal, in milliseconds. A small
+            value shows that the browser did not open a prompt.
+        prepared:
+          type: boolean
+          description: |
+            `true` when the page had the options before the person pressed
+            the button, so it made the call without a request in between.
+        focused:
+          type: boolean
+          description: The value of `document.hasFocus()` before the call.
 
     ########################################################################
     # Web push

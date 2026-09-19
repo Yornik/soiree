@@ -1127,7 +1127,11 @@ The endpoints are `POST /api/v1/auth/passkeys/register/{begin,finish}` (session
 required), `POST /api/v1/auth/passkeys/login/{begin,finish}` (public; `finish`
 is the attempt and sits behind the same per-IP bucket as the password login, so
 alternating between the two does not buy twice the allowance, while `begin`
-checks nothing and has a bucket of its own), and `GET /api/v1/auth/passkeys` plus
+checks nothing and has a bucket of its own), `POST /api/v1/auth/passkeys/report`
+(public, its own bucket: the page tells the server what the browser said when
+it refused, because a refusal in the browser asks the server nothing and would
+otherwise leave no trace anywhere an operator can look; the line it makes names
+no account), and `GET /api/v1/auth/passkeys` plus
 `DELETE /api/v1/auth/passkeys/{id}` for managing one's own credentials. Never
 anybody else's: there is no admin view of somebody's passkeys, because an admin
 has no use for the list and the person who does is the one holding the devices.

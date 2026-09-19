@@ -176,6 +176,10 @@ func (a *Auth) registerPasskeyRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/auth/passkeys/login/finish",
 		a.limitIP(a.loginIP, http.HandlerFunc(a.handlePasskeyLoginFinish)))
 
+	// Public, and not an attempt at anything: see handlePasskeyReport.
+	mux.Handle("POST /api/v1/auth/passkeys/report",
+		a.limitIP(a.passkeyReportIP, http.HandlerFunc(a.handlePasskeyReport)))
+
 	// Managing one's own credentials. Never anybody else's: there is no admin
 	// view of somebody's passkeys, because an admin has no use for the list and
 	// the person who does is the one holding the devices.
@@ -844,4 +848,76 @@ func readPasskeyBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 		return nil, false
 	}
 	return bytes.TrimSpace(body), true
+}
+
+// --- what the browser refused -------------------------------------------------
+
+// passkeyReport is what a page sends when navigator.credentials refused it.
+type passkeyReport struct {
+	Ceremony  string `json:"ceremony"`
+	Kind      string `json:"kind"`
+	Message   string `json:"message"`
+	ElapsedMs int64  `json:"elapsedMs"`
+	Prepared  bool   `json:"prepared"`
+	Focused   bool   `json:"focused"`
+}
+
+// handlePasskeyReport writes down a refusal that happened in a browser.
+//
+// A ceremony can fail in two places. When the server refuses, the log says
+// which step (logPasskeyRefusal). When the browser refuses — no prompt shown, a
+// prompt closed, a request already pending, a page without focus — the server is
+// never asked, and the person holding the device sees one sentence and the name
+// of an error that covers all of those. The sentence that tells them apart is
+// the browser's own message, and the only place it exists is a console on a
+// device the operator does not have: a relative's phone, a laptop in another
+// country. So the page sends it here, and this makes a log line of it.
+//
+// What it must not become is a way to write into the log. The body is bounded,
+// every field is cut to length and to a character set that has no line breaks or
+// control characters in it (the log is JSON, which escapes them anyway; this is
+// for whoever reads it in a terminal), and the route has an allowance of its
+// own. It carries no address, no user and no credential: a browser's error
+// message describes the browser. The user agent is kept because "which browser,
+// on what" is the question the line exists to answer.
+//
+// Always 204, whatever was sent: the page has nothing to do with the answer, and
+// an endpoint that judges its input is one more thing to probe.
+func (a *Auth) handlePasskeyReport(w http.ResponseWriter, r *http.Request) {
+	var req passkeyReport
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<10)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	ceremony := "login"
+	if req.Ceremony == "register" {
+		ceremony = "register"
+	}
+	a.log.Info("passkey refused by the browser",
+		"ceremony", ceremony,
+		"kind", plainText(req.Kind, 40),
+		"message", plainText(req.Message, 240),
+		"elapsedMs", min(max(req.ElapsedMs, 0), 600000),
+		"prepared", req.Prepared,
+		"focused", req.Focused,
+		"agent", plainText(r.UserAgent(), 200),
+	)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// plainText keeps the printable ASCII of s, up to limit characters. Browser
+// error messages and user agents are ASCII in practice; what is dropped is
+// whatever somebody put there to make a log line look like two.
+func plainText(s string, limit int) string {
+	var b strings.Builder
+	for _, r := range s {
+		if b.Len() >= limit {
+			break
+		}
+		if r >= 0x20 && r < 0x7f {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

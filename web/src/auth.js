@@ -2382,6 +2382,34 @@
     return { text: t('pk.e.kind', { message: t(key), kind: kind }), bad: bad };
   }
 
+  /* ---------- What the browser said ----------
+   *
+   * A refusal from the browser never reaches the server: no credential, so no
+   * request. The person sees a sentence and the error's name, and the name is
+   * NotAllowedError for a prompt that was closed, a prompt that was never
+   * shown, a page without focus and a request already pending alike. What
+   * tells them apart is the browser's own message, which is not for showing -
+   * it is in the browser's language, not the reader's, and says nothing they
+   * can act on - but is exactly what whoever runs the site needs, and cannot
+   * get: the device is somebody else's, often in another country. So it goes
+   * to the console, and to the server's log, which takes no address and no
+   * account with it. `focused` and `prepared` are read before the call, since
+   * afterwards is too late: a prompt takes the focus with it.
+   */
+  function reportRefusal(err, ceremony, startedAt, prepared, focused) {
+    var kind = String((err && err.name) || 'Error');
+    var message = String((err && err.message) || '');
+    try { console.warn('passkey ' + ceremony + ' refused - ' + kind + ': ' + message); } catch (e) { /* no console */ }
+    request('POST', '/auth/passkeys/report', {
+      ceremony: ceremony,
+      kind: kind.slice(0, 40),
+      message: message.slice(0, 240),
+      elapsedMs: Date.now() - startedAt,
+      prepared: !!prepared,
+      focused: !!focused
+    }).then(null, function () { /* a report that does not arrive is not a second problem */ });
+  }
+
   /* ---------- A ceremony that is ready before it is asked for ----------
    *
    * Safari wants navigator.credentials asked from inside the tap. Asking the
@@ -2519,8 +2547,9 @@
     add.disabled = true;
     say(msg, t('pk.follow'));
 
-    function create(options) {
+    function create(options, prepared) {
       var startedAt = Date.now();
+      var focused = document.hasFocus();
       return asked(function () { return navigator.credentials.create({ publicKey: options }); })
         .then(function (cred) {
           return request('POST', '/auth/passkeys/register/finish', {
@@ -2542,6 +2571,7 @@
         }, function (err) {
           add.disabled = false;
           registerCeremony.renew();
+          reportRefusal(err, 'register', startedAt, prepared, focused);
           var said = ceremonyMessage(err, 'register', startedAt);
           say(msg, said.text, said.bad);
         });
@@ -2549,11 +2579,11 @@
 
     var options = registerCeremony.take();
     if (options) {
-      create(options);
+      create(options, true);
       return;
     }
     registerCeremony.later().then(function (got) {
-      if (got.options) return create(got.options);
+      if (got.options) return create(got.options, false);
       add.disabled = false;
       say(msg, got.unreadable ? t('pk.e.readsetup') : problem(got.res, {}), true);
       return null;
@@ -2566,8 +2596,9 @@
     btn.disabled = true;
     say(msg, t('pk.follow'));
 
-    function get(options) {
+    function get(options, prepared) {
       var startedAt = Date.now();
+      var focused = document.hasFocus();
       return asked(function () { return navigator.credentials.get({ publicKey: options }); })
         .then(function (cred) {
           return request('POST', '/auth/passkeys/login/finish', { credential: assertionJSON(cred) });
@@ -2583,6 +2614,7 @@
         }, function (err) {
           btn.disabled = false;
           loginCeremony.renew();
+          reportRefusal(err, 'login', startedAt, prepared, focused);
           var said = ceremonyMessage(err, 'login', startedAt);
           say(msg, said.text, said.bad);
         });
@@ -2594,11 +2626,11 @@
     // The authenticator shows its own picker.
     var options = loginCeremony.take();
     if (options) {
-      get(options);
+      get(options, true);
       return;
     }
     loginCeremony.later().then(function (got) {
-      if (got.options) return get(got.options);
+      if (got.options) return get(got.options, false);
       btn.disabled = false;
       say(msg, got.unreadable ? t('pk.e.readchallenge') : problem(got.res, {}), true);
       return null;

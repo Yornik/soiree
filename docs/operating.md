@@ -651,7 +651,8 @@ A person's own credentials are at `GET /api/v1/auth/passkeys` with their
 session. There is no admin view of anybody else's, by design.
 
 When a passkey fails on somebody's device, there are two places to look, and
-which one has something in it says where the failure was:
+which one has something in it says where the failure was. Both failures are in
+the log, under different names:
 
 - **The page** names the kind of refusal the browser gave, in brackets after a
   sentence about it — `(NotAllowedError)`, `(SecurityError)`,
@@ -665,6 +666,18 @@ which one has something in it says where the failure was:
   `verify`, the library's `kind`, `err` and `detail`. The person sees only "that
   passkey did not sign you in"; the reason is here and nowhere else. No line
   carries an address.
+- **The log also has `passkey refused by the browser`** for the first kind, the
+  one the server is never asked about. The page reports it
+  (`POST /api/v1/auth/passkeys/report`): `ceremony`, the error's `kind`, and the
+  browser's own `message` - which the page does not show, and which is what
+  tells one `NotAllowedError` from another ("the page does not have focus", "a
+  request is already pending", or the catch-all for a closed prompt).
+  `elapsedMs` is how long the browser took to refuse; `prepared` is whether the
+  page had the options before the tap; `focused` is whether the page had the
+  focus when it asked; `agent` is the user agent. The route is public, so
+  everything in the line is cut to length and to printable ASCII, and it has an
+  allowance of ten a minute for an address. A reverse-proxy rule that counts
+  401-403 on the login routes never sees it: it answers 204, always.
 
 ## Backup and restore
 

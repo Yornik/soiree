@@ -1496,3 +1496,117 @@ func TestPasskeyLabelIsBounded(t *testing.T) {
 		t.Errorf("label is %d runes, want it cut to %d", got, maxPasskeyLabel)
 	}
 }
+
+// A refusal in the browser never reaches login/finish, so without this the log
+// of a failed sign-in is an empty log. The line has to say what the browser
+// said — and nothing that somebody posting to a public endpoint chose to make
+// it say.
+func TestABrowsersRefusalIsLoggedAndCannotForgeALine(t *testing.T) {
+	f := newPasskeyFixture(t)
+	var logged bytes.Buffer
+	f.a.log = slog.New(slog.NewJSONHandler(&logged, nil))
+
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/passkeys/report", map[string]any{
+		"ceremony":  "login",
+		"kind":      "NotAllowedError",
+		"message":   "The operation is not allowed at this time because the page does not have focus.",
+		"elapsedMs": 12,
+		"prepared":  true,
+		"focused":   false,
+	}, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("report: %d, want 204", rec.Code)
+	}
+	var line map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(logged.Bytes()), &line); err != nil {
+		t.Fatalf("the report did not make exactly one log line: %v\n%s", err, logged.String())
+	}
+	for key, want := range map[string]any{
+		"msg":       "passkey refused by the browser",
+		"ceremony":  "login",
+		"kind":      "NotAllowedError",
+		"message":   "The operation is not allowed at this time because the page does not have focus.",
+		"elapsedMs": float64(12),
+		"prepared":  true,
+		"focused":   false,
+	} {
+		if line[key] != want {
+			t.Errorf("log %q = %v, want %v", key, line[key], want)
+		}
+	}
+
+	// What an ill-wisher sends: a line break and a second "line", control
+	// characters, far too much of everything, and a ceremony that is not one.
+	logged.Reset()
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/passkeys/report", map[string]any{
+		"ceremony":  "login\n{\"level\":\"ERROR\"}",
+		"kind":      strings.Repeat("K", 100),
+		"message":   "first\n{\"level\":\"ERROR\",\"msg\":\"forged\"}\x1b[2J" + strings.Repeat("m", 600),
+		"elapsedMs": -5,
+	}, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("hostile report: %d, want 204", rec.Code)
+	}
+	if n := bytes.Count(bytes.TrimSpace(logged.Bytes()), []byte("\n")); n != 0 {
+		t.Errorf("a hostile report made %d extra log lines", n)
+	}
+	line = map[string]any{}
+	if err := json.Unmarshal(bytes.TrimSpace(logged.Bytes()), &line); err != nil {
+		t.Fatalf("hostile report: not one JSON line: %v", err)
+	}
+	if line["ceremony"] != "login" {
+		t.Errorf("ceremony = %v, want it read as login", line["ceremony"])
+	}
+	if got := line["kind"].(string); len(got) != 40 {
+		t.Errorf("kind is %d characters, want it cut to 40", len(got))
+	}
+	message := line["message"].(string)
+	if len(message) != 240 {
+		t.Errorf("message is %d characters, want it cut to 240", len(message))
+	}
+	if strings.ContainsAny(message, "\n\r\x1b") {
+		t.Errorf("message kept a control character: %q", message)
+	}
+	if line["elapsedMs"] != float64(0) {
+		t.Errorf("elapsedMs = %v, want a negative time read as 0", line["elapsedMs"])
+	}
+
+	// More than a report can be is not read at all.
+	logged.Reset()
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/passkeys/report", map[string]any{
+		"message": strings.Repeat("m", 5000),
+	}, nil)
+	if rec.Code != http.StatusNoContent || logged.Len() != 0 {
+		t.Errorf("oversize report: %d with %d bytes logged, want 204 and nothing", rec.Code, logged.Len())
+	}
+
+	// A body that is not JSON is the same 204 and no line: nothing to probe.
+	logged.Reset()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/passkeys/report", strings.NewReader("not json"))
+	w := httptest.NewRecorder()
+	f.h.ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent || logged.Len() != 0 {
+		t.Errorf("unreadable report: %d with %d bytes logged, want 204 and nothing", w.Code, logged.Len())
+	}
+}
+
+// Anybody can post a report and each one is a log line, so it has an allowance
+// — its own, because a person who keeps failing must still be able to sign in
+// with a password afterwards.
+func TestReportingARefusalIsBoundedAndSpendsNoLoginAttempts(t *testing.T) {
+	f := newPasskeyFixture(t)
+	f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)
+
+	var limited bool
+	for range passkeyReportIPBurst + 2 {
+		rec := f.do(t, http.MethodPost, "/api/v1/auth/passkeys/report", map[string]any{"kind": "NotAllowedError"}, nil)
+		if rec.Code == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Error("the report endpoint writes a log line for anybody, and it was never limited")
+	}
+	f.login(t, "ada@example.test", goodPassword)
+}

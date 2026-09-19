@@ -536,6 +536,48 @@ test('a ceremony the browser refuses says what kind of refusal it was', async ({
   await expect(page.locator('#loginPasskey')).toBeEnabled();
 });
 
+test('what the browser said when it refused reaches the server, and only there', async ({ page }) => {
+  await page.route('**/api/v1/auth/passkeys/login/begin', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ publicKey: { challenge: 'c29pcmVlLWUyZS1jaGFsbGVuZ2U', rpId: 'localhost', userVerification: 'preferred' } }),
+  }));
+  await page.addInitScript(() => {
+    navigator.credentials.get = () => Promise.reject(
+      new DOMException('The operation is not allowed at this time because the page does not have focus.', 'NotAllowedError'),
+    );
+  });
+  test.skip(!(await passkeysOn(page)), 'this instance derived no relying party, so passkeys are off');
+
+  // The real endpoint, so that what is checked is a report the server took.
+  const reported = page.waitForResponse((r) => r.url().endsWith('/api/v1/auth/passkeys/report'));
+  // The options are asked for when the screen is drawn; wait for them, so the
+  // report can be checked for saying the call was made without a round trip.
+  const prepared = page.waitForResponse((r) => r.url().endsWith('/api/v1/auth/passkeys/login/begin'));
+  await page.goto('/#/login');
+  await prepared;
+  await page.click('#loginPasskey');
+
+  const res = await reported;
+  expect(res.status()).toBe(204);
+  const sent = res.request().postDataJSON();
+  expect(sent).toMatchObject({
+    ceremony: 'login',
+    kind: 'NotAllowedError',
+    message: 'The operation is not allowed at this time because the page does not have focus.',
+    prepared: true,
+    focused: true,
+  });
+  expect(sent.elapsedMs).toBeGreaterThanOrEqual(0);
+  expect(sent.elapsedMs).toBeLessThan(5000);
+  // Nothing about who: the endpoint is public and the log is read by others.
+  expect(Object.keys(sent).sort()).toEqual(['ceremony', 'elapsedMs', 'focused', 'kind', 'message', 'prepared']);
+
+  // The person is told the kind, and never the browser's sentence.
+  await expect(page.locator('#loginMsg')).toHaveText(/\(NotAllowedError\)$/);
+  await expect(page.locator('#loginMsg')).not.toContainText('does not have focus');
+});
+
 /*
  * The reason a person has a language at all, against the real server: the
  * deployment speaks one language, the person being invited reads another, and
