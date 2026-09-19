@@ -22,7 +22,7 @@ SOIREE_DEMO_DATA=true go run ./cmd/soiree  # with obviously fake sample data
 ```
 
 The image is built with Go 1.27 and CI tests on the same version; `go.mod`
-declares 1.25 as the floor.
+declares 1.26 as the floor.
 
 ## Tests
 
@@ -54,11 +54,11 @@ Its data directory is a tmpfs and durability is off, so every run starts from
 the migrations rather than from whatever a previous branch left behind. That is
 a development-only setting — never point it at data you care about.
 
-Worth knowing before you go looking for it: `cmd/soiree` does not read
-`DATABASE_URL` yet. The store and migration layers live in `internal/` with
-their own tests against a real database, and get wired into the binary in a
-later roadmap step, so today this stack is a database to point tests and `psql`
-at rather than one the running app is using.
+Worth knowing before you go looking for it: the binary mounts `/api/v1` only
+when `DATABASE_URL` is set. The compose stack sets it, so the app in that stack
+is the shared planner against a real database. A plain `go run ./cmd/soiree`
+leaves it unset and serves the planner alone, with state in the browser — a
+supported mode, not a broken one.
 
 ## Commits
 
@@ -91,7 +91,7 @@ Branches follow `feat/<scope>`, `fix/<scope>` and so on, branched from current
 
 ## What CI checks
 
-Five jobs run on every pull request
+Seven jobs run on every pull request
 ([`.github/workflows/ci.yaml`](.github/workflows/ci.yaml)). All of them must
 pass.
 
@@ -99,6 +99,8 @@ pass.
 |---|---|
 | Lint | `gofmt -l .` must print nothing, then `go vet ./...`, then `golangci-lint` |
 | Test | `go test -race -cover ./...` — the full suite, Docker included |
+| Browser tests | The Playwright specs in `e2e/`, against the real binary, which the suite builds and starts itself |
+| API description | `redocly lint` on `api/openapi.yaml` — valid OpenAPI 3.1; that the routes it describes exist is checked by the Go tests |
 | Vulnerabilities | `govulncheck ./...` |
 | Build image | Builds the `Dockerfile`, runs the image, and smoke tests it |
 | Reproducible build | Builds the binary twice and compares the bytes |
@@ -187,5 +189,7 @@ non-obvious decision where a reader will meet it, and put anything longer in
 ## Licensing
 
 Contributions are accepted under the MIT license in [LICENSE](LICENSE). There
-is no CLA. The bundled Fraunces font is separately licensed under the SIL Open
-Font License 1.1 and is not covered by that.
+is no CLA. The bundled Bricolage Grotesque font is separately licensed under
+the SIL Open Font License 1.1
+([LICENSES/OFL-Bricolage-Grotesque.txt](LICENSES/OFL-Bricolage-Grotesque.txt))
+and is not covered by that.
