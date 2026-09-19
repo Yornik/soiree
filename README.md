@@ -401,12 +401,14 @@ internal/config/      environment parsing and validation
 internal/httpd/       asset pipeline, HTTP handlers, accounts, SSE, metrics
 internal/mailer/      SMTP transport
 internal/migrate/     migration runner, advisory-locked
+internal/objstore/    presigned S3 URLs for attachments, no SDK
 internal/pgtest/      throwaway Postgres for the tests
 internal/push/        Web Push transport
 internal/reminders/   the deadline digest and its scheduler
+internal/s3test/      throwaway MinIO for the tests
 internal/sheetimport/ .ods / .csv reader
 internal/store/       typed data access (pgx), history, LISTEN/NOTIFY
-migrations/           numbered SQL, embedded and append-only, at 0011
+migrations/           numbered SQL, embedded and append-only, at 0012
 web/src/              frontend sources, embedded via //go:embed
 e2e/                  Playwright specs against the running binary
 ```

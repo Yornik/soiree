@@ -419,7 +419,7 @@ left is listed under *Open*.
 Done:
 
 1. ~~Configurable single binary, no third-party requests.~~
-2. ~~Data schema and store layer.~~ Migrations through 0011, a typed data-access
+2. ~~Data schema and store layer.~~ Migrations through 0012, a typed data-access
    layer, and its own tests against a real Postgres. See *Data storage*.
 3. ~~REST API~~, including `PATCH /api/v1/settings` and the 409-on-stale-revision
    path. `Store` in the browser is async and writes through it. See *API shape*.
@@ -494,7 +494,7 @@ environment, so there is no tenant or event table and no row-level scoping.
 
 #### Schema
 
-Eleven migrations, applied in order at startup. The plan's own tables are
+Twelve migrations, applied in order at startup. The plan's own tables are
 below; the rest are named at the end of this section.
 
 `users` is defined under *Accounts* and is created by migration 0001, before
@@ -638,6 +638,7 @@ The remaining tables belong to features documented in their own sections:
 | 0008 | `password_tokens`, `sessions` | The two short-lived secrets logging in needs. Both store the SHA-256 of one and never the value, so a stray `pg_dump` contains nothing replayable. |
 | 0010 | `push_subscriptions` | One row per device, not per person: a phone and a laptop are separate subscriptions with separate keys. |
 | 0011 | `passkey_credentials`, `passkey_challenges` | One row per authenticator, plus the in-flight ceremonies. Public keys only — this database holds nothing that can log in. |
+| 0012 | `attachments`, `attachment_garbage` | One row per file on a budget line or a task: which row it belongs to, its name and size, and whether the upload was ever confirmed. The bytes are in the bucket. `attachment_garbage` collects the keys of rows a cascade removed, so their objects can be deleted afterwards. See *Attachments*. |
 
 Three decisions worth stating explicitly:
 
