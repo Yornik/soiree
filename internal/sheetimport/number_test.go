@@ -28,9 +28,23 @@ func TestParseNumber(t *testing.T) {
 		{in: "1200 EUR", want: 1200},
 		{in: "40 pcs", want: 40},
 
-		// Negatives.
+		// An abbreviation's full stop is not a separator: left in place it made
+		// "Rp.5000" half a rupiah.
+		{in: "Rp.5.000", want: 5000, assumed: true},
+		{in: "Rp.5000", want: 5000},
+		{in: "Rp. 5.000,-", want: 5000, assumed: true},
+		{in: "5.000,--", want: 5000, assumed: true},
+
+		// Negatives. The typographic minus is what a spreadsheet displays and
+		// what a PDF pastes; dropped, a discount becomes a cost.
 		{in: "(1,200)", want: -1200, assumed: true},
 		{in: "-750", want: -750},
+		{in: "−250", want: -250},
+		{in: "–250", want: -250},
+		{in: "€ −250", want: -250},
+		{in: "€−250", want: -250},
+		{in: "(−250)", want: -250},
+		{in: "(-250)", want: -250},
 
 		// Nothing here.
 		{in: "", err: ErrNoValue},
@@ -46,10 +60,43 @@ func TestParseNumber(t *testing.T) {
 		{in: "5k", err: errors.New("x")},
 		{in: "TBD", err: errors.New("x")},
 
+		// A date typed with dots or commas is separators all the way through,
+		// and a separator that repeats reads as grouping. Only groups of three
+		// are grouping: the date a deposit was paid is not twelve million.
+		{in: "12.03.2026", err: errors.New("x")},
+		{in: "1.2.2026", err: errors.New("x")},
+		{in: "12,03,2026", err: errors.New("x")},
+		{in: "10.5.1", err: errors.New("x")},
+		{in: "1.2.3", err: errors.New("x")},
+		{in: "1.234.5", err: errors.New("x")},
+		{in: "1..5", err: errors.New("x")},
+		{in: "12.03.2026,5", err: errors.New("x")},
+
+		// Two figures with a word between them are two figures, however much
+		// the second one looks like a group of thousands.
+		{in: "2 x 500", err: errors.New("x")},
+		{in: "10 of 200", err: errors.New("x")},
+		{in: "3 - 500", err: errors.New("x")},
+
+		// A sign or a mark the parser cannot place is refused, never trimmed:
+		// each of these used to import as the bare figure.
+		{in: "250-", err: errors.New("x")},
+		{in: "- 250", err: errors.New("x")},
+		{in: "- 1 200", err: errors.New("x")},
+		{in: "15%", err: errors.New("x")},
+		{in: "15 %", err: errors.New("x")},
+		{in: "<100", err: errors.New("x")},
+		{in: "~100", err: errors.New("x")},
+		{in: "≈100", err: errors.New("x")},
+
 		// Forcing the convention settles the ambiguous case.
 		{in: "1,500", mode: DecimalComma, want: 1.5},
 		{in: "1,500", mode: DecimalDot, want: 1500},
 		{in: "1.500", mode: DecimalDot, want: 1.5},
+		// It does not make "1.5" fifteen: the other separator is grouping only
+		// where it groups.
+		{in: "1.5", mode: DecimalComma, err: errors.New("x")},
+		{in: "12,5", mode: DecimalDot, err: errors.New("x")},
 	}
 
 	for _, c := range cases {

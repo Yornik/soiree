@@ -391,6 +391,43 @@ func TestConvertStartsANewSectionAfterAKeywordRow(t *testing.T) {
 	}
 }
 
+func TestConvertReportsFiguresItWillNotGuess(t *testing.T) {
+	// Text cells, which is every cell of a CSV. Each of these used to import
+	// as a confident figure under a report reading "0 warnings": 2500, 250,
+	// 250 and 12032026.
+	const csv = "Item,Amount\n" +
+		"Chairs,2 x 500\n" +
+		"Discount,−250\n" +
+		"Refund,250-\n" +
+		"Deposit paid on,12.03.2026\n"
+	book, _, err := ReadCSV(strings.NewReader(csv), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg := &Config{Tables: []Table{{HeaderRow: 1, Columns: map[string]string{"item": "A", "unit": "B"}}}}
+	state, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+
+	if got := findItem(state.BudgetItems, "Discount").Unit; got != -250 {
+		t.Errorf("Discount = %v; want -250, the minus sign is typographic but it is a minus sign", got)
+	}
+	for row, name := range map[int]string{2: "Chairs", 4: "Refund", 5: "Deposit paid on"} {
+		item := findItem(state.BudgetItems, name)
+		if item.Unit != 0 {
+			t.Errorf("%s = %v; want 0, the cell does not hold one plain figure", name, item.Unit)
+		}
+		if !warnedRow(tr, row, "unit column") {
+			t.Errorf("row %d should warn about the unit column; warnings: %v", row, tr.Warnings)
+		}
+		if !strings.Contains(item.Note, "unit: ") {
+			t.Errorf("%s note = %q; want the unread text kept", name, item.Note)
+		}
+	}
+}
+
 func TestConvertRefusesUnmatchedParent(t *testing.T) {
 	// Attaching a quote to the wrong line would be invisible in the output,
 	// so a parent that cannot be found exactly is a hard failure.
