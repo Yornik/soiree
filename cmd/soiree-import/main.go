@@ -372,9 +372,10 @@ Summary keywords match a row's label exactly, ignoring case and trailing
 punctuation — "TOTAL" and "total :" match "total", "TOTAL COSTS" does not. So
 list every spelling the sheet actually uses (the defaults are English: total,
 subtotal, grand total, sum). Matching is deliberately not by substring: a line
-item called "Total makeup package" must not be deleted. Anything the keywords
-miss is still caught by the warning raised when a figure equals the sum of the
-rows above it.
+item called "Total makeup package" must not be deleted. A summary row the
+keywords miss still raises a warning when its figure equals the sum of the rows
+above it: the rows of its own section for a subtotal, every line in the table
+for the total at the bottom. It is imported all the same, so act on the warning.
 
 flags:
 `)

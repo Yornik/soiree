@@ -304,6 +304,93 @@ func TestConvertHonoursConfiguredKeywords(t *testing.T) {
 	}
 }
 
+// A budget in sections, the ordinary shape of a hand-made one: each section
+// closes with its own subtotal and the sheet closes with the total of it all.
+// None of the three labels is a default keyword, so the arithmetic is the only
+// thing standing between this sheet and a budget of three times its size.
+//
+// Row 1 is the header; rows 2-5 and 6-9 are a heading, two lines and their
+// subtotal (1200 and 3800); row 10 is the total (5000).
+const sectionsCSV = "Item;Bedrag\n" +
+	"LOCATIE;\n" +
+	"Zaalhuur;1.000,00\n" +
+	"Schoonmaak;200,00\n" +
+	"Subtotaal locatie;1.200,00\n" +
+	"CATERING;\n" +
+	"Diner;3.000,00\n" +
+	"Drank;800,00\n" +
+	"Subtotaal catering;3.800,00\n" +
+	"Totaal;5.000,00\n"
+
+func sectionsConfig() *Config {
+	return &Config{
+		Decimal: "comma",
+		Tables: []Table{{
+			Name:      "sections",
+			HeaderRow: 1,
+			Columns:   map[string]string{"item": "A", "unit": "B"},
+		}},
+	}
+}
+
+func TestConvertFlagsEverySubtotalAndTheTotal(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(sectionsCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	state, report, err := Convert(book, sectionsConfig())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+
+	// The second subtotal has to be measured against its own section, and the
+	// total against the lines alone: a sum that still holds the first subtotal
+	// matches neither.
+	for _, row := range []int{5, 9, 10} {
+		if !warnedRow(tr, row, "equals the sum") {
+			t.Errorf("row %d is a sum of rows above it and should be flagged; warnings: %v", row, tr.Warnings)
+		}
+	}
+	if len(tr.Warnings) != 3 {
+		t.Errorf("%d warnings; want exactly the three summary rows: %v", len(tr.Warnings), tr.Warnings)
+	}
+	// Flagged, never dropped: the check reads arithmetic, and arithmetic can
+	// be a coincidence.
+	for _, name := range []string{"Subtotaal locatie", "Subtotaal catering", "Totaal"} {
+		if findItem(state.BudgetItems, name) == nil {
+			t.Errorf("%q was flagged and must still be imported", name)
+		}
+	}
+}
+
+func TestConvertStartsANewSectionAfterAKeywordRow(t *testing.T) {
+	// The operator did what the first warning said and listed that label. The
+	// rows below it must not go quiet as a result: a clean report over a
+	// budget that still counts the second subtotal and the total is the worst
+	// outcome there is.
+	book, _, err := ReadCSV(strings.NewReader(sectionsCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg := sectionsConfig()
+	cfg.TotalKeywords = []string{"total", "subtotaal locatie"}
+
+	_, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+	if !skippedRow(tr, 5, "summary row") {
+		t.Fatalf("row 5 should be skipped by its keyword; skips: %v", tr.Skipped)
+	}
+	for _, row := range []int{9, 10} {
+		if !warnedRow(tr, row, "equals the sum") {
+			t.Errorf("row %d should still be flagged after the keyword row; warnings: %v", row, tr.Warnings)
+		}
+	}
+}
+
 func TestConvertRefusesUnmatchedParent(t *testing.T) {
 	// Attaching a quote to the wrong line would be invisible in the output,
 	// so a parent that cannot be found exactly is a hard failure.
