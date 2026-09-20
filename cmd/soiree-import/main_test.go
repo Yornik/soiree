@@ -108,7 +108,8 @@ func TestRunImportsWithFlagMapping(t *testing.T) {
 	}
 	// In whole cents from a rounded unit price, which is how the page adds a
 	// budget up. The float product would forgive a unit price that does not
-	// survive being stored.
+	// survive being stored. math.Round and the page's Math.round part ways
+	// only on a negative half, and nothing in this fixture is negative.
 	var cents float64
 	for _, item := range state.BudgetItems {
 		cents += math.Round(math.Round(item.Unit*100) * item.Qty)
@@ -126,9 +127,11 @@ func TestRunRefusesACurrencyThatIsNotACode(t *testing.T) {
 		err = run([]string{"-header", "1", "-map", "item=A,qty=B,total=C", "-currency", "euro", "-dry-run", csv})
 	})
 	// A misspelt code would quietly fall back to two decimals, which for a
-	// zero-decimal currency is the check not running at all.
-	if err == nil || !strings.Contains(err.Error(), "currency") {
-		t.Fatalf("run -currency euro = %v; want it refused by name", err)
+	// zero-decimal currency is the check not running at all. The wording is
+	// pinned because "currency" alone is also in what a binary without the
+	// flag answers, and that is not this refusal.
+	if err == nil || !strings.Contains(err.Error(), "ISO 4217") {
+		t.Fatalf("run -currency euro = %v; want it refused as not a code", err)
 	}
 }
 
