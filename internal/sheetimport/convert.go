@@ -206,6 +206,10 @@ func (c *converter) skipRow(t *Table, tr *TableReport, sh *Sheet, n int, labelFi
 		}
 		tr.warn(n, "the spreadsheet does not show this row (hidden, or filtered out): imported anyway, set skipHidden to leave hidden rows out")
 	}
+	if span, joined := sh.Joined[n]; joined {
+		tr.warn(n, fmt.Sprintf("read from lines %d-%d of the file: a line break inside a quoted cell, or an unclosed quote that swallowed the lines under it",
+			span.First, span.Last))
+	}
 
 	label = c.text(sh, t, n, labelField)
 	if label == "" {

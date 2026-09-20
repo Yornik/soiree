@@ -55,10 +55,20 @@ func ReadCSV(r io.Reader, comma rune) (*Book, rune, error) {
 			return nil, comma, fmt.Errorf("read csv: %w", err)
 		}
 		row := make([]Cell, len(rec))
+		breaks := 0
 		for i, f := range rec {
 			row[i] = Cell{Text: strings.TrimSpace(f)}
+			breaks += strings.Count(row[i].Text, "\n")
 		}
 		sheet.Rows = append(sheet.Rows, row)
+		if breaks > 0 && len(rec) > 0 {
+			// LazyQuotes means an unclosed quote reads the lines under it as
+			// part of this field instead of as rows of their own, so the row
+			// numbers from here on no longer match the file's lines. The
+			// caller has to be told which row it was.
+			at, _ := cr.FieldPos(0)
+			sheet.markJoined(len(sheet.Rows), LineSpan{First: at, Last: at + breaks})
+		}
 	}
 	return &Book{Sheets: []Sheet{sheet}}, comma, nil
 }

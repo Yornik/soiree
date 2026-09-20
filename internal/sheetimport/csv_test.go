@@ -169,3 +169,32 @@ func TestReadCSVKeepsAccentsThatAreUTF8(t *testing.T) {
 		t.Errorf("B2 = %q; want the name as the file spells it", got)
 	}
 }
+
+// LazyQuotes is on so that a stray quote in free text cannot abort the read,
+// and the price of that is an unclosed quote swallowing the lines under it
+// into one cell. Nothing is lost, but the rows underneath are gone from the
+// budget and the row numbers after it no longer match the file's lines, so
+// the report has to name the row it happened to.
+func TestReportNamesARowReadFromSeveralLines(t *testing.T) {
+	const csv = "Item,Total\n" +
+		"Venue,2500\n" +
+		"\"Unclosed,400\n" +
+		"Flowers,500\n"
+	book, _, err := ReadCSV(strings.NewReader(csv), ',')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg := &Config{Tables: []Table{{
+		HeaderRow: 1,
+		FirstRow:  2,
+		Columns:   map[string]string{"item": "A", "total": "B"},
+	}}}
+	_, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+	if !warnedRow(tr, 3, "lines 3-4") {
+		t.Errorf("row 3 was read from two lines of the file and nothing says so; warnings: %v", tr.Warnings)
+	}
+}
