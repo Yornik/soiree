@@ -384,6 +384,267 @@ test("someone else's edit that arrives before ours is taken in without a word", 
   await expect(budgetRow(page, 0).unit).toHaveValue('2500');
 });
 
+/*
+ * The page, left alone with the conflict it is about to meet.
+ *
+ * Taking the event stream away is not enough on its own. Signing in arms a
+ * re-read of the plan too, and that read holds off while a write of this
+ * browser's is pending, which is exactly the moment a spec stages a conflict:
+ * it then lands between their edit and this one, settles the conflict
+ * silently, and there is no 409 left to meet. So the plan fetch the page
+ * opens with goes through and nothing after it does.
+ */
+async function noReReads(page) {
+  await page.addInitScript(() => { delete window.EventSource; });
+  let opened = false;
+  await page.route('**/api/v1/plan', (route) => {
+    if (!opened && route.request().method() === 'GET') {
+      opened = true;
+      return route.continue();
+    }
+    return route.abort('internetdisconnected');
+  });
+}
+
+/*
+ * The same moment as the spec above, on the column both people touched.
+ *
+ * A merge that is per field has one case it cannot settle by leaving each side
+ * alone: both sides changed the same one. Who pays for a shared line is not a
+ * value but a set, kept in a join table, and the whole list travelling as one
+ * string is an artefact of how it is compared rather than a decision. Two
+ * people each ticking a name has an answer that keeps both.
+ */
+test('two people tagging the same line at once keep both names', async ({ page, request }) => {
+  await noReReads(page);
+
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addSponsor(page, { code: 'Rose', name: 'Ada' });
+  await addSponsor(page, { code: 'Iris', name: 'Bram' });
+  const line = await addBudgetLine(page, { item: 'Venue deposit', unit: 2000, qty: 1 });
+
+  // Everything typed so far is on the server, so the revision read here is the
+  // one the next write will carry and nothing of this browser's is pending.
+  let stored;
+  let iris;
+  await expect
+    .poll(async () => {
+      const plan = await apiPlan(request);
+      stored = plan.budgetItems[0];
+      iris = (plan.sponsors || []).find((s) => s.code === 'Iris');
+      return plan.sponsors.length === 2 && !!stored && stored.unit === '2000.00';
+    })
+    .toBe(true);
+
+  // Somebody else puts one name on the line. This browser is now a revision
+  // behind, on the very column it is about to tick.
+  const theirs = await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
+    data: { revision: stored.revision, sponsors: [iris.id] },
+  });
+  expect(theirs.status()).toBe(200);
+
+  await tagLine(line, ['Rose']);
+
+  // Both names, because neither person untagged the other's. Taking one side
+  // whole would drop a payer from a shared cost and say nothing.
+  await expect
+    .poll(async () => {
+      const plan = await apiPlan(request);
+      const byId = new Map(plan.sponsors.map((s) => [s.id, s.code]));
+      return plan.budgetItems[0].sponsors.map((id) => byId.get(id)).sort();
+    })
+    .toEqual(['Iris', 'Rose']);
+
+  await expect(page.locator('#dataMsg')).toHaveText(/Both sets of changes have been kept/);
+});
+
+/*
+ * And the case that has no such answer. Two people typed into one text column,
+ * so one of the two values is gone. This browser's wins, which is the rule
+ * everywhere else and the one the README describes. What must not happen is
+ * the page claiming both were kept.
+ */
+test('a column two people changed at once says that yours replaced theirs', async ({ page, request }) => {
+  await noReReads(page);
+
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  const row = await addBudgetLine(page, {
+    item: 'Venue deposit',
+    unit: 2000,
+    qty: 1,
+    note: 'Balance due one month before',
+  });
+
+  let stored;
+  await expect
+    .poll(async () => {
+      const plan = await apiPlan(request);
+      stored = plan.budgetItems[0];
+      return !!stored && stored.note === 'Balance due one month before';
+    })
+    .toBe(true);
+
+  const theirs = await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
+    data: { revision: stored.revision, note: 'Deposit already wired' },
+  });
+  expect(theirs.status()).toBe(200);
+
+  await row.note.fill('Ask about the deposit');
+
+  await expect.poll(async () => (await apiPlan(request)).budgetItems[0].note).toBe('Ask about the deposit');
+  await expect(page.locator('#dataMsg')).toHaveText(/Yours replaced theirs/);
+  await expect(page.locator('#dataMsg')).not.toHaveText(/Both sets of changes have been kept/);
+});
+
+/*
+ * The three answers a write can meet that are not a conflict, one spec each.
+ * None of them had a test at any level, and two of them decide whether
+ * somebody's typing survives.
+ *
+ * First: the line this person removed had just been changed by somebody else.
+ * The removal is still what they asked for, so it goes again at the revision
+ * that now stands, and they are told, because the edit it overtook was not
+ * theirs.
+ */
+test('removing a line somebody had just changed still removes it, and says so', async ({ page, request }) => {
+  await noReReads(page);
+
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2000, qty: 1 });
+
+  let stored;
+  await expect
+    .poll(async () => {
+      const plan = await apiPlan(request);
+      stored = plan.budgetItems[0];
+      return !!stored && stored.unit === '2000.00';
+    })
+    .toBe(true);
+
+  const theirs = await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
+    data: { revision: stored.revision, note: 'Deposit already wired' },
+  });
+  expect(theirs.status()).toBe(200);
+
+  await budgetRow(page, 0).remove.click();
+
+  await expect(page.locator('#dataMsg')).toHaveText(/It is gone/);
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(0);
+});
+
+/*
+ * Second: the server understood the write and said no. The row is parked,
+ * because sending the identical body again would only earn the identical
+ * refusal, and the edit stays on the screen under a line saying it has not
+ * left the browser.
+ *
+ * A refusal has to be staged rather than provoked: every 4xx this API really
+ * answers comes from a body the page has no way to type. What is under test is
+ * what the page does with one, not which one it was.
+ */
+test('a change the server will not take is parked, said out loud, and not counted once the line goes', async ({ page, request }) => {
+  await noReReads(page);
+
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2000, qty: 1 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  let refuse = true;
+  await page.route('**/api/v1/budget-items/*', async (route) => {
+    if (refuse && route.request().method() === 'PATCH') {
+      refuse = false;
+      await route.fulfill({ status: 422, contentType: 'application/json', body: '{"error":"refused"}' });
+      return;
+    }
+    await route.continue();
+  });
+
+  await budgetRow(page, 0).note.fill('Balance due one month before');
+  await expect(page.locator('#dataMsg')).toHaveText(/would not accept/);
+  await expect(budgetRow(page, 0).note).toHaveValue('Balance due one month before');
+
+  // And then the line goes. The parked write can never be made again, so the
+  // question at the door of a shared computer must not go on counting it: it
+  // would be asking about a change that exists nowhere.
+  await budgetRow(page, 0).remove.click();
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(0);
+  expect(await page.evaluate(() => window.soiree.beforeSignOut())).toBe(0);
+});
+
+/*
+ * Third, and the one where two rules used to contradict each other. A PATCH
+ * that meets a 404 means somebody removed the line this person is editing, and
+ * the page says their copy is still here. The same removal announces itself on
+ * the event stream, and the re-read it triggers used to drop that row a few
+ * hundred milliseconds later: the outcome the 404 branch exists to prevent.
+ *
+ * The order is arranged rather than raced. The page will not re-read the plan
+ * while a write of its own is in flight, so holding the PATCH at the door is
+ * what puts the removal before the 404 every time.
+ */
+test('the line somebody else removed while you were editing it stays on your screen', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2000, qty: 1 });
+
+  let stored;
+  await expect
+    .poll(async () => {
+      const plan = await apiPlan(request);
+      stored = plan.budgetItems[0];
+      return !!stored && stored.unit === '2000.00';
+    })
+    .toBe(true);
+
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let held = false;
+  await page.route(`**/api/v1/budget-items/${stored.id}`, async (route) => {
+    if (route.request().method() === 'PATCH' && !held) {
+      held = true;
+      await gate;
+    }
+    await route.continue();
+  });
+
+  await budgetRow(page, 0).note.fill('my own remark');
+  await expect.poll(() => held).toBe(true);
+
+  const removed = await request.delete(
+    `${API_URL}/api/v1/budget-items/${stored.id}?revision=${stored.revision}`,
+    { headers: await apiAuth(request) },
+  );
+  expect(removed.status(), 'the removal has to land, or there is no 404 to meet').toBe(204);
+
+  // Registered before the write is let go: the 404 and the re-read the removal
+  // announces can both be over before a listener added afterwards exists.
+  const reread = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && r.url().includes('/api/v1/plan'),
+  );
+  release();
+
+  await expect(page.locator('#dataMsg')).toHaveText(/only in this browser/);
+  await reread;
+
+  // Out of the table first: a rebuild is held back while somebody is typing in
+  // it, so a row dropped from the state would still be on the screen and there
+  // would be nothing to assert.
+  await page.locator('#ceilingInput').click();
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
+  await expect(budgetRow(page, 0).note).toHaveValue('my own remark');
+
+  // Kept here is not put back there. The other person's removal stands, and
+  // the row is not quietly posted a second time under a new id.
+  expect((await apiPlan(request)).budgetItems).toHaveLength(0);
+});
+
 test('removing a line removes it for everyone', async ({ page, request }) => {
   await openSharedPlanner(page);
   await gotoTab(page, 'budget');

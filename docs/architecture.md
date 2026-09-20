@@ -293,14 +293,21 @@ Five consequences worth stating, because each is easy to undo:
   *both* edits started from. A field this browser did not touch takes theirs; a
   field it did keeps ours and goes again on the next pass. The obvious
   alternative — set the shadow to `current` and re-diff — sends the *old* value
-  of the field they changed straight back and quietly undoes them.
+  of the field they changed straight back and quietly undoes them. A field
+  *both* sides changed is the case the rule above cannot settle: a list of ids
+  is merged as the set it is, and anything else keeps ours and says so, because
+  the other value is gone and "both were kept" would not be true.
 - **A `4xx` that is not a `409` parks the row** rather than retrying it. The
   server understood and said no; an identical body would only earn an identical
   refusal. The edit is not lost — it is in `state`, on the screen and in
   `localStorage` — and the person is told it has not left the browser. A `404`
   in particular does not delete the row: somebody else removed what this person
   is editing, and throwing their work away to agree is the one outcome worse
-  than being out of step.
+  than being out of step. The re-read that the same removal announces follows
+  that rule rather than undoing it: a row the server no longer has but this
+  browser has edited is kept, and its park moves to a create that is
+  deliberately not sent, so the line goes back only if this person goes on
+  working in it.
 - **Ids are reconciled, not assumed.** The page mints an optimistic id the
   moment a row appears, because the row has to be addressable before any round
   trip could have answered. `POST` returns a uuid, and adopting it is a rename

@@ -257,7 +257,10 @@ sends only the fields that differ, carrying the revision they were read at. A
 write somebody else got to first comes back `409` with the row as it now
 stands, and the two are merged three ways against that copy: a field this
 browser did not touch takes their value, a field it did keeps ours and goes
-again. Nothing is silently overwritten in either direction.
+again. A field both people changed at once is the one case where one of the two
+values has to go: the list of who is paying for a line is a set, so there both
+survive, and anywhere else this browser's value wins and the page says so
+rather than claiming both were kept.
 
 ## Status
 

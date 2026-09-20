@@ -266,6 +266,7 @@
       'd.unreadable': 'Could not read that file.',
       'd.confirm': 'Replace everything currently in this planner with the imported data?',
       'd.merged': 'Someone else was editing the same line. Both sets of changes have been kept.',
+      'd.replaced': 'Someone else changed the same field at the same time. Yours replaced theirs.',
       'd.overtaken': 'Someone else had just changed the line you removed. It is gone.',
       'd.gone': 'Someone else removed the line you were editing. Your copy is still here, but only in this browser.',
       'd.offline': 'Your changes are not reaching the server. Still trying — they are safe in this browser meanwhile.',
@@ -414,6 +415,7 @@
       'd.unreadable': 'Dat bestand kon niet gelezen worden.',
       'd.confirm': 'Alles wat nu in deze planner staat vervangen door de geïmporteerde gegevens?',
       'd.merged': 'Iemand anders bewerkte dezelfde regel. Beide wijzigingen zijn bewaard.',
+      'd.replaced': 'Iemand anders wijzigde hetzelfde veld op hetzelfde moment. Jouw waarde heeft die van hen vervangen.',
       'd.overtaken': 'Iemand anders had de regel die je verwijderde net gewijzigd. Hij is nu weg.',
       'd.gone': 'Iemand anders heeft de regel die jij aan het bewerken was verwijderd. Jouw versie staat er nog, maar alleen in deze browser.',
       'd.offline': 'Je wijzigingen bereiken de server niet. Er wordt opnieuw geprobeerd — ondertussen staan ze veilig in deze browser.',
@@ -561,6 +563,7 @@
       'd.unreadable': 'Berkas itu tidak bisa dibaca.',
       'd.confirm': 'Ganti semua isi perencana ini dengan data yang diimpor?',
       'd.merged': 'Orang lain sedang mengubah baris yang sama. Kedua perubahan tetap tersimpan.',
+      'd.replaced': 'Orang lain mengubah bidang yang sama pada saat bersamaan. Nilaimu menggantikan nilai mereka.',
       'd.overtaken': 'Orang lain baru saja mengubah baris yang kamu hapus. Baris itu sudah hilang.',
       'd.gone': 'Orang lain menghapus baris yang sedang kamu ubah. Salinanmu masih ada, tetapi hanya di browser ini.',
       'd.offline': 'Perubahanmu belum sampai ke server. Masih dicoba lagi — sementara ini aman tersimpan di browser.',
@@ -1049,12 +1052,26 @@
   // row still holding a local sponsor id compares equal to the shadow entry
   // that already holds the server's uuid for it.
   function idsField(name) {
+    function ids(v) { return (v || []).map(mapId); }
     return {
       name: name,
-      canon: function (r) { return (r[name] || []).map(mapId).slice().sort().join(','); },
-      wire: function (r) { return (r[name] || []).map(mapId); },
+      canon: function (r) { return ids(r[name]).sort().join(','); },
+      wire: function (r) { return ids(r[name]); },
       read: function (v) { return Array.isArray(v) ? v.slice() : []; },
-      copy: function (v) { return (v || []).slice(); }
+      copy: function (v) { return (v || []).slice(); },
+      // The one conflict a per-field merge can settle without discarding
+      // either side. A list of ids is a set, not a value: theirs, plus what
+      // was ticked here, less what was unticked here. Two people each naming
+      // a payer for one line is what the picker is for, and neither of them
+      // untagged the other's name.
+      merge: function (base, mine, theirs) {
+        var was = ids(base), now = ids(mine);
+        var out = ids(theirs);
+        now.forEach(function (id) {
+          if (was.indexOf(id) === -1 && out.indexOf(id) === -1) out.push(id);
+        });
+        return out.filter(function (id) { return now.indexOf(id) !== -1 || was.indexOf(id) === -1; });
+      }
     };
   }
 
@@ -1120,6 +1137,10 @@
   // Table name -> the descriptor that draws it, for reading the change feed.
   var BY_ENTITY = { settings: SETTINGS };
   COLLECTIONS.forEach(function (c) { BY_ENTITY[c.entity] = c; });
+
+  // State key -> the same descriptor, for reading an op key back apart.
+  var BY_KEY = { settings: SETTINGS };
+  COLLECTIONS.forEach(function (c) { BY_KEY[c.key] = c; });
 
   function fieldNamed(coll, name) {
     for (var i = 0; i < coll.fields.length; i++) {
@@ -1484,6 +1505,10 @@
    *
    *   field unchanged here  -> theirs is simply newer. Take it, on screen too.
    *   field changed here    -> keep ours. It goes again on the next pass.
+   *   both changed it       -> a list of ids is a set and keeps both; anything
+   *                            else keeps ours, and the person is told that
+   *                            theirs is the value that went, rather than
+   *                            being told both were kept.
    *
    * Either way the shadow becomes their row, so the retry carries only the
    * fields this person actually changed and the merge terminates — when there
@@ -1500,21 +1525,30 @@
     if (!row || !known) return;
 
     var base = known.row;
-    var theirs = rowFromWire(c, current);
+    var landed = rowFromWire(c, current);
     var tookTheirs = false;
+    var replaced = false;
 
     c.fields.forEach(function (f) {
       var mine = f.canon(row);
-      if (mine !== f.canon(base)) return;       // edited here: ours wins, and goes again
-      if (f.canon(theirs) === mine) return;     // nobody changed it
-      row[f.name] = f.copy(theirs[f.name]);
+      var agreed = f.canon(base);
+      var theirs = f.canon(landed);
+      if (mine === agreed) {
+        if (theirs === mine) return;            // nobody changed it
+        row[f.name] = f.copy(landed[f.name]);
+        tookTheirs = true;
+        return;
+      }
+      if (theirs === agreed || theirs === mine) return;  // edited here: ours wins, and goes again
+      if (!f.merge) { replaced = true; return; }
+      row[f.name] = f.merge(base[f.name], row[f.name], landed[f.name]);
       tookTheirs = true;
     });
 
-    known.row = theirs;
+    known.row = landed;
     known.revision = Number(current.revision) || known.revision;
 
-    flash(t('d.merged'));
+    flash(t(replaced ? 'd.replaced' : 'd.merged'));
     if (tookTheirs) scheduleRefresh(c);
   }
 
@@ -1847,8 +1881,17 @@
   function unsentCount() {
     if (!apiMode || !shadow) return 0;
     // Waiting to be sent, plus refused by the server and parked: both are
-    // edits that exist in this browser and nowhere else.
-    return planOps().length + Object.keys(blocked).length;
+    // edits that exist in this browser and nowhere else. A park whose row is
+    // in neither the page nor the shadow is neither of those: nothing can
+    // produce that op again, so nothing will ever clear the key, and counting
+    // it asks the person about a change that exists nowhere at all.
+    var parked = Object.keys(blocked).filter(function (key) {
+      var c = BY_KEY[key.slice(0, key.indexOf(':'))];
+      if (!c || c.singleton) return true;
+      var id = key.slice(key.indexOf(':') + 1, key.lastIndexOf(':'));
+      return !!findRow(state[c.key], id) || !!shadow[c.key][id];
+    });
+    return planOps().length + parked.length;
   }
 
   function beforeSignOut() {
@@ -2256,7 +2299,13 @@
    * Rows work the same way, and the shadow is what tells the two halves of
    * each ambiguity apart:
    *
-   *   here, not on the server -> in the shadow? somebody deleted it: drop it.
+   *   here, not on the server -> in the shadow and untouched since? somebody
+   *                              deleted it: drop it. In the shadow with an
+   *                              edit of this person's on it? keep the edit,
+   *                              parked as a create: dropping it is what the
+   *                              404 branch calls worse than being out of
+   *                              step, and posting it back undoes a removal
+   *                              somebody meant.
    *                              not in the shadow? our own create, unsent:
    *                              keep it, and let the next pass POST it.
    *   on the server, not here -> in the shadow? our own delete, unsent: keep
@@ -2289,15 +2338,39 @@
         var base = was[w.id] ? was[w.id].row : entry.row;
         c.fields.forEach(function (f) {
           var ours = f.canon(mine);
-          if (ours !== f.canon(base)) return;        // edited here: ours wins
-          if (ours === f.canon(entry.row)) return;   // nobody changed it
-          mine[f.name] = f.copy(entry.row[f.name]);
+          var agreed = f.canon(base);
+          var theirs = f.canon(entry.row);
+          if (ours === agreed) {
+            if (ours === theirs) return;             // nobody changed it
+            mine[f.name] = f.copy(entry.row[f.name]);
+            touched[c.key] = c;
+            return;
+          }
+          // Edited here: ours wins, except where the field is a set and can
+          // hold both. Nothing is said about it: this is a plan arriving
+          // rather than a write being answered, and it runs over every row.
+          if (theirs === agreed || theirs === ours || !f.merge) return;
+          mine[f.name] = f.merge(base[f.name], mine[f.name], entry.row[f.name]);
           touched[c.key] = c;
         });
       });
 
       state[c.key] = (state[c.key] || []).filter(function (r) {
         if (!r || !r.id || here[r.id] || !was[r.id]) return true;
+        // Somebody removed a line this person is in the middle of editing.
+        // It is the same moment writeFailed meets as a 404, and it follows
+        // the same rule: the work stays. The server no longer has the row, so
+        // the park moves with it, from the update that can never be accepted
+        // to a create that is deliberately not sent, because posting it back
+        // would undo a removal somebody meant. Typing in the line again
+        // changes the signature and puts it back, which is then this person
+        // asking for it rather than the page deciding.
+        if (changedFields(c, r, was[r.id].row).length) {
+          delete blocked[c.key + ':' + r.id + ':update'];
+          blocked[c.key + ':' + r.id + ':create'] =
+            opSignature({ kind: 'create', coll: c, id: r.id });
+          return true;
+        }
         touched[c.key] = c;
         return false;
       });
