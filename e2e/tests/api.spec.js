@@ -579,17 +579,19 @@ test('a change the server will not take is parked, said out loud, and not counte
 });
 
 /*
- * Third, and the one where two rules used to contradict each other. A PATCH
- * that meets a 404 means somebody removed the line this person is editing, and
- * the page says their copy is still here. The same removal announces itself on
- * the event stream, and the re-read it triggers used to drop that row a few
- * hundred milliseconds later: the outcome the 404 branch exists to prevent.
+ * Third, and the one where two rules contradicted each other. A PATCH that
+ * meets a 404 means somebody removed the line this person is editing. The page
+ * said their copy was still here, and the re-read that the same removal
+ * announces dropped the row a few hundred milliseconds later: a promise with a
+ * life of half a second. The re-read is the rule, because there is no row left
+ * to write the edit to and putting the line back would undo a removal somebody
+ * meant, so the message is what had to change.
  *
  * The order is arranged rather than raced. The page will not re-read the plan
  * while a write of its own is in flight, so holding the PATCH at the door is
  * what puts the removal before the 404 every time.
  */
-test('the line somebody else removed while you were editing it stays on your screen', async ({ page, request }) => {
+test('the line somebody else removed while you were editing it goes from your copy too', async ({ page, request }) => {
   await openSharedPlanner(page);
   await gotoTab(page, 'budget');
   await addBudgetLine(page, { item: 'Venue deposit', unit: 2000, qty: 1 });
@@ -630,19 +632,32 @@ test('the line somebody else removed while you were editing it stays on your scr
   );
   release();
 
-  await expect(page.locator('#dataMsg')).toHaveText(/only in this browser/);
+  await expect(page.locator('#dataMsg')).toHaveText(/gone with it/);
   await reread;
 
-  // Out of the table first: a rebuild is held back while somebody is typing in
-  // it, so a row dropped from the state would still be on the screen and there
-  // would be nothing to assert.
-  await page.locator('#ceilingInput').click();
-  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
+  // Out of the table, but only once the caret leaves it: a rebuild is held
+  // back while somebody is typing, which is why the line is still under their
+  // hands when the message arrives.
   await expect(budgetRow(page, 0).note).toHaveValue('my own remark');
+  await page.locator('#ceilingInput').click();
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(0);
 
-  // Kept here is not put back there. The other person's removal stands, and
-  // the row is not quietly posted a second time under a new id.
+  // The other person's removal stands, and stands through a reload. A browser
+  // still holding the row would read it on the next load as a create nobody
+  // had sent yet and post the line back under a new id, with no action from
+  // this person at all.
   expect((await apiPlan(request)).budgetItems).toHaveLength(0);
+  await reloadSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(0);
+
+  // A write made afterwards is the witness that nothing went before it: the
+  // load queues its work in one pass, and a create it queued would be on the
+  // server by the time this one is.
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 2 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item))
+    .toEqual(['Flowers']);
 });
 
 test('removing a line removes it for everyone', async ({ page, request }) => {
@@ -1181,6 +1196,39 @@ test('signing back in merges, and does not write a stale copy over everyone else
       message: 'sign-in should merge against the plan as it now stands',
     })
     .toEqual([['Venue deposit', '750.00', 'The Orangery']]);
+});
+
+/*
+ * The same removal met by the other road. A session that ends mid-edit leaves
+ * the edit in this browser and nowhere else, and signing back in is a merge
+ * rather than an adopt, so the row carrying that edit reaches the same
+ * question the 404 above reaches: somebody took the line out while it was
+ * being typed in. The answer has to be the same one, or a line somebody
+ * deliberately removed comes back on a sign-in nobody connected to it.
+ */
+test('a line removed while the session was over does not come back on the way in', async ({ page, request }) => {
+  const cookie = await openWithOwnSession(page, request);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  await editAsTheSessionEnds(page, request, cookie, 750);
+  await expect(page.locator('#authScreen')).toBeVisible();
+
+  const stored = (await apiPlan(request)).budgetItems[0];
+  const removed = await request.delete(
+    `${API_URL}/api/v1/budget-items/${stored.id}?revision=${stored.revision}`,
+    { headers: await apiAuth(request) },
+  );
+  expect(removed.status()).toBe(204);
+
+  await signInThroughTheForm(page, request);
+
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(0);
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 2 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item))
+    .toEqual(['Flowers']);
 });
 
 test('once the session has ended the page stops asking', async ({ page, request }) => {

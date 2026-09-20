@@ -268,7 +268,7 @@
       'd.merged': 'Someone else was editing the same line. Both sets of changes have been kept.',
       'd.replaced': 'Someone else changed the same field at the same time. Yours replaced theirs.',
       'd.overtaken': 'Someone else had just changed the line you removed. It is gone.',
-      'd.gone': 'Someone else removed the line you were editing. Your copy is still here, but only in this browser.',
+      'd.gone': 'Someone else removed the line you were editing. Your changes to it are gone with it.',
       'd.offline': 'Your changes are not reaching the server. Still trying — they are safe in this browser meanwhile.',
       'd.online': 'Back in touch with the server. Everything is saved.',
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
@@ -417,7 +417,7 @@
       'd.merged': 'Iemand anders bewerkte dezelfde regel. Beide wijzigingen zijn bewaard.',
       'd.replaced': 'Iemand anders wijzigde hetzelfde veld op hetzelfde moment. Jouw waarde heeft die van hen vervangen.',
       'd.overtaken': 'Iemand anders had de regel die je verwijderde net gewijzigd. Hij is nu weg.',
-      'd.gone': 'Iemand anders heeft de regel die jij aan het bewerken was verwijderd. Jouw versie staat er nog, maar alleen in deze browser.',
+      'd.gone': 'Iemand anders heeft de regel die jij aan het bewerken was verwijderd. Jouw wijzigingen daaraan zijn ermee weg.',
       'd.offline': 'Je wijzigingen bereiken de server niet. Er wordt opnieuw geprobeerd — ondertussen staan ze veilig in deze browser.',
       'd.online': 'Weer verbinding met de server. Alles is opgeslagen.',
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
@@ -565,7 +565,7 @@
       'd.merged': 'Orang lain sedang mengubah baris yang sama. Kedua perubahan tetap tersimpan.',
       'd.replaced': 'Orang lain mengubah bidang yang sama pada saat bersamaan. Nilaimu menggantikan nilai mereka.',
       'd.overtaken': 'Orang lain baru saja mengubah baris yang kamu hapus. Baris itu sudah hilang.',
-      'd.gone': 'Orang lain menghapus baris yang sedang kamu ubah. Salinanmu masih ada, tetapi hanya di browser ini.',
+      'd.gone': 'Orang lain menghapus baris yang sedang kamu ubah. Perubahanmu pada baris itu ikut hilang.',
       'd.offline': 'Perubahanmu belum sampai ke server. Masih dicoba lagi — sementara ini aman tersimpan di browser.',
       'd.online': 'Terhubung lagi dengan server. Semuanya tersimpan.',
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
@@ -1488,9 +1488,13 @@
       // it changes. The edit is not lost — it is in `state`, on the screen and
       // in localStorage — and the person is told it has not left the browser.
       //
-      // The row is deliberately not removed on a 404. Somebody else deleted
-      // what this person is editing, and throwing their work away to agree
-      // with that is the one outcome worse than the row going out of step.
+      // A 404 is the one answer that is not about the edit at all: somebody
+      // else removed the line. The park still earns its place, because it
+      // stops the identical write going again in the moment before the plan is
+      // next read; but that read takes the row off this screen too, and there
+      // is nowhere left to keep the work once the row it belongs to has no
+      // server side. So the flash says the changes went with the line rather
+      // than promising a copy the next read will drop.
       blocked[opKey(op)] = opSignature(op);
       flash(t(res.status === 404 ? 'd.gone' : 'd.refused'));
       return true;
@@ -2293,19 +2297,19 @@
    *
    *   field changed here since the server confirmed it -> ours. It is an edit
    *     somebody is in the middle of making, and it goes again on the next
-   *     pass. Nothing anybody has typed is ever overwritten, focused or not.
+   *     pass. What is on this screen is never overwritten, focused or not.
    *   field unchanged here -> theirs, which is simply newer.
+   *   both changed it -> a list of ids is a set and keeps both. Anything else
+   *     keeps ours and says nothing: this is a plan arriving rather than a
+   *     write being answered, and it runs over every row.
    *
    * Rows work the same way, and the shadow is what tells the two halves of
    * each ambiguity apart:
    *
-   *   here, not on the server -> in the shadow and untouched since? somebody
-   *                              deleted it: drop it. In the shadow with an
-   *                              edit of this person's on it? keep the edit,
-   *                              parked as a create: dropping it is what the
-   *                              404 branch calls worse than being out of
-   *                              step, and posting it back undoes a removal
-   *                              somebody meant.
+   *   here, not on the server -> in the shadow? somebody deleted it: drop it,
+   *                              edited here since or not. There is no row
+   *                              left to write that edit to, and posting it
+   *                              back would undo a removal somebody meant.
    *                              not in the shadow? our own create, unsent:
    *                              keep it, and let the next pass POST it.
    *   on the server, not here -> in the shadow? our own delete, unsent: keep
@@ -2357,20 +2361,6 @@
 
       state[c.key] = (state[c.key] || []).filter(function (r) {
         if (!r || !r.id || here[r.id] || !was[r.id]) return true;
-        // Somebody removed a line this person is in the middle of editing.
-        // It is the same moment writeFailed meets as a 404, and it follows
-        // the same rule: the work stays. The server no longer has the row, so
-        // the park moves with it, from the update that can never be accepted
-        // to a create that is deliberately not sent, because posting it back
-        // would undo a removal somebody meant. Typing in the line again
-        // changes the signature and puts it back, which is then this person
-        // asking for it rather than the page deciding.
-        if (changedFields(c, r, was[r.id].row).length) {
-          delete blocked[c.key + ':' + r.id + ':update'];
-          blocked[c.key + ':' + r.id + ':create'] =
-            opSignature({ kind: 'create', coll: c, id: r.id });
-          return true;
-        }
         touched[c.key] = c;
         return false;
       });
