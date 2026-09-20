@@ -385,7 +385,11 @@ constraint drives the design:
    the round trip stays off the interaction path rather than being eliminated —
    which is the only option available, since the distance is real.
 4. **Compression and cache headers in the binary.** No proxy configuration is
-   required for either.
+   required for either. Assets are encoded once at startup; `GET /plan` and the
+   activity page are gzipped per request, because the plan is re-read whole by
+   every other open browser after anybody's edit and again on every reconnect.
+   Nothing else is: an error is too small to pay for the encoder's header, and
+   a compressed `/events` would be a buffered one.
 
 Measured at 1.2.0, brotli, from a running server: shell 4.5 kB, stylesheet
 11 kB, planner script 46 kB, accounts script 25 kB, font 69 kB. Both scripts
@@ -463,6 +467,13 @@ in `api-other`.
 
 Logs are JSON on stdout via `log/slog`, which is what the cluster's log
 pipeline expects.
+
+A `500` names the request it failed: the method, the matched route pattern and
+the account id. There is no access log here to join a bare "api request failed"
+against, and the metrics carry no id to match a line to. A caller that hung up
+mid-read is answered `499` instead: nobody receives it, and it is what keeps a
+phone that locked its screen out of the 5xx rate it would otherwise be counted
+in.
 
 A handler panic is recovered where the request is counted, so it arrives as one
 ERROR line carrying the route and the stack, and as a `status="500"` sample.

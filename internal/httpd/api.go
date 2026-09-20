@@ -2,6 +2,8 @@ package httpd
 
 import (
 	"bytes"
+	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -210,10 +213,10 @@ func register[T any](mux *http.ServeMux, e entity[T]) {
 func (s *Server) servePlan(w http.ResponseWriter, r *http.Request) {
 	plan, err := s.store.LoadPlan(r.Context())
 	if err != nil {
-		writeInternal(w, err)
+		writeInternal(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, encodePlan(s.cfg.Currency, plan))
+	writeJSONCompressed(w, r, http.StatusOK, encodePlan(s.cfg.Currency, plan))
 }
 
 func handleCreate[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
@@ -228,7 +231,7 @@ func handleCreate[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 	}
 	out, err := e.create(r.Context(), row)
 	if err != nil {
-		writeStoreError(w, e, err)
+		writeStoreError(w, r, e, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, e.encode(out))
@@ -258,7 +261,7 @@ func handlePatch[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 
 	current, err := e.load(r.Context(), id)
 	if err != nil {
-		writeStoreError(w, e, err)
+		writeStoreError(w, r, e, err)
 		return
 	}
 	row, err := e.decode(current, body)
@@ -270,7 +273,7 @@ func handlePatch[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 
 	out, err := e.update(r.Context(), row)
 	if err != nil {
-		writeStoreError(w, e, err)
+		writeStoreError(w, r, e, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, e.encode(out))
@@ -302,7 +305,7 @@ func handleDelete[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 	}
 
 	if err := e.remove(r.Context(), id, revision); err != nil {
-		writeStoreError(w, e, err)
+		writeStoreError(w, r, e, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -404,14 +407,14 @@ func decodeBody[B bodyFor[T], T any](body []byte, currency string, base T) (T, e
 // The order matters: a refused write re-reads the row, and that re-read can
 // itself come back not-found when somebody deleted rather than edited. Those
 // are different answers for the client — one is reconcilable, the other is not.
-func writeStoreError[T any](w http.ResponseWriter, e entity[T], err error) {
+func writeStoreError[T any](w http.ResponseWriter, r *http.Request, e entity[T], err error) {
 	var stale *store.StaleRevisionError
 	if errors.As(err, &stale) {
 		current, ok := stale.Current.(T)
 		if !ok {
 			// Only reachable if the store starts carrying a different type in
 			// the conflict than the one it was asked to write.
-			writeInternal(w, fmt.Errorf("conflict carried a %T, want the row type", stale.Current))
+			writeInternal(w, r, fmt.Errorf("conflict carried a %T, want the row type", stale.Current))
 			return
 		}
 		writeJSON(w, http.StatusConflict, apiError{Error: errStaleRevision, Current: e.encode(current)})
@@ -425,7 +428,7 @@ func writeStoreError[T any](w http.ResponseWriter, e entity[T], err error) {
 		writeError(w, status, code, message)
 		return
 	}
-	writeInternal(w, err)
+	writeInternal(w, r, err)
 }
 
 // constraintError classifies the database's own rejections.
@@ -461,6 +464,13 @@ func constraintError(err error) (status int, code, message string, ok bool) {
 	}
 }
 
+// statusClientClosedRequest is nginx's 499: not a standard status, and not one
+// any client receives, because the connection it would go on is already gone.
+// It exists so that a phone which locked its screen mid-read is not counted as
+// this server failing, which is what a 500 on the same request tells every
+// alert that reads the 5xx rate.
+const statusClientClosedRequest = 499
+
 // writeInternal reports a failure that is this server's fault.
 //
 // The error goes to the log and not to the client: it carries SQL and column
@@ -468,9 +478,40 @@ func constraintError(err error) (status int, code, message string, ok bool) {
 // though — a 500 whose cause was dropped on the floor cannot be operated on.
 // main installs the process logger as the default, so this is the same JSON
 // stream as every other line.
-func writeInternal(w http.ResponseWriter, err error) {
-	slog.Error("api request failed", "err", err)
+//
+// The request goes in the line for the same reason the error does. There is no
+// access log here, and the metrics carry no id, so "api request failed" on its
+// own is a fault with nothing to join it to. The matched pattern rather than
+// the path, because the API is mounted behind StripPrefix and a handler
+// therefore sees "/plan" where the operator is looking for "/api/v1/plan". A
+// pattern also keeps a row id as "{id}", which is what the route label in
+// metrics.go is careful about too. The actor is the account id, never the
+// address, for the reason withActor gives.
+func writeInternal(w http.ResponseWriter, r *http.Request, err error) {
+	// A caller that hung up cancelled the query itself, so nothing here
+	// failed and nobody is left to read an answer. Both halves of the test
+	// matter: a database that genuinely failed while somebody happened to
+	// close the tab is still worth an error. Deliberately narrow: pgx can
+	// also surface a cancellation as a closed connection or as SQLSTATE
+	// 57014, and those stay what they are today rather than becoming a
+	// silence that hides a real fault.
+	if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+		slog.Debug("api request abandoned", "method", r.Method, "pattern", r.Pattern)
+		w.WriteHeader(statusClientClosedRequest)
+		return
+	}
+	slog.Error("api request failed", "err", err,
+		"method", r.Method, "pattern", r.Pattern, "actor", actorID(r))
 	writeError(w, http.StatusInternalServerError, errInternal, "something went wrong")
+}
+
+// actorID names whoever was signed in, and null where nobody was, which is the
+// honest answer for the few routes that can fail before anybody is known.
+func actorID(r *http.Request) any {
+	if u, ok := UserFrom(r.Context()); ok {
+		return u.ID
+	}
+	return nil
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
@@ -480,6 +521,29 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 // writeJSON writes an API response. Marshalling to a buffer first is what
 // allows a failure to still produce a 500 rather than a truncated 200 body.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
+	writeJSONBody(w, nil, status, payload)
+}
+
+// writeJSONCompressed is writeJSON for the two reads worth encoding: the whole
+// plan, which every other open browser re-reads after anybody's edit and again
+// on every reconnect, and the activity page. Both are tens of kilobytes of
+// repetitive JSON to readers the origin may be 300 ms away from, and both are
+// asked for far more often than anything here is written. That is the one place
+// the static path's care about bytes is worth repeating per request.
+//
+// Only those two, deliberately. A response that reflects what the caller sent
+// is how a length turns into a guess at what else is in it, and /events must
+// never go through here at all: a compressed stream is a buffered one, and the
+// point of that route is that a frame leaves the moment it exists. Neither the
+// plan nor the activity page reflects the request, carries a token, or is
+// readable by anybody who cannot already read all of it.
+func writeJSONCompressed(w http.ResponseWriter, r *http.Request, status int, payload any) {
+	writeJSONBody(w, r, status, payload)
+}
+
+// writeJSONBody is both of the above. A nil request means nothing negotiated an
+// encoding, so nothing is encoded.
+func writeJSONBody(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json; charset=utf-8")
 	// Never cached: this is shared state that two people are editing.
@@ -494,13 +558,73 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 
 	body, err := json.Marshal(payload)
+	negotiated := r != nil
 	if err != nil {
 		body = []byte(`{"error":"internal","message":"could not encode the response"}`)
 		status = http.StatusInternalServerError
+		// A canned line saying this server failed. Encoding that saves
+		// nothing, and what the caller accepts no longer changes the answer.
+		negotiated = false
 	}
 	body = append(body, '\n')
+
+	if negotiated {
+		// On both branches, because what this route answers depends on the
+		// header whether or not this particular body was big enough to encode.
+		h.Set("Vary", "Accept-Encoding")
+		// The same containment test serveBody makes of the asset path. A
+		// client that lists gzip only to refuse it at q=0 gets an encoding it
+		// can still read; one that wants none of it sends `identity`.
+		if len(body) >= gzipMinBytes && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			if encoded := gzipJSON(body); encoded != nil {
+				h.Set("Content-Encoding", "gzip")
+				body = encoded
+			}
+		}
+	}
 
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+// gzipMinBytes is the smallest body worth encoding. Below about a kilobyte the
+// encoder's own header and trailer eat most of what it saves, and what is left
+// is nothing beside the round trip that carried the request.
+const gzipMinBytes = 1 << 10
+
+// gzipWriters keeps encoders between requests. One carries a few hundred
+// kilobytes of window, which is worth reusing on the route every open browser
+// re-reads after anybody's edit, and not worth allocating afresh each time.
+var gzipWriters = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
+
+// gzipJSON encodes a response body, or returns nil to say it could not, in
+// which case the caller sends what it had. Encoding into memory cannot fail
+// today; a body that goes out raw is still a better answer than one that does
+// not go out at all, in any future where it can.
+//
+// The default level rather than the best one: assets.go pays for the best once
+// at startup and serves the result for the life of the process, while this runs
+// on every read.
+func gzipJSON(body []byte) []byte {
+	zw := gzipWriters.Get().(*gzip.Writer)
+	defer func() {
+		// Pointed at nothing before it goes back, so a pooled encoder does not
+		// hold this response's buffer until somebody borrows it again.
+		zw.Reset(io.Discard)
+		gzipWriters.Put(zw)
+	}()
+
+	var buf bytes.Buffer
+	// JSON of this shape encodes to well under half its size, so this is one
+	// generous allocation rather than a series of doublings.
+	buf.Grow(len(body) / 2)
+	zw.Reset(&buf)
+	if _, err := zw.Write(body); err != nil {
+		return nil
+	}
+	if err := zw.Close(); err != nil {
+		return nil
+	}
+	return buf.Bytes()
 }

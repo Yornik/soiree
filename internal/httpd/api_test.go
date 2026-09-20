@@ -1,9 +1,14 @@
 package httpd
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -357,6 +362,216 @@ func TestPlanIsOneRoundTrip(t *testing.T) {
 	}
 	if str(t, plan.Tasks[0], "status") != "not-started" {
 		t.Errorf("task status = %q, want the column default", plan.Tasks[0]["status"])
+	}
+}
+
+// The plan is the one body this API sends over and over: every other open
+// browser re-reads the whole of it after anybody's edit and again on every
+// reconnect, to readers the origin may be 300 ms away from. It is also
+// repetitive JSON, which is what an encoder is good at.
+func TestThePlanIsGzippedForAClientThatAcceptsIt(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	// Enough rows to put the body past the size below which the encoder's own
+	// header costs more than it saves.
+	for i := range 20 {
+		created(t, h, "tasks", fmt.Sprintf(
+			`{"name":"Confirm the running order with the hall %d","owner":"Ada","position":%d}`, i, i))
+	}
+
+	plain := call(t, h, http.MethodGet, "/api/v1/plan", "")
+	if plain.status != http.StatusOK {
+		t.Fatalf("GET /api/v1/plan -> %d\n%s", plain.status, plain.body)
+	}
+	if enc := plain.header.Get("Content-Encoding"); enc != "" {
+		t.Errorf("no Accept-Encoding should mean no encoding, got %q", enc)
+	}
+	if v := plain.header.Get("Vary"); !strings.Contains(v, "Accept-Encoding") {
+		t.Errorf("Vary = %q, want Accept-Encoding: what this route answers depends on it", v)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	res := rec.Result()
+	defer func() { _ = res.Body.Close() }()
+	encoded, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read the encoded plan: %v", err)
+	}
+
+	if got := res.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip: the largest repeated read goes out raw", got)
+	}
+	if got := res.Header.Get("Content-Length"); got != strconv.Itoa(len(encoded)) {
+		t.Errorf("Content-Length = %q, want the %d bytes actually sent", got, len(encoded))
+	}
+	if len(encoded) >= len(plain.body) {
+		t.Errorf("encoded body (%d) is not smaller than the identity one (%d)", len(encoded), len(plain.body))
+	}
+	// Encoding it does not make it cacheable: it is still shared state two
+	// people are editing.
+	if cc := res.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+
+	zr, err := gzip.NewReader(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("the body is not gzip: %v", err)
+	}
+	decoded, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("decode the plan: %v", err)
+	}
+	_ = zr.Close()
+	if !bytes.Equal(decoded, plain.body) {
+		t.Errorf("the encoded plan is not the plan a client without the header gets:\n%s", decoded)
+	}
+}
+
+// Everything else this API sends is small: an error, a row echoed back, a 204
+// with no body at all. The encoder's own header is a poor trade against a few
+// hundred bytes. Nothing that does not go through writeJSONCompressed is
+// encoded at all.
+func TestOnlyABodyWorthEncodingIsEncoded(t *testing.T) {
+	large := map[string]string{"note": strings.Repeat("the hall wants the running order. ", 40)}
+	small := map[string]string{"note": "the hall wants the running order."}
+
+	for name, c := range map[string]struct {
+		payload any
+		accept  string
+		want    string
+	}{
+		"a large body for a client that accepts gzip": {large, "gzip", "gzip"},
+		"the same body for one that does not":         {large, "identity", ""},
+		"a body below the threshold":                  {small, "gzip", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil)
+			req.Header.Set("Accept-Encoding", c.accept)
+			rec := httptest.NewRecorder()
+			writeJSONCompressed(rec, req, http.StatusOK, c.payload)
+
+			if got := rec.Header().Get("Content-Encoding"); got != c.want {
+				t.Errorf("Content-Encoding = %q, want %q", got, c.want)
+			}
+			if v := rec.Header().Get("Vary"); !strings.Contains(v, "Accept-Encoding") {
+				t.Errorf("Vary = %q, want Accept-Encoding on both branches", v)
+			}
+		})
+	}
+
+	// A response nothing negotiated, which is every error and every write read
+	// back, goes out exactly as it did before.
+	rec := httptest.NewRecorder()
+	writeJSON(rec, http.StatusOK, large)
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Errorf("Content-Encoding = %q on a response that negotiated nothing", got)
+	}
+	if v := rec.Header().Get("Vary"); v != "" {
+		t.Errorf("Vary = %q on a response whose body does not depend on it", v)
+	}
+}
+
+// failingPlan mounts a handler where servePlan sits, behind the same
+// StripPrefix, so that what it sees of the request is what a real handler sees:
+// a path with the prefix already taken off it.
+func failingPlan(err error) http.Handler {
+	api := http.NewServeMux()
+	api.HandleFunc("GET /plan", func(w http.ResponseWriter, r *http.Request) {
+		writeInternal(w, r, err)
+	})
+	mux := http.NewServeMux()
+	mux.Handle(apiPrefix, http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), api))
+	return mux
+}
+
+// A 500 that says only what the database said cannot be operated on: there is
+// no access log here to join "api request failed" against, and the metrics
+// carry no id a line could be matched to. The route comes from the matched
+// pattern rather than the path, because a handler under StripPrefix sees
+// "/plan" and an operator needs to know which route that was.
+func TestAFailureNamesTheRequestThatFailed(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	rec := httptest.NewRecorder()
+	failingPlan(errors.New(`relation "budget_items" does not exist`)).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	line := logged.String()
+	for _, want := range []string{`"level":"ERROR"`, `"method":"GET"`, `"pattern":"GET /plan"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the failure reached the log without %s:\n%s", want, line)
+		}
+	}
+}
+
+// A phone that locks its screen mid-read cancels the query it was waiting on.
+// Nothing here failed and nobody is left to be told anything. Logged as an
+// error and counted as a 500, though, it is indistinguishable from this server
+// breaking, on the one number an alert reads and in the one place an operator
+// looks. 499 is where it goes instead.
+func TestAClientThatWentAwayIsNotAServerFailure(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil).WithContext(ctx)
+
+	m := NewMetrics("test", "none")
+	rec := httptest.NewRecorder()
+	// What LoadPlan comes back with when the caller hung up during it.
+	m.instrument(failingPlan(fmt.Errorf("load the plan: %w", context.Canceled))).ServeHTTP(rec, req)
+
+	if rec.Code != statusClientClosedRequest {
+		t.Errorf("status = %d, want %d for a caller that is no longer there", rec.Code, statusClientClosedRequest)
+	}
+	if body := rec.Body.String(); body != "" {
+		t.Errorf("body = %q, want none: there is nobody on the other end to read it", body)
+	}
+	if line := logged.String(); strings.Contains(line, `"level":"ERROR"`) {
+		t.Errorf("an abandoned request was logged as a failure of this server:\n%s", line)
+	}
+
+	scrape := httptest.NewRecorder()
+	m.Handler().ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	want := `soiree_http_requests_total{method="GET",route="api-plan",status="499"} 1`
+	if !strings.Contains(scrape.Body.String(), want) {
+		t.Errorf("no %s in the exposition, so a client walking away still reads as a 5xx", want)
+	}
+}
+
+// A genuine database failure that happens to coincide with a disconnect is
+// still this server's to answer for, which is why the cancelled context alone
+// does not decide it.
+func TestAFailureDuringADisconnectIsStillAFailure(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil).WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	failingPlan(errors.New("connection refused")).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500: the database, not the client, is what failed", rec.Code)
+	}
+	if line := logged.String(); !strings.Contains(line, `"level":"ERROR"`) {
+		t.Errorf("the failure did not reach the log as an error:\n%s", line)
 	}
 }
 
