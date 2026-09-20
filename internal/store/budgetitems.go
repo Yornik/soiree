@@ -235,11 +235,18 @@ func lockBudgetItem(ctx context.Context, tx pgx.Tx, id uuid.UUID) (BudgetItem, e
 // query, so the recursion collects ids and the second read locks them. Without
 // the lock a child edited between the read and the delete would be recorded
 // with the wrong final amount — and the amount is the whole point.
+//
+// UNION rather than UNION ALL, because the rows can describe a ring: the schema
+// refuses a line that is its own parent and nothing refuses two lines that are
+// each other's. UNION ALL walks such a ring for as long as the caller waits,
+// holding a connection and collecting ids into memory without end, and the
+// lines stay undeletable. Discarding ids already seen costs nothing on a real
+// breakdown, where every line is reached once anyway.
 func lockBudgetItemTree(ctx context.Context, tx pgx.Tx, root uuid.UUID) ([]BudgetItem, error) {
 	ids, err := queryScalars[uuid.UUID](ctx, tx, "budget_items",
 		`WITH RECURSIVE subtree AS (
 		     SELECT id FROM budget_items WHERE id = $1
-		     UNION ALL
+		     UNION
 		     SELECT child.id FROM budget_items child JOIN subtree ON child.parent_id = subtree.id
 		 )
 		 SELECT id FROM subtree`, root)
