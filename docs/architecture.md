@@ -1486,9 +1486,19 @@ Two more choices that are easy to mistake for oversights:
 
 Recipients are every **active admin**, resolved at send time so an admin added
 or disabled between digests is respected without restarting anything, plus
-anything `SOIREE_REMINDER_TO` names. One message to everyone rather than one
-each, which is what lets the ledger record a single claim per period. Push goes
-to the devices of active admins by the same rule.
+anything `SOIREE_REMINDER_TO` names, with the two lists matched on the parsed
+address so that somebody in both is one recipient. One message **each** rather
+than one addressed to everyone: a shared `To` header hands every recipient the
+others' addresses and carries them along wherever the mail is forwarded, and a
+single address the relay refuses at RCPT ends the transaction before the body
+is offered, which loses that period's digest for everybody on the envelope.
+The ledger still records a single claim per period, because the claim is taken
+before the first copy goes out. A crash half-way through the list loses the
+copies still to send rather than offering anybody a second one, which is the
+at-most-once stance already chosen. A copy the relay refuses is logged by its
+position in the list, never by address, and leaves the claim standing: the
+others are out, so a retry would send them the same digest twice. Push goes to
+the devices of active admins by the same rule.
 
 The two channels get separate time budgets inside the run's two minutes. With
 one shared deadline a relay that stalls would spend the whole run before push

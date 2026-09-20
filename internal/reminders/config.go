@@ -43,8 +43,10 @@ type Config struct {
 	// boundary lands on the wrong one.
 	WindowDays int
 
-	// To is the recipient list. There is no per-user subscription yet — see
-	// the package documentation for what changes when accounts arrive.
+	// To is the recipients beyond the active admins the digest already goes
+	// to: a deployment with no accounts, or somebody who should read it
+	// without being given a login. Each of them gets a copy of their own; see
+	// the package documentation.
 	To []string
 
 	// Location decides which day "today" is. Everything else about a date is

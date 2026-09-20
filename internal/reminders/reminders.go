@@ -48,14 +48,20 @@
 //
 // # Recipients
 //
-// For now, a configured address list. The `users` table is being built in
-// parallel and this deliberately does not depend on it. Moving to per-user
-// delivery is a change in one place: Service.run composes one digest and sends
-// it to Config.To, and per-user means iterating over subscribers and sending
-// the same Digest to each — Compose and Render take no recipient at all. The
-// ledger's primary key would gain the subscriber id alongside the period key,
-// so one person's bounce cannot suppress everyone else's digest, and Config.To
-// stays as the fallback for deployments with no accounts.
+// Every active admin, resolved per send so that somebody added or disabled
+// between digests is respected without a restart, plus anything
+// SOIREE_REMINDER_TO names: a deployment with no accounts at all, or somebody
+// who should read the digest without being given a login to the event's
+// finances.
+//
+// One message each rather than one addressed to everyone. A shared To header
+// hands every recipient the others' addresses, and one address the relay
+// refuses takes the whole envelope down with it, which is one person's typo
+// deciding that nobody hears about Friday. The ledger is untouched by that:
+// the period is claimed once, before the first copy goes out, so a crash
+// half-way through the list loses the copies still to send rather than
+// offering anybody a second one, which is the same at-most-once stance as
+// everything above.
 package reminders
 
 import (
@@ -63,6 +69,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -301,7 +308,6 @@ func (s *Service) run(ctx context.Context) (outcome, error) {
 	if err != nil {
 		return outcomeFailed, err
 	}
-	msg.To = to
 
 	claimed, err := claimPeriod(ctx, conn, key, now, len(to), digest.Count())
 	if err != nil {
@@ -319,32 +325,32 @@ func (s *Service) run(ctx context.Context) (outcome, error) {
 	// returned, so that no failure in the notification path — an error, a
 	// timeout, a push service having a bad minute — can happen before the mail
 	// has been handed over.
-	mailErr := s.sendMail(ctx, msg)
+	sent := s.mailEach(ctx, msg, to)
 	delivered := s.pushDigest(ctx, digest)
 
-	if mailErr != nil {
-		if mailer.Ambiguous(mailErr) {
+	if sent.err != nil && sent.accepted == 0 {
+		if sent.ambiguous {
 			// The server may or may not have taken it. The claim stays, so
 			// this period is never sent twice; it is reported here and visible
 			// in the ledger as a row with no sent_at.
-			s.log.Error("reminder digest delivery uncertain; not retrying this period", "period", key, "err", mailErr)
-			return outcomeUncertain, mailErr
+			s.log.Error("reminder digest delivery uncertain; not retrying this period", "period", key, "err", sent.err)
+			return outcomeUncertain, sent.err
 		}
-		// The mail definitely did not go out, so the period may be tried
-		// again — but only if nothing else went out either. Releasing the
-		// claim asserts that this period reached nobody, and that stops being
-		// true the moment a notification lands on somebody's phone: a retry
-		// would then push the same digest at them a second time, which is
-		// precisely what the ledger exists to prevent.
+		// No copy went out, so the period may be tried again — but only if
+		// nothing else went out either. Releasing the claim asserts that this
+		// period reached nobody, and that stops being true the moment a
+		// notification lands on somebody's phone: a retry would then push the
+		// same digest at them a second time, which is precisely what the
+		// ledger exists to prevent.
 		if delivered == 0 {
 			if rerr := releaseClaim(ctx, conn, key); rerr != nil {
-				return outcomeFailed, errors.Join(mailErr, rerr)
+				return outcomeFailed, errors.Join(sent.err, rerr)
 			}
-			return outcomeFailed, fmt.Errorf("send digest: %w", mailErr)
+			return outcomeFailed, fmt.Errorf("send digest: %w", sent.err)
 		}
 		s.log.Error("reminder digest could not be mailed, but reached some devices; the period stays claimed and will not be retried",
-			"period", key, "devicesReached", delivered, "err", mailErr)
-		return outcomeFailed, fmt.Errorf("send digest: %w", mailErr)
+			"period", key, "devicesReached", delivered, "err", sent.err)
+		return outcomeFailed, fmt.Errorf("send digest: %w", sent.err)
 	}
 
 	if err := confirmSent(ctx, conn, key, s.now()); err != nil {
@@ -354,28 +360,79 @@ func (s *Service) run(ctx context.Context) (outcome, error) {
 		return outcomeUnrecorded, nil
 	}
 
+	if sent.err != nil {
+		// Some copies are out and the period is confirmed, so nothing will
+		// offer the refused addresses this digest again. Reported as a failed
+		// run all the same: an address the relay will not take stays broken
+		// every period until somebody fixes it, and a log line nobody is paged
+		// for is how that goes unnoticed for a month.
+		s.log.Error("reminder digest reached some recipients and not others; the refused copies are not retried",
+			"period", key, "accepted", sent.accepted, "failed", sent.failed, "err", sent.err)
+		return outcomeFailed, fmt.Errorf("send digest: %w", sent.err)
+	}
+
 	s.log.Info("reminder digest sent",
 		"period", key, "recipients", len(to), "devicesReached", delivered,
 		"items", digest.Count(), "overdue", digest.Overdue())
 	return outcomeSent, nil
 }
 
-// sendMail hands the digest to the relay, within a budget of its own.
+// mailResult is how one digest's copies fared, which is what decides the
+// ledger's next move: any copy accepted means the period happened.
+type mailResult struct {
+	accepted int
+	failed   int
+	// ambiguous is set by a copy the relay never answered for. It matters only
+	// while nothing has been accepted: once one copy is out the period is
+	// confirmed and nothing retries it, so whether another was taken changes
+	// nothing.
+	ambiguous bool
+	err       error
+}
+
+// mailEach hands the digest to the relay once per recipient, within a budget
+// the whole loop shares.
+//
+// One message each rather than one addressed to everyone. A shared To header
+// shows every recipient who else reads the event's finances, and travels with
+// the mail wherever it is forwarded; and a single address the relay refuses at
+// RCPT ends the transaction before the body is offered, which loses the digest
+// for everybody on the envelope. Neither is a price the people who are not at
+// fault should pay.
+//
+// The budget is the mail channel's, not each copy's: a relay that accepts a
+// connection and then says nothing must leave time for the notifications
+// however many recipients there are.
 //
 // A nil sender is a deployment with no SMTP at all, which since push arrived is
 // a supported way to run this rather than a reason to have the scheduler switch
-// itself off. It reports success because the mail channel did everything it
+// itself off. It reports no failure because the mail channel did everything it
 // could: there was none.
-func (s *Service) sendMail(ctx context.Context, msg mailer.Message) error {
+func (s *Service) mailEach(ctx context.Context, msg mailer.Message, to []string) mailResult {
+	var r mailResult
 	if s.sender == nil {
-		return nil
+		return r
 	}
-	// Bounded below the run, so that a relay which accepts a connection and
-	// then says nothing leaves time for the notifications. Without this the
-	// two channels share one deadline and the slower one eats it.
+
 	mailCtx, cancel := context.WithTimeout(ctx, mailTimeout)
 	defer cancel()
-	return s.sender.Send(mailCtx, msg)
+
+	for i, addr := range to {
+		one := msg
+		one.To = []string{addr}
+		if err := s.sender.Send(mailCtx, one); err != nil {
+			r.failed++
+			r.ambiguous = r.ambiguous || mailer.Ambiguous(err)
+			// The position in the recipient list, never the address: a log
+			// file is read by more people than the configuration is, and the
+			// addresses are the thing this loop exists to keep apart.
+			s.log.Error("a copy of the reminder digest was not delivered", "recipient", i, "err", err)
+			r.err = errors.Join(r.err, err)
+			continue
+		}
+		r.accepted++
+	}
+	return r
 }
 
 // pushDigest notifies every subscribed device and returns how many took it.
@@ -560,10 +617,8 @@ func Start(ctx context.Context, st *store.Store, log *slog.Logger, reg prometheu
 // no accounts at all, and somebody who should read the digest without being
 // given a login to the event's finances.
 //
-// One message to everyone rather than one each. The ledger then still records
-// a single claim per period, which is what makes a restart mid-send unable to
-// mail anybody twice; sending individually would need the claim keyed per
-// recipient to keep that property.
+// Each of them is sent a message of their own; see mailEach for why, and for
+// why that leaves the ledger's single claim per period exactly as it was.
 func (s *Service) recipients(ctx context.Context) ([]string, error) {
 	admins, err := s.store.NotifiableAdmins(ctx)
 	if err != nil {
@@ -573,7 +628,7 @@ func (s *Service) recipients(ctx context.Context) ([]string, error) {
 	seen := make(map[string]bool, len(admins)+len(s.cfg.To))
 	out := make([]string, 0, len(admins)+len(s.cfg.To))
 	for _, addr := range append(admins, s.cfg.To...) {
-		key := strings.ToLower(strings.TrimSpace(addr))
+		key := recipientKey(addr)
 		if key == "" || seen[key] {
 			continue
 		}
@@ -581,4 +636,23 @@ func (s *Service) recipients(ctx context.Context) ([]string, error) {
 		out = append(out, addr)
 	}
 	return out, nil
+}
+
+// recipientKey is what makes two spellings of one mailbox one recipient.
+//
+// The address alone, because the two sources spell it differently: the users
+// table holds `ada@example.test`, while ParseRecipients has already rendered
+// SOIREE_REMINDER_TO through mail.Address, which writes the same mailbox as
+// `<ada@example.test>` and keeps a display name when there is one. Comparing
+// the strings as written therefore never matched, and somebody in both lists
+// used to be addressed twice, which under one message each is a second mail.
+//
+// An address that does not parse keeps the spelling it arrived in. Deciding it
+// is undeliverable is not this function's job; the relay says that, for the
+// one copy it belongs to.
+func recipientKey(addr string) string {
+	if a, err := mail.ParseAddress(addr); err == nil {
+		return strings.ToLower(a.Address)
+	}
+	return strings.ToLower(strings.TrimSpace(addr))
 }

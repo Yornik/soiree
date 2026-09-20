@@ -186,8 +186,8 @@ func TestAGoneSubscriptionIsPrunedAndATransientFailureIsNot(t *testing.T) {
 	}
 
 	// And the mail went out regardless of any of it.
-	if sender.count() != 1 {
-		t.Errorf("sent %d mails, want 1", sender.count())
+	if sender.count() != 2 {
+		t.Errorf("sent %d mails, want one per recipient", sender.count())
 	}
 }
 
@@ -206,8 +206,8 @@ func TestAFailingPushServiceDoesNotFailTheDigest(t *testing.T) {
 	if err := f.service(t, sender).WithPush(push.New(vapid(t))).RunOnce(t.Context()); err != nil {
 		t.Fatalf("a push service returning 503 failed the whole digest: %v", err)
 	}
-	if sender.count() != 1 {
-		t.Fatalf("sent %d mails, want 1 — push broke the mail", sender.count())
+	if sender.count() != 2 {
+		t.Fatalf("sent %d mails, want one per recipient — push broke the mail", sender.count())
 	}
 	led := f.ledger(t)
 	if len(led) != 1 || !led[0].Sent {
@@ -275,8 +275,8 @@ func TestARefusedSendStillReleasesThePeriodWhenNothingWasPushed(t *testing.T) {
 	if err := f.service(t, working).WithPush(push.New(vapid(t))).RunOnce(t.Context()); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if working.count() != 1 {
-		t.Errorf("the retry sent %d digests, want 1", working.count())
+	if working.count() != 2 {
+		t.Errorf("the retry sent %d mails, want one per recipient", working.count())
 	}
 }
 
@@ -299,8 +299,8 @@ func TestPushBeingUnconfiguredLeavesTheDigestAlone(t *testing.T) {
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
 		t.Fatalf("run with no push configured: %v", err)
 	}
-	if sender.count() != 1 {
-		t.Errorf("sent %d mails, want 1", sender.count())
+	if sender.count() != 2 {
+		t.Errorf("sent %d mails, want one per recipient", sender.count())
 	}
 	if n := svc.hitCount("ada-phone"); n != 0 {
 		t.Errorf("an unconfigured deployment made %d push requests", n)
