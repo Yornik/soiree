@@ -150,9 +150,24 @@ mutation sites: they call `save()` and know nothing about where the state goes.
 
 The page asks the origin for `GET /api/v1/plan` exactly once on load. A `404` is
 the final answer for a deployment with no database — those paths are never
-registered, so asking again would only be a second `404` — and anything else
-that is not an answer gets a few retries, because it might be a browser offline
-on a first visit.
+registered, so asking again would only be a second `404`. Anything else that is
+not an answer is asked again for as long as the page is open, doubling from a
+second to the thirty-second cap the write loop uses, and at once when the
+browser reports `online` or `auth.js` reports a sign-in. `200`, `401` and `404`
+end the asking, exactly as they do when they arrive first, and a `200` merges
+what was typed meanwhile the way a sign-in does.
+
+It used to be four retries and then silence. That was written for a browser
+offline on a first visit, but an origin that is away at load is the ordinary
+start for an installed planner, because the service worker paints the shell
+with no network at all. A page that gave up stayed a local-only planner for the
+rest of its life: the write loop does nothing until a plan has arrived, so
+every edit went to `localStorage` only and nothing said so. Now the status line
+says, after the second failure, that the changes are not reaching the server,
+as it does for a write that cannot get out. Only when the cached copy holds
+rows under server ids, though. A planner that has only ever lived in this
+browser may belong to a deployment with no database, and is told nothing about
+a server it may not have.
 
 There is one connection at a time. Two things want one on an ordinary signed-in
 load — the page starting, and `auth.js` reporting the session a moment later,

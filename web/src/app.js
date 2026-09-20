@@ -1588,8 +1588,12 @@
   /* ---------- Finding the backend ----------
    * One request, once. A 404 is the answer for a deployment with no database
    * and it is final: those paths are never registered, so asking again would
-   * only be a second 404. Anything else that is not an answer might be this
-   * browser being offline on a first visit, which is worth a few more tries.
+   * only be a second 404. Anything else that is not an answer is asked again
+   * for as long as the page is open, on the write loop's backoff. It used to be
+   * four more tries and then silence, which left a page opened during an
+   * outage, or from the service worker's cache with no network, a local-only
+   * planner for the rest of its life: Sync.push() does nothing until a plan
+   * has arrived, so every edit stayed in this browser and nothing said so.
    */
   // One at a time. Two things ask for a connection on an ordinary signed-in
   // load — the page starting, and auth.js reporting the session a moment later
@@ -1600,33 +1604,90 @@
   // the shadow while the first one's POSTs are landing, and a planner being
   // carried up to an empty database is carried up twice.
   var connecting = false;
+  // The wait before the next try, while there is one: what connectNow() cuts
+  // short.
+  var connectTimer = null;
+  // The status line is saying the origin is away, and connect() put it there.
+  var awayNotice = false;
+
+  // Whether the copy this page painted from came from a server. A planner that
+  // has only ever lived in this browser is told nothing about a server: with
+  // no database there is none, and the 404 that would say so cannot arrive
+  // while the origin is away.
+  function loadedFromServer() {
+    return COLLECTIONS.some(function (c) {
+      return (loaded[c.key] || []).some(function (r) { return r && SERVER_ID.test(String(r.id)); });
+    });
+  }
+
+  // For the two answers with no plan behind them, and so nothing left to be
+  // out of touch with.
+  function noLongerAway() {
+    if (!awayNotice) return;
+    awayNotice = false;
+    setSticky('');
+  }
 
   function connect(attempt) {
     if (typeof fetch !== 'function' || typeof Promise !== 'function') return;
     // A retry (attempt > 0) is the connection already in progress, not a
     // second one.
     if (attempt === 0) {
-      if (connecting) return;
+      // Still one at a time. But whoever asks while this one is waiting out a
+      // backoff has just heard from the origin (auth.js, with a sign-in), so
+      // the wait has nothing left to wait for.
+      if (connecting) { connectNow(); return; }
       connecting = true;
     }
     api('GET', '/plan').then(function (res) {
-      if (res.status === 200 && res.body) { connecting = false; announceAPI(true); adopt(res.body); return; }
+      if (res.status === 200 && res.body) {
+        connecting = false;
+        announceAPI(true);
+        // The notice is handed to the write loop rather than taken down here.
+        // adopt() sends what was typed meanwhile, and Sync.done() is what
+        // knows when "everything is saved" has become true. Until then the
+        // changes still have not reached the server.
+        if (awayNotice) Sync.failures = FAILURES_BEFORE_NOTICE;
+        awayNotice = false;
+        adopt(res.body);
+        return;
+      }
       // 404 is final: with no database those paths are never registered.
-      if (res.status === 404) { connecting = false; announceAPI(false); return; }
+      if (res.status === 404) { connecting = false; noLongerAway(); announceAPI(false); return; }
       // 401 is not "no API" — it is an API that wants a session. Falling back
       // to localStorage here would be the worst of both: edits would look
       // saved, live in this browser only, and never reach the plan everybody
       // else is reading. So hold, and connect for real once auth.js reports a
       // sign-in.
-      if (res.status === 401) { connecting = false; announceAPI(true); return; }
-      if (attempt < 4) {
-        setTimeout(function () { connect(attempt + 1); },
-          Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, attempt)));
-        return;
-      }
-      connecting = false;
+      if (res.status === 401) { connecting = false; noLongerAway(); announceAPI(true); return; }
+
+      // No answer, or none that settles anything: a 5xx from a proxy with
+      // nothing behind it, a captive portal's 200. Never the last try, and
+      // `connecting` stays set so that a sign-in cannot start a second chain
+      // beside this one. Said after the second failure in a row, as the write
+      // loop does, because from here on edits exist in this browser only.
+      awayNotice = attempt + 1 >= FAILURES_BEFORE_NOTICE && loadedFromServer();
+      if (awayNotice) setSticky(t('d.offline'));
+      connectTimer = setTimeout(function () {
+        connectTimer = null;
+        connect(attempt + 1);
+      }, Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, attempt)));
     });
   }
+
+  // Ask now instead of when the backoff comes round, and start the backoff
+  // over. Only while a try is booked: with a request in flight the question is
+  // already being asked, and with neither there is nothing to retry.
+  function connectNow() {
+    if (!connectTimer) return;
+    clearTimeout(connectTimer);
+    connectTimer = null;
+    connect(1);
+  }
+
+  // The browser's own word that the network is back. It is a hint and not a
+  // promise, which is why it only moves a try forward and never adds one.
+  window.addEventListener('online', connectNow);
 
   /* Tell auth.js whether this deployment has an API at all.
    *

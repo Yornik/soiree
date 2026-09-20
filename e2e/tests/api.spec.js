@@ -371,6 +371,74 @@ test('a write that cannot get out is retried and said out loud, not dropped', as
   await expect(page.locator('#dataMsg')).toHaveText(/Back in touch with the server/);
 });
 
+/*
+ * The same outage, met from the other end: the origin is already away when the
+ * page opens. That is the ordinary start for an installed planner, because the
+ * service worker paints the shell with no network at all, and it is also a pod
+ * restarting at the wrong moment. The cached copy is on screen and editable.
+ *
+ * The page used to ask five times over fifteen seconds and then stop, for the
+ * rest of its life and without a word: every edit after that went to
+ * localStorage only, under a status line that said nothing.
+ */
+test('a page opened while the origin is away says so, keeps asking, and sends what was typed once it is back', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  // The copy this browser keeps has to be the server's, under the server's id:
+  // that is what tells the next page it is looking at a shared plan and not at
+  // a planner that only ever lived here.
+  const { id } = (await apiPlan(request)).budgetItems[0];
+  await expect
+    .poll(() => page.evaluate((key) => {
+      window.dispatchEvent(new Event('pagehide'));
+      return JSON.parse(localStorage.getItem(key) || '{}').budgetItems.map((i) => i.id);
+    }, STORAGE_KEY))
+    .toEqual([id]);
+  await page.goto('about:blank');
+
+  // Installed, not paused: time passes as it would, and the test may also move
+  // it on. The waits being skipped are the page's own backoff, up to thirty
+  // seconds a time, and sitting through those would make this a clock.
+  await page.clock.install();
+
+  // A switch, for the reason the spec above gives.
+  let away = true;
+  let asked = 0;
+  await page.route('**/api/v1/**', (route) => {
+    if (route.request().method() === 'GET' && route.request().url().endsWith('/api/v1/plan')) asked += 1;
+    return away ? route.abort('internetdisconnected') : route.continue();
+  });
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).committed).toHaveText('€2,500');
+
+  // Six, because the fifth was where it used to stop. Each wait is on the
+  // request having gone out, and the clock only supplies the pause before it.
+  for (let n = 1; n <= 6; n += 1) {
+    await expect.poll(() => asked, { message: `request ${n} for the plan` }).toBeGreaterThanOrEqual(n);
+    await page.clock.fastForward(30_000);
+  }
+
+  // Said where a person can see it, and before they have typed for an hour.
+  await expect(page.locator('#dataMsg')).toHaveText(/not reaching the server/);
+
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+  expect((await apiPlan(request)).budgetItems[0].paid).toBe('500.00');
+
+  // Back. The browser says so itself, and that is taken as a reason to ask now
+  // rather than when the backoff next comes round.
+  away = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.paid]))
+    .toEqual([['Venue deposit', '750.00']]);
+  await expect(page.locator('#dataMsg')).toHaveText(/Back in touch with the server/);
+});
+
 test('the shared planner is still cached under one known key, and nothing else', async ({ page }) => {
   await openSharedPlanner(page);
   await gotoTab(page, 'budget');
