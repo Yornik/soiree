@@ -115,6 +115,17 @@ info:
 
     Treat a 404 on `GET /api/v1/plan` as "this deployment has no API". Treat a
     401 as "this deployment has an API, and it wants a session".
+
+    ## A 503 is not a 401
+
+    The server reads the session from the database on every path that needs a
+    session. When the database does not answer, the server cannot tell whether
+    the session exists. Every such path then returns **503** with the code
+    `unavailable` and a `Retry-After` header of `5`. The server keeps the
+    session cookie.
+
+    Treat a 503 as "ask again later". Keep the person signed in. A 401 alone
+    means that the session is gone.
   license:
     name: MIT
     identifier: MIT
