@@ -437,6 +437,13 @@ totals inline with the rows they total, and sub-items marked with a leading
 dash. The importer handles those and refuses loudly rather than guessing when
 it cannot.
 
+It reads OpenDocument (`.ods`) and delimited text (`.csv`, `.tsv`, `.txt`). An
+Excel workbook is saved as OpenDocument first, and delimited text has to be
+UTF-8: Excel's plain "CSV (comma delimited)" is Windows-1252 and its "Unicode
+text" is UTF-16, and both are refused rather than read as something they are
+not, because a mangled name cannot be repaired afterwards and the spreadsheet
+can simply be exported again.
+
 ### Regenerating the font subset
 
 The shipped `web/src/fonts/bricolage-display.woff2` is [Bricolage

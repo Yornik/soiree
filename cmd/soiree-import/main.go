@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -41,9 +42,11 @@ type options struct {
 	kind          string
 	columns       columnFlag
 	decimal       string
+	dateOrder     string
 	currency      string
 	totalKeywords string
 	skipCostless  bool
+	skipHidden    bool
 	ceiling       float64
 }
 
@@ -63,13 +66,20 @@ func run(args []string) error {
 	fs.StringVar(&o.kind, "kind", "budget", "single-table mode: budget, tasks or notes")
 	fs.Var(&o.columns, "map", "single-table mode: field=column, repeatable or comma-separated (e.g. item=B,total=E)")
 	fs.StringVar(&o.decimal, "decimal", "auto", "decimal separator: auto, dot or comma; with dot or comma a figure written the other way round is refused, not reread")
+	fs.StringVar(&o.dateOrder, "date-order", "auto", "how to read 03/04/2027: auto, dmy (day first) or mdy (month first); auto follows the rest of the column and reads day-first where the column cannot say")
 	fs.StringVar(&o.currency, "currency", "", "the planner's SOIREE_CURRENCY; decides the decimals a stated total is checked at (default: 2 decimals)")
 	fs.StringVar(&o.totalKeywords, "total-keywords", "", "comma-separated words marking a summary row (default: total, subtotal, grand total, sum)")
 	fs.BoolVar(&o.skipCostless, "skip-costless", false, "drop rows with no figure instead of importing them at zero")
+	fs.BoolVar(&o.skipHidden, "skip-hidden", false, "leave out the rows the spreadsheet hides, by hand or by a filter (default: import them and name them in the report)")
 	fs.Float64Var(&o.ceiling, "ceiling", 0, "budget ceiling to record in the output")
 	fs.Usage = func() { usage(fs) }
 
 	if err := fs.Parse(args); err != nil {
+		// -h is a question, and flag has already answered it. Reporting the
+		// answer as a failure misleads anything reading the exit status.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() != 1 {
@@ -122,6 +132,7 @@ func run(args []string) error {
 func propose(book *sheetimport.Book, path, reading string, o options) error {
 	cfg, notes := sheetimport.Detect(book)
 	cfg.Decimal = o.decimal
+	cfg.DateOrder = o.dateOrder
 	cfg.Currency = o.currency
 	cfg.Ceiling = o.ceiling
 
@@ -159,6 +170,9 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 		if o.decimal != "auto" {
 			cfg.Decimal = o.decimal
 		}
+		if o.dateOrder != "auto" {
+			cfg.DateOrder = o.dateOrder
+		}
 		if o.currency != "" {
 			cfg.Currency = o.currency
 		}
@@ -185,12 +199,14 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 		LastRow:               last,
 		Columns:               map[string]string(o.columns),
 		SkipRowsWithoutAmount: o.skipCostless,
+		SkipHidden:            o.skipHidden,
 	}
 	cfg = &sheetimport.Config{
-		Decimal:  o.decimal,
-		Currency: o.currency,
-		Ceiling:  o.ceiling,
-		Tables:   []sheetimport.Table{table},
+		Decimal:   o.decimal,
+		DateOrder: o.dateOrder,
+		Currency:  o.currency,
+		Ceiling:   o.ceiling,
+		Tables:    []sheetimport.Table{table},
 	}
 	if o.totalKeywords != "" {
 		cfg.TotalKeywords = splitList(o.totalKeywords)
@@ -201,9 +217,18 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 	return cfg, nil
 }
 
+// writeState encodes the plan before it opens anything, for the reason the
+// report gives for building its text in memory first: a file the encoder
+// never agreed to fill is worse than no file, and -o names the previous
+// import.
 func writeState(state *sheetimport.State, out string) (err error) {
+	var buf bytes.Buffer
+	if err := state.WriteJSON(&buf); err != nil {
+		return err
+	}
 	if out == "-" {
-		return state.WriteJSON(os.Stdout)
+		_, err := os.Stdout.Write(buf.Bytes())
+		return err
 	}
 	f, err := os.Create(out)
 	if err != nil {
@@ -212,7 +237,8 @@ func writeState(state *sheetimport.State, out string) (err error) {
 	defer func() {
 		err = errors.Join(err, f.Close())
 	}()
-	return state.WriteJSON(f)
+	_, err = f.Write(buf.Bytes())
+	return err
 }
 
 // columnFlag collects repeated -map flags.
@@ -336,15 +362,20 @@ single table, or write a mapping file for a sheet holding several.
   soiree-import -mapping mapping.json -o plan.json plan.ods
 
 mapping file:
+  The loader reads JSON and nothing else, and rejects a key it does not know,
+  so the keys are explained under the example rather than inside it. Paste
+  this as it stands, or start from what -detect writes.
+
   {
-    "decimal": "auto",                  // auto | dot | comma
-    "currency": "EUR",                  // the planner's SOIREE_CURRENCY
-    "totalKeywords": ["total"],         // rows whose label matches are summaries
+    "decimal": "auto",
+    "dateOrder": "auto",
+    "currency": "EUR",
+    "totalKeywords": ["total"],
     "tables": [
       {
         "name": "run of show",
-        "sheet": "Plan",                 // name or 1-based index
-        "kind": "tasks",                 // budget (default) | tasks | notes
+        "sheet": "Plan",
+        "kind": "tasks",
         "headerRow": 2,
         "firstRow": 3, "lastRow": 32,
         "columns": { "name": "A", "owner": "C", "due": "D", "status": "E" }
@@ -356,17 +387,28 @@ mapping file:
         "headerRow": 34,
         "firstRow": 35, "lastRow": 53,
         "columns": { "item": "A", "qty": "B", "total": "C", "paid": "D" },
-        "skipRowsWithoutAmount": false
+        "skipRowsWithoutAmount": false,
+        "skipHidden": false
       },
       {
         "name": "catering quote",
         "sheet": "Quote",
         "headerRow": 1, "firstRow": 2,
-        "parentItem": "Catering",        // rows become children of that item
+        "parentItem": "Catering",
         "columns": { "item": "A", "qty": "B", "unit": "C" }
       }
     ]
   }
+
+  decimal                auto | dot | comma
+  dateOrder              auto | dmy | mdy
+  currency               the planner's SOIREE_CURRENCY
+  totalKeywords          rows whose label matches one exactly are summaries
+  sheet                  sheet name or 1-based index
+  kind                   budget (default) | tasks | notes
+  parentItem             every row becomes a child of that budget item
+  skipRowsWithoutAmount  drop rows with no figure instead of importing zeroes
+  skipHidden             leave out rows the spreadsheet does not show
 
 fields — budget: item, vendor, unit, qty, total, paid, note, lockBy, phase
          tasks:  name, owner, due, status

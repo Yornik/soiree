@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -28,14 +29,20 @@ func Convert(book *Book, cfg *Config) (*State, *Report, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	dates, err := ParseDateOrder(cfg.DateOrder)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	c := &converter{
 		cfg:   cfg,
 		book:  book,
 		mode:  mode,
+		dates: dates,
 		ids:   newIDGen(),
 		state: NewState(),
-		rep:   &Report{Decimal: mode, Currency: cfg.Currency, Tables: make([]TableReport, len(cfg.Tables))},
+		rep: &Report{Decimal: mode, Dates: dates, Currency: cfg.Currency,
+			Tables: make([]TableReport, len(cfg.Tables))},
 	}
 	c.state.Ceiling = cfg.Ceiling
 	c.state.InflationPct = cfg.InflationPct
@@ -60,6 +67,7 @@ type converter struct {
 	cfg   *Config
 	book  *Book
 	mode  DecimalMode
+	dates DateOrder
 	ids   *idGen
 	state *State
 	rep   *Report
@@ -97,6 +105,7 @@ func (c *converter) table(idx int) error {
 		tr.Notes = append(tr.Notes, "no headerRow set — repeated header rows cannot be recognised in this table")
 	}
 	c.reportUnmapped(t, tr, sh, first, last)
+	c.reportEmptyMapped(t, tr, sh, first, last)
 
 	switch t.kind() {
 	case KindBudget:
@@ -195,6 +204,22 @@ func (c *converter) skipRow(t *Table, tr *TableReport, sh *Sheet, n int, labelFi
 		return "", false, false
 	}
 
+	if sh.RowHidden(n) {
+		// The rejected venue is hidden, the AutoFilter is still on, and what
+		// the person reads off their screen is not what the file holds. The
+		// sheet's own SUM() counts these rows, so they go in by default and
+		// the report says which ones nobody has seen.
+		if t.SkipHidden {
+			tr.skip(n, "hidden in the spreadsheet")
+			return "", false, false
+		}
+		tr.warn(n, "the spreadsheet does not show this row (hidden, or filtered out): imported anyway, set skipHidden to leave hidden rows out")
+	}
+	if span, joined := sh.Joined[n]; joined {
+		tr.warn(n, fmt.Sprintf("read from lines %d-%d of the file: a line break inside a quoted cell, or an unclosed quote that swallowed the lines under it",
+			span.First, span.Last))
+	}
+
 	label = c.text(sh, t, n, labelField)
 	if label == "" {
 		// Fall back to the leftmost mapped cell holding text, so a summary
@@ -223,6 +248,74 @@ func (c *converter) skipRow(t *Table, tr *TableReport, sh *Sheet, n int, labelFi
 		}
 	}
 	return label, false, true
+}
+
+// dateColumn settles how one mapped date column is read, before any row of it
+// is converted.
+//
+// Reading each cell on its own is how one column comes to hold two readings:
+// 03/25/2027 can only be March, and the 03/04/2027 under it was read as the
+// third of April all the same, a month past the deadline it states. One row
+// that can be read no other way settles the rows that can be read either way.
+func (c *converter) dateColumn(t *Table, tr *TableReport, sh *Sheet, first, last int, field string) dateReading {
+	if c.dates != DateAuto {
+		return dateReading{order: c.dates, stated: true}
+	}
+	col, mapped := t.column(field)
+	if !mapped {
+		return dateReading{order: DateDayFirst}
+	}
+
+	monthRow, dayRow := 0, 0
+	for n := first; n <= last; n++ {
+		o, decisive := dateEvidence(sh.Cell(n, col).Display())
+		switch {
+		case !decisive:
+		case o == DateMonthFirst && monthRow == 0:
+			monthRow = n
+		case o == DateDayFirst && dayRow == 0:
+			dayRow = n
+		}
+	}
+	switch {
+	case monthRow > 0 && dayRow > 0:
+		tr.Notes = append(tr.Notes, fmt.Sprintf("%s column is written both ways (row %d reads month-first, row %d day-first): no one order is right for it, so every row in it that reads either way is a warning",
+			field, monthRow, dayRow))
+		return dateReading{order: DateDayFirst, mixed: true}
+	case monthRow > 0:
+		tr.Notes = append(tr.Notes, fmt.Sprintf("%s column read month-first: row %d can be read no other way (override with -date-order dmy)",
+			field, monthRow))
+		return dateReading{order: DateMonthFirst, stated: true}
+	case dayRow > 0:
+		return dateReading{order: DateDayFirst, stated: true}
+	}
+	return dateReading{order: DateDayFirst}
+}
+
+// dateReading is how one date column is read, and how much of that the file
+// or the operator settled rather than the importer.
+type dateReading struct {
+	order DateOrder
+	// stated is an order nothing had to guess: the operator gave one, or a
+	// row of the column can be read no other way.
+	stated bool
+	// mixed is a column holding both orders, where reading it one way is
+	// wrong for some of its rows whichever way that is.
+	mixed bool
+}
+
+// record discloses one value that the order had to decide, which is a value
+// whose two leading numbers are both 12 or under.
+func (r dateReading) record(tr *TableReport, n int, field, raw, iso string) {
+	switch {
+	case r.stated:
+	case r.mixed:
+		tr.warn(n, fmt.Sprintf("%s %q read as %s, and the column it sits in is written both ways: check this row, or pass -date-order",
+			field, raw, iso))
+	default:
+		tr.AssumedDayFirst++
+		tr.assume(n, fmt.Sprintf("%s %q read as %s", field, raw, iso))
+	}
 }
 
 // sumRun is a running figure that a later row is measured against.
@@ -262,6 +355,7 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 		section, grand, all sumRun
 		lastSummary         int
 	)
+	lockDates := c.dateColumn(t, tr, sh, first, last, "lockBy")
 
 	for n := first; n <= last; n++ {
 		tr.Scanned++
@@ -316,7 +410,7 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 			item.Paid = v
 		}
 		if raw := c.text(sh, t, n, "lockBy"); raw != "" {
-			iso, dayFirst, err := parseDate(raw)
+			iso, ambiguous, err := parseDate(raw, lockDates.order)
 			switch {
 			case errors.Is(err, ErrNoValue):
 			case err != nil:
@@ -324,8 +418,8 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 				item.Note = appendNote(item.Note, "lockBy: "+raw)
 			default:
 				item.LockBy = iso
-				if dayFirst {
-					tr.AssumedDayFirst++
+				if ambiguous {
+					lockDates.record(tr, n, "lockBy", raw, iso)
 				}
 			}
 		}
@@ -523,6 +617,8 @@ func (c *converter) attach(parentName string, items []BudgetItem, tr *TableRepor
 }
 
 func (c *converter) taskTable(t *Table, tr *TableReport, sh *Sheet, first, last int) {
+	dueDates := c.dateColumn(t, tr, sh, first, last, "due")
+
 	for n := first; n <= last; n++ {
 		tr.Scanned++
 		label, _, ok := c.skipRow(t, tr, sh, n, "name")
@@ -532,7 +628,7 @@ func (c *converter) taskTable(t *Table, tr *TableReport, sh *Sheet, first, last 
 		task := Task{ID: c.ids.next("t"), Name: label, Owner: c.text(sh, t, n, "owner"), Status: "not-started"}
 
 		if raw := c.text(sh, t, n, "due"); raw != "" {
-			iso, dayFirst, err := parseDate(raw)
+			iso, ambiguous, err := parseDate(raw, dueDates.order)
 			switch {
 			case errors.Is(err, ErrNoValue):
 			case err != nil:
@@ -542,8 +638,8 @@ func (c *converter) taskTable(t *Table, tr *TableReport, sh *Sheet, first, last 
 				tr.warn(n, fmt.Sprintf("due date: %v — left empty", err))
 			default:
 				task.Due = iso
-				if dayFirst {
-					tr.AssumedDayFirst++
+				if ambiguous {
+					dueDates.record(tr, n, "due", raw, iso)
 				}
 			}
 		}
@@ -623,7 +719,11 @@ func (c *converter) value(tr *TableReport, n int, field string, cn cellNumber, n
 		return 0, false
 	}
 	if cn.Assumed {
+		// Counted and located: on a sheet of three hundred rows, "40 figures"
+		// is a number nobody can check, and a separator guessed wrong is
+		// wrong by a factor of a thousand.
 		tr.AssumedGrouping++
+		tr.assume(n, fmt.Sprintf("%s %q read as %s", field, cn.Raw, formatNumber(cn.Value)))
 	}
 	return cn.Value, cn.Present
 }
@@ -679,5 +779,39 @@ func (c *converter) reportUnmapped(t *Table, tr *TableReport, sh *Sheet, first, 
 			}
 		}
 		tr.UnmappedColumns = append(tr.UnmappedColumns, label)
+	}
+}
+
+// reportEmptyMapped is the mirror of reportUnmapped: a column the mapping
+// names that holds nothing at all. A wrong letter is the likeliest typo in a
+// hand-written mapping, and it imports a budget of zeroes under a report that
+// never mentions the column.
+//
+// A column whose header is there and whose cells are not, a paid column
+// before anything has been paid, is not a typo, and saying so every time
+// would teach the operator to skip the line. Only a column with nothing in it
+// at all, header included, is named.
+func (c *converter) reportEmptyMapped(t *Table, tr *TableReport, sh *Sheet, first, last int) {
+	mapped := t.mappedColumns()
+	cols := make([]int, 0, len(mapped))
+	for col := range mapped {
+		cols = append(cols, col)
+	}
+	sort.Ints(cols)
+
+	for _, col := range cols {
+		if t.HeaderRow > 0 && !sh.Cell(t.HeaderRow, col).Empty() {
+			continue
+		}
+		used := false
+		for n := first; n <= last; n++ {
+			if !sh.Cell(n, col).Empty() {
+				used = true
+				break
+			}
+		}
+		if !used {
+			tr.EmptyColumns = append(tr.EmptyColumns, mapped[col]+"="+ColumnLabel(col))
+		}
 	}
 }

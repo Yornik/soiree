@@ -37,10 +37,19 @@ type TableReport struct {
 	Parents        int
 	Costless       int
 
-	Skipped         []RowIssue
-	Warnings        []RowIssue
+	Skipped  []RowIssue
+	Warnings []RowIssue
+	// Assumptions says where each counted guess was made. A count alone
+	// cannot be checked: finding forty guessed separators by eye in three
+	// hundred rows is not something anyone does, and a guessed separator that
+	// is wrong is wrong by a factor of a thousand.
+	Assumptions     []RowIssue
 	UnmappedColumns []string
-	Notes           []string
+	// EmptyColumns are the mapped columns that hold nothing in the row range,
+	// written as "total=Z". A wrong column letter is the likeliest typo in a
+	// hand-written mapping.
+	EmptyColumns []string
+	Notes        []string
 
 	AssumedGrouping int
 	AssumedDayFirst int
@@ -62,6 +71,10 @@ func (t *TableReport) warn(row int, what string) {
 	t.Warnings = append(t.Warnings, RowIssue{Row: row, Text: what})
 }
 
+func (t *TableReport) assume(row int, what string) {
+	t.Assumptions = append(t.Assumptions, RowIssue{Row: row, Text: what})
+}
+
 // SheetGap is the rows of one sheet that hold something and that no table
 // reads: not in any row range, not a header row.
 type SheetGap struct {
@@ -75,6 +88,7 @@ type Report struct {
 	Source  string
 	Reading string
 	Decimal DecimalMode
+	Dates   DateOrder
 	DryRun  bool
 	// Currency is the code the mapping gave, possibly none. TotalsChecked is
 	// set once any stated total has been checked against the decimals that
@@ -118,6 +132,7 @@ func (r *Report) String() string {
 		b.addf("  read as: %s\n", r.Reading)
 	}
 	b.addf("  decimal separator: %s\n", r.Decimal)
+	b.addf("  date order: %s\n", r.Dates)
 	if r.TotalsChecked {
 		exp := count(exponent(r.Currency), "decimal")
 		if cur := strings.ToUpper(strings.TrimSpace(r.Currency)); cur != "" {
@@ -151,13 +166,19 @@ func (r *Report) String() string {
 		if len(t.UnmappedColumns) > 0 {
 			b.addf("  unmapped columns holding data: %s\n", strings.Join(t.UnmappedColumns, ", "))
 		}
+		if len(t.EmptyColumns) > 0 {
+			b.addf("  mapped columns holding nothing in %s (wrong column letter?): %s\n",
+				rowSpan(t.FirstRow, t.LastRow), strings.Join(t.EmptyColumns, ", "))
+		}
 		if t.AssumedGrouping > 0 {
 			b.addf("  assumed a thousands separator in %s (override with -decimal comma|dot)\n",
 				count(t.AssumedGrouping, "figure"))
 		}
 		if t.AssumedDayFirst > 0 {
-			b.addf("  read %s as day-first\n", count(t.AssumedDayFirst, "ambiguous date"))
+			b.addf("  read %s as day-first (override with -date-order mdy)\n",
+				count(t.AssumedDayFirst, "ambiguous date"))
 		}
+		writeIssues(&b, "assumptions", t.Assumptions)
 		for _, n := range t.Notes {
 			b.addf("  %s\n", n)
 		}
@@ -180,12 +201,22 @@ func (r *Report) String() string {
 		outside += len(gap.Rows)
 	}
 
+	empty := 0
+	for i := range r.Tables {
+		empty += len(r.Tables[i].EmptyColumns)
+	}
+
 	imported, skipped, warnings := r.Totals()
 	b.addf("\nsummary: %d imported, %d skipped, %s", imported, skipped, count(warnings, "warning"))
 	if outside > 0 {
 		// On the summary line because that is the line people read, and
 		// "0 warnings" on its own is an all-clear.
 		b.addf(", %s outside every table", count(outside, "row"))
+	}
+	if empty > 0 {
+		// Same reason: a mapping that names a column holding nothing imports
+		// a budget of zeroes and counts no warning doing it.
+		b.addf(", %s holding nothing", count(empty, "mapped column"))
 	}
 	b.add("\n")
 	return b.String()

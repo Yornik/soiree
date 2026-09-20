@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"math"
 	"os"
 	"path/filepath"
@@ -36,6 +37,13 @@ func writeFixture(t *testing.T, name, content string) string {
 // stdout. The report is meant for a terminal, not for the test log.
 func quiet(t *testing.T, fn func()) string {
 	t.Helper()
+	out, _ := capture(t, fn)
+	return out
+}
+
+// capture is quiet for the tests that read what went to stderr.
+func capture(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
 	dir := t.TempDir()
 	out, err := os.Create(filepath.Join(dir, "stdout"))
 	if err != nil {
@@ -63,7 +71,11 @@ func quiet(t *testing.T, fn func()) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(body)
+	errBody, err := os.ReadFile(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body), string(errBody)
 }
 
 func TestRunImportsWithFlagMapping(t *testing.T) {
@@ -202,6 +214,96 @@ func TestRunRejectsMixedMappingSources(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("a mapping file and mapping flags together should be refused, not silently merged")
+	}
+}
+
+// Asking a tool for help is not a failure, and a shell or a script reading
+// the exit status is entitled to believe the number.
+func TestRunHelpIsNotAFailure(t *testing.T) {
+	var err error
+	quiet(t, func() { err = run([]string{"-h"}) })
+	if err != nil {
+		t.Fatalf("soiree-import -h = %v; want the usage printed and nothing else", err)
+	}
+}
+
+// The usage text is the only documentation of the mapping format, and the
+// loader rejects unknown keys and comments alike. An example that cannot be
+// pasted is worse than none: it reads like a working file.
+func TestUsageMappingExampleIsAMappingThatLoads(t *testing.T) {
+	fs := flag.NewFlagSet("soiree-import", flag.ContinueOnError)
+	_, text := capture(t, func() { usage(fs) })
+
+	_, rest, ok := strings.Cut(text, "mapping file:")
+	if !ok {
+		t.Fatal("the usage text no longer shows a mapping example")
+	}
+	block, _, ok := strings.Cut(rest, "\nfields")
+	if !ok {
+		t.Fatal("the usage text no longer ends the mapping example with the field list")
+	}
+	start, end := strings.Index(block, "{"), strings.LastIndex(block, "}")
+	if start < 0 || end < start {
+		t.Fatalf("no JSON object in the example:\n%s", block)
+	}
+	example := block[start : end+1]
+
+	if _, err := sheetimport.LoadConfig(strings.NewReader(example)); err != nil {
+		t.Fatalf("the example the tool prints does not load as a mapping: %v\n%s", err, example)
+	}
+}
+
+// The order a sheet writes its dates in is the operator's to state, so the
+// flag has to reach the converter.
+func TestRunPassesTheDateOrderThrough(t *testing.T) {
+	csv := writeFixture(t, "tasks.csv", "Task,Due\nBook the hall,03/04/2027\n")
+	out := filepath.Join(t.TempDir(), "plan.json")
+
+	var err error
+	quiet(t, func() {
+		err = run([]string{
+			"-header", "1", "-kind", "tasks", "-map", "name=A,due=B",
+			"-date-order", "mdy", "-o", out, csv,
+		})
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	body, rerr := os.ReadFile(out)
+	if rerr != nil {
+		t.Fatalf("no JSON written: %v", rerr)
+	}
+	var state struct {
+		Tasks []struct {
+			Due string `json:"due"`
+		} `json:"tasks"`
+	}
+	if jerr := json.Unmarshal(body, &state); jerr != nil {
+		t.Fatalf("output is not JSON: %v", jerr)
+	}
+	if len(state.Tasks) != 1 || state.Tasks[0].Due != "2027-03-04" {
+		t.Errorf("due = %+v; want 2027-03-04, the month first as asked", state.Tasks)
+	}
+}
+
+// The report is built in memory before a byte of it is written, because half
+// a report is worse than none. The JSON deserves the same: -o truncated the
+// previous import before the encoder had agreed to produce anything.
+func TestWriteStateKeepsTheOldFileWhenTheNewOneCannotBeWritten(t *testing.T) {
+	out := writeFixture(t, "plan.json", `{"budgetItems":["the previous import"]}`)
+
+	state := sheetimport.NewState()
+	state.FxRate = math.NaN() // JSON has no way to write it
+	if err := writeState(state, out); err == nil {
+		t.Fatal("writeState wrote a plan JSON cannot encode")
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !strings.Contains(string(body), "previous import") {
+		t.Errorf("the previous import was destroyed by a write that never happened: %q", body)
 	}
 }
 

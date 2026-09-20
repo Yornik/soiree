@@ -109,6 +109,13 @@ func tRowRepeat(n int, cells ...string) string {
 		strings.Join(cells, "") + "</table:table-row>"
 }
 
+// tRowHidden is a row the sheet does not show: "collapse" is hidden by hand,
+// "filter" is hidden by an AutoFilter.
+func tRowHidden(how string, cells ...string) string {
+	return fmt.Sprintf(`<table:table-row table:visibility="%s">`, how) +
+		strings.Join(cells, "") + "</table:table-row>"
+}
+
 func tSheet(name string, rows ...string) string {
 	return fmt.Sprintf(`<table:table table:name="%s">`, esc(name)) +
 		`<table:table-column table:number-columns-repeated="4"/>` +
@@ -184,5 +191,135 @@ func TestReadODSRejectsNonODS(t *testing.T) {
 	}
 	if _, err := ReadODS(path); err == nil {
 		t.Error("ReadODS should refuse a file that is not an .ods")
+	}
+}
+
+// hiddenRowsBook is a cost table with a row hidden by hand (the venue that
+// was rejected) and a row hidden by an AutoFilter.
+func hiddenRowsBook(t *testing.T) *Book {
+	t.Helper()
+	path := writeODS(t, tSheet("Costs",
+		tRow(cStr("Item"), cStr("Total")),
+		tRow(cStr("Venue"), cNum(2500, "2500")),
+		tRowHidden("collapse", cStr("Rejected venue"), cNum(7777, "7777")),
+		tRowHidden("filter", cStr("Filtered out"), cNum(8888, "8888")),
+		emptyTail,
+	))
+	book, err := ReadODS(path)
+	if err != nil {
+		t.Fatalf("ReadODS: %v", err)
+	}
+	return book
+}
+
+func hiddenRowsConfig() *Config {
+	return &Config{Tables: []Table{{
+		HeaderRow: 1,
+		FirstRow:  2,
+		Columns:   map[string]string{"item": "A", "total": "B"},
+	}}}
+}
+
+func TestReadODSMarksTheRowsTheSheetHides(t *testing.T) {
+	sh := &hiddenRowsBook(t).Sheets[0]
+	for _, n := range []int{3, 4} {
+		if !sh.RowHidden(n) {
+			t.Errorf("row %d is hidden in the file and does not read as hidden", n)
+		}
+	}
+	if sh.RowHidden(2) {
+		t.Error("row 2 is an ordinary row")
+	}
+
+	// A hidden row written as a repeat run is every one of those rows.
+	twice := `<table:table-row table:visibility="collapse" table:number-rows-repeated="2">` +
+		cStr("Rejected") + `</table:table-row>`
+	book, err := ReadODS(writeODS(t, tSheet("Costs", tRow(cStr("Venue")), twice)))
+	if err != nil {
+		t.Fatalf("ReadODS: %v", err)
+	}
+	repeated := &book.Sheets[0]
+	if !repeated.RowHidden(2) || !repeated.RowHidden(3) {
+		t.Errorf("a repeated hidden row must mark every row it stands for: %v", repeated.Hidden)
+	}
+}
+
+// People hide the rows they rejected and leave an AutoFilter on. What they
+// read off the screen is their budget; what the file holds is everything, and
+// a SUM() in the sheet counts the hidden rows too. So the rows go in, and the
+// report says which ones the person has not seen.
+func TestConvertReportsRowsTheSheetHides(t *testing.T) {
+	book, cfg := hiddenRowsBook(t), hiddenRowsConfig()
+	state, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+
+	if len(state.BudgetItems) != 3 {
+		t.Fatalf("imported %d items; want 3, hidden rows are still money", len(state.BudgetItems))
+	}
+	for _, row := range []int{3, 4} {
+		if !warnedRow(tr, row, "hidden") {
+			t.Errorf("row %d is hidden in the sheet and the report does not say so; warnings: %v", row, tr.Warnings)
+		}
+	}
+}
+
+func TestConvertSkipsHiddenRowsOnRequest(t *testing.T) {
+	book, cfg := hiddenRowsBook(t), hiddenRowsConfig()
+	cfg.Tables[0].SkipHidden = true
+
+	state, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+
+	if len(state.BudgetItems) != 1 {
+		t.Fatalf("imported %d items; want 1, the two hidden rows left out", len(state.BudgetItems))
+	}
+	for _, row := range []int{3, 4} {
+		if !skippedRow(tr, row, "hidden") {
+			t.Errorf("row %d was left out and the report does not say why; skips: %v", row, tr.Skipped)
+		}
+	}
+	// A row left out is still a row the table answers for.
+	if tr.Accounted() != tr.Scanned {
+		t.Errorf("scanned %d rows, accounted for %d", tr.Scanned, tr.Accounted())
+	}
+}
+
+// office:value goes to the output untouched, and NaN or Inf is a value JSON
+// cannot encode: the run reported an import and then failed writing it, after
+// the previous plan.json had already been truncated.
+func TestReadODSIgnoresAValueJSONCannotWrite(t *testing.T) {
+	cell := `<table:table-cell office:value-type="float" office:value="NaN"><text:p>1.234</text:p></table:table-cell>`
+	path := writeODS(t, tSheet("Costs", tRow(cStr("Venue"), cell)))
+
+	book, err := ReadODS(path)
+	if err != nil {
+		t.Fatalf("ReadODS: %v", err)
+	}
+	c := book.Sheets[0].Cell(1, 2)
+	if c.HasValue {
+		t.Errorf("B1 = %+v; want the value left to the text parser, not carried into the plan", c)
+	}
+	if c.Text != "1.234" {
+		t.Errorf("B1 text = %q; want the displayed figure kept", c.Text)
+	}
+}
+
+// A repeat run is how a sheet says "and the same again". A file of a few
+// hundred bytes can say it four thousand columns wide and two hundred
+// thousand rows deep, which is tens of gigabytes of cells: the caps at the
+// top of ods.go are per row and per column, so neither of them sees it.
+func TestReadODSRefusesARepeatRunTooBigToHold(t *testing.T) {
+	wide := `<table:table-cell office:value-type="string" table:number-columns-repeated="4000">` +
+		`<text:p>x</text:p></table:table-cell>`
+	path := writeODS(t, tSheet("Bomb", tRowRepeat(2000, wide)))
+
+	if _, err := ReadODS(path); err == nil {
+		t.Error("ReadODS built 8 million cells out of a 700-byte file without complaint")
 	}
 }

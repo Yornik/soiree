@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -18,6 +19,12 @@ const (
 	// built. These caps only bite on repeat runs that actually carry content.
 	maxSheetCols = 4096
 	maxSheetRows = 200000
+	// Those two are a cap per row and a cap per column, and a repeat run asks
+	// for the product of them: a few hundred bytes of XML for four thousand
+	// columns across two hundred thousand rows. Every pass over a sheet walks
+	// it row by column, so a file needing more cells than this is one no run
+	// would finish anyway.
+	maxSheetCells = 5000000
 )
 
 // ReadODS reads an OpenDocument spreadsheet.
@@ -73,10 +80,12 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 		dateValue   string
 		inRow       bool
 		inCell      bool
+		rowHidden   bool
 		cellRepeat  int
 		rowRepeat   int
 		pendingCols int // empty cells counted but not materialised
 		pendingRows int
+		cells       int // materialised cells in the sheet being read
 	)
 
 	for {
@@ -96,7 +105,7 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 					break
 				}
 				cur = &Sheet{Name: localAttr(t, "name")}
-				pendingRows = 0
+				pendingRows, cells = 0, 0
 
 			case "table-row":
 				if cur == nil {
@@ -104,6 +113,11 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 				}
 				inRow, row, pendingCols = true, nil, 0
 				rowRepeat = repeatAttr(t, "number-rows-repeated")
+				// "collapse" is hidden by hand, "filter" is hidden by an
+				// AutoFilter. Either way the row is in the file and not on
+				// the person's screen.
+				visibility := localAttr(t, "visibility")
+				rowHidden = visibility == "collapse" || visibility == "filter"
 
 			case "table-cell", "covered-table-cell":
 				// covered-table-cell is the hidden half of a merge. It still
@@ -174,10 +188,20 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 				if len(cur.Rows)+pendingRows+rowRepeat > maxSheetRows {
 					return nil, fmt.Errorf("sheet %q has more than %d rows", sheetName(cur), maxSheetRows)
 				}
+				if cells += len(row) * rowRepeat; cells > maxSheetCells {
+					return nil, fmt.Errorf("sheet %q repeats its rows out to more than %d cells: it is a repeat run, not a table",
+						sheetName(cur), maxSheetCells)
+				}
 				cur.Rows = append(cur.Rows, make([][]Cell, pendingRows)...)
 				pendingRows = 0
 				for i := 0; i < rowRepeat; i++ {
-					cur.Rows = append(cur.Rows, append([]Cell(nil), row...))
+					if rowHidden {
+						cur.markHidden(len(cur.Rows) + 1)
+					}
+					// Every repeat shares the one slice. A row is read-only
+					// once it is parsed, and a copy per repeat is how a file
+					// of a few hundred bytes asks for gigabytes.
+					cur.Rows = append(cur.Rows, row)
 				}
 
 			case "table":
@@ -202,7 +226,12 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 func readCellValue(t xml.StartElement, cell *Cell, dateValue *string) {
 	switch localAttr(t, "value-type") {
 	case "float", "currency", "percentage":
-		if v, err := strconv.ParseFloat(localAttr(t, "value"), 64); err == nil {
+		// ParseFloat also reads NaN and Inf, which JSON cannot write: the run
+		// would print a clean report and then fail on the way out, with the
+		// file it was overwriting already truncated. The displayed text is a
+		// better answer than a number no output can carry.
+		if v, err := strconv.ParseFloat(localAttr(t, "value"), 64); err == nil &&
+			!math.IsNaN(v) && !math.IsInf(v, 0) {
 			cell.Value, cell.HasValue = v, true
 		}
 	case "date":

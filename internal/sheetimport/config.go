@@ -42,6 +42,9 @@ var defaultChildPrefixes = []string{"-", "–", "—", "•", "*", "·"}
 type Config struct {
 	// Decimal is auto, dot or comma. See DecimalMode.
 	Decimal string `json:"decimal,omitempty"`
+	// DateOrder is auto, dmy or mdy, and settles 03/04/2027 for the whole
+	// file. See DateOrder.
+	DateOrder string `json:"dateOrder,omitempty"`
 	// Currency is the planner's SOIREE_CURRENCY. Nothing is converted by it;
 	// it says how many decimals the planner keeps, which decides whether a
 	// stated total survives being stored as a unit price. Empty means two.
@@ -86,6 +89,11 @@ type Table struct {
 	// SkipRowsWithoutAmount drops rows with no figure in them instead of
 	// importing them at zero.
 	SkipRowsWithoutAmount bool `json:"skipRowsWithoutAmount,omitempty"`
+	// SkipHidden leaves out the rows the spreadsheet does not show. Off by
+	// default: a hidden row is still in the sheet's own SUM(), so dropping it
+	// unasked is the worse of the two silences. Either way the report names
+	// them.
+	SkipHidden bool `json:"skipHidden,omitempty"`
 	// DashChildren turns the leading-dash convention off when a sheet uses
 	// dashes decoratively. Nil means on.
 	DashChildren *bool `json:"dashChildren,omitempty"`
@@ -123,6 +131,9 @@ func (c *Config) WriteJSON(w io.Writer) error {
 // a bad mapping fails immediately instead of halfway through a report.
 func (c *Config) Validate() error {
 	if _, err := ParseDecimalMode(c.Decimal); err != nil {
+		return err
+	}
+	if _, err := ParseDateOrder(c.DateOrder); err != nil {
 		return err
 	}
 	if cur := strings.TrimSpace(c.Currency); cur != "" && len(cur) != 3 {

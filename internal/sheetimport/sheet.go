@@ -43,6 +43,36 @@ func (c Cell) Empty() bool { return c.Text == "" && !c.HasValue }
 type Sheet struct {
 	Name string
 	Rows [][]Cell
+	// Hidden marks the rows the spreadsheet itself does not show: collapsed
+	// by hand, or filtered out. They hold ordinary data and the sheet's own
+	// SUM() counts them, so they are read like any other row, but the person
+	// whose budget this is has not seen them on screen.
+	Hidden map[int]bool
+	// Joined marks the rows that were read from more than one line of the
+	// file. A quoted line break does that on purpose; an unclosed quote does
+	// it by swallowing the lines under it, and from there on these row
+	// numbers and the file's line numbers no longer agree.
+	Joined map[int]LineSpan
+}
+
+// LineSpan is the first and last line of the file one row was read from.
+type LineSpan struct{ First, Last int }
+
+// RowHidden reports a row the spreadsheet does not display.
+func (s *Sheet) RowHidden(n int) bool { return s.Hidden[n] }
+
+func (s *Sheet) markHidden(n int) {
+	if s.Hidden == nil {
+		s.Hidden = map[int]bool{}
+	}
+	s.Hidden[n] = true
+}
+
+func (s *Sheet) markJoined(n int, span LineSpan) {
+	if s.Joined == nil {
+		s.Joined = map[int]LineSpan{}
+	}
+	s.Joined[n] = span
 }
 
 // Row returns spreadsheet row n (1-based), or nil past the end.

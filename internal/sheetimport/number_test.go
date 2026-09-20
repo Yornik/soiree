@@ -146,22 +146,28 @@ func TestParseNumber(t *testing.T) {
 
 func TestParseDate(t *testing.T) {
 	cases := []struct {
-		in       string
-		want     string
-		dayFirst bool
-		wantErr  bool
+		in        string
+		order     DateOrder
+		want      string
+		ambiguous bool
+		wantErr   bool
 	}{
 		{in: "2027-05-01", want: "2027-05-01"},
 		{in: "2027-05-01T00:00:00", want: "2027-05-01"},
-		{in: "03/04/2027", want: "2027-04-03", dayFirst: true},
+		{in: "03/04/2027", want: "2027-04-03", ambiguous: true},
 		{in: "25/12/2027", want: "2027-12-25"},
 		{in: "12/25/2027", want: "2027-12-25"}, // only one reading works
 		{in: "1 Jan 2027", want: "2027-01-01"},
 		{in: "31/02/2027", wantErr: true},
 		{in: "next spring", wantErr: true},
+		// An order settles the values that read either way, and only those:
+		// 25/12 is the twenty-fifth of December in every order there is.
+		{in: "03/04/2027", order: DateMonthFirst, want: "2027-03-04", ambiguous: true},
+		{in: "25/12/2027", order: DateMonthFirst, want: "2027-12-25"},
+		{in: "03/04/2027", order: DateDayFirst, want: "2027-04-03", ambiguous: true},
 	}
 	for _, c := range cases {
-		got, dayFirst, err := parseDate(c.in)
+		got, ambiguous, err := parseDate(c.in, c.order)
 		if c.wantErr {
 			if err == nil {
 				t.Errorf("parseDate(%q) = %q; want an error", c.in, got)
@@ -172,8 +178,32 @@ func TestParseDate(t *testing.T) {
 			t.Errorf("parseDate(%q): %v", c.in, err)
 			continue
 		}
-		if got != c.want || dayFirst != c.dayFirst {
-			t.Errorf("parseDate(%q) = %q, dayFirst %v; want %q, %v", c.in, got, dayFirst, c.want, c.dayFirst)
+		if got != c.want || ambiguous != c.ambiguous {
+			t.Errorf("parseDate(%q, %s) = %q, ambiguous %v; want %q, %v",
+				c.in, c.order, got, ambiguous, c.want, c.ambiguous)
+		}
+	}
+}
+
+func TestDateEvidence(t *testing.T) {
+	cases := []struct {
+		in       string
+		want     DateOrder
+		decisive bool
+	}{
+		{in: "03/25/2027", want: DateMonthFirst, decisive: true},
+		{in: "25/03/2027", want: DateDayFirst, decisive: true},
+		{in: "03/04/2027"},   // reads either way
+		{in: "2027-03-04"},   // already unambiguous
+		{in: "next spring"},  // not a date at all
+		{in: "25/25/2027"},   // no reading at all
+		{in: "1 March 2027"}, // no numeric month to weigh
+	}
+	for _, c := range cases {
+		got, decisive := dateEvidence(c.in)
+		if decisive != c.decisive || (decisive && got != c.want) {
+			t.Errorf("dateEvidence(%q) = %s, decisive %v; want %s, %v",
+				c.in, got, decisive, c.want, c.decisive)
 		}
 	}
 }
