@@ -35,6 +35,13 @@ var moneyFields = map[string]map[string]bool{
 	store.EntitySettings:    {"ceiling": true},
 }
 
+// dateFields are `date` columns, which reach the log as instants and are spoken
+// as the calendar days they are. These two are every `date` the schema has.
+var dateFields = map[string]map[string]bool{
+	store.EntityBudgetItems: {"lock_by": true},
+	store.EntityTasks:       {"due": true},
+}
+
 type activityActorJSON struct {
 	// ID and Email are null where there was no account, or where it has since
 	// been deleted. Kind still says what sort of actor it was.
@@ -122,6 +129,9 @@ func encodeActivity(currency string, e store.ActivityEntry) activityEntryJSON {
 		if moneyFields[e.Entity][field] {
 			c.Old, c.New = majorUnits(currency, c.Old), majorUnits(currency, c.New)
 		}
+		if dateFields[e.Entity][field] {
+			c.Old, c.New = civilDates(c.Old), civilDates(c.New)
+		}
 		out.Changes = append(out.Changes, c)
 	}
 	// A map has no order, and a list that reshuffles between two reads of the
@@ -146,6 +156,32 @@ func majorUnits(currency string, raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	out, err := json.Marshal(store.FormatMajor(currency, minor))
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// civilDates turns a recorded instant back into the day it was always about.
+// A `date` column scans into a time.Time at midnight UTC and the log keeps what
+// json.Marshal makes of that, so the history holds "2030-05-01T00:00:00Z" where
+// the rest of the API says "2030-05-01". That is the rendering civilDate exists
+// to keep off the wire, and one a reader west of UTC turns into the day before.
+//
+// Undone here rather than at the write: the log is append-only, and entries
+// written before this existed have to read correctly too. Anything that is not
+// an instant is passed through as it is: null on one side of a create or a
+// delete above all, and a day already spoken as one.
+func civilDates(raw json.RawMessage) json.RawMessage {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return raw
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return raw
+	}
+	out, err := json.Marshal(t.UTC().Format(time.DateOnly))
 	if err != nil {
 		return raw
 	}

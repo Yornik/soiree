@@ -2026,7 +2026,9 @@ components:
             One item for each field that changed, in the order of `field`. On a
             `create`, each `old` is `null`. On a `delete`, each `new` is
             `null`. A password is never here: where `passwordHash` has a
-            value, that value is the word `"redacted"`.
+            value, that value is the word `"redacted"`. A value is spoken as
+            the rest of this API speaks it: an amount is a decimal string in
+            major units, and a date is a `YYYY-MM-DD` day.
           items:
             type: object
             required: [field, old, new]
