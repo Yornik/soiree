@@ -1,10 +1,31 @@
 package config
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
 )
+
+// vapidPair is a real P-256 pair in the shape the browser and the push library
+// expect: the public key an uncompressed point, the private key the bare
+// scalar, both base64url without padding.
+//
+// Generated rather than written down. A private key in a repository is a
+// private key in a repository however clearly it is labelled a fixture, and
+// the placeholder strings these tests used to carry are exactly what the
+// startup check now refuses.
+func vapidPair(t *testing.T) (publicKey, privateKey string) {
+	t.Helper()
+	priv, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate a VAPID pair: %v", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
+		base64.RawURLEncoding.EncodeToString(priv.Bytes())
+}
 
 func TestLoadDefaults(t *testing.T) {
 	c, err := Load()
@@ -299,6 +320,9 @@ func TestPushIsOffWhenUnconfigured(t *testing.T) {
 // A half-configured pair is never a startup failure — but it must not reach
 // the browser either, or the page offers to subscribe against a key the server
 // cannot send with, and every notification after that is silently lost.
+//
+// Still true now that a complete set is checked against itself: what is
+// missing is not what is wrong, and these values are deliberately nonsense.
 func TestHalfConfiguredPushNeitherFailsNorPublishes(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"a public key alone": {
@@ -334,10 +358,7 @@ func TestHalfConfiguredPushNeitherFailsNorPublishes(t *testing.T) {
 // cannot subscribe at all. The private key is a signing key and must never get
 // anywhere near it.
 func TestPushKeysAreReadAndOnlyThePublicOneIsPublished(t *testing.T) {
-	const (
-		publicKey  = "BOnlyThisHalfMayEverReachABrowser"
-		privateKey = "this-private-half-is-the-signing-key"
-	)
+	publicKey, privateKey := vapidPair(t)
 	t.Setenv("SOIREE_VAPID_PUBLIC_KEY", "  "+publicKey+"  ")
 	t.Setenv("SOIREE_VAPID_PRIVATE_KEY", privateKey)
 	t.Setenv("SOIREE_VAPID_SUBJECT", "mailto:ada@example.test")
@@ -377,6 +398,78 @@ func TestPushKeysAreReadAndOnlyThePublicOneIsPublished(t *testing.T) {
 		if s, ok := value.(string); ok && s == privateKey {
 			t.Errorf("the client config publishes the private key as %q", key)
 		}
+	}
+}
+
+// Three values that are present but do not form a pair are a different matter
+// from a half-configured set, because they do reach the browser.
+//
+// Transposing the two variables is the mistake docs/operating.md warns about,
+// and it publishes the signing key in the config block of a page served to
+// anyone. Nothing afterwards reports it: a browser refuses to subscribe against
+// a 32-byte applicationServerKey, so no subscription exists, no digest is ever
+// sent, and no line appears in any log. The other mistakes fail at the first
+// weekly send instead — a week after the permission prompt was spent.
+func TestACompleteButUnusableVAPIDSetRefusesToStart(t *testing.T) {
+	publicKey, privateKey := vapidPair(t)
+	strangerPublic, _ := vapidPair(t)
+
+	for name, pair := range map[string][2]string{
+		"transposed":                       {privateKey, publicKey},
+		"a public key from another pair":   {strangerPublic, privateKey},
+		"a truncated public key":           {publicKey[:40], privateKey},
+		"a private key that is not base64": {publicKey, "not a key at all"},
+		"a private key of the wrong length": {publicKey,
+			base64.RawURLEncoding.EncodeToString(make([]byte, 31))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("SOIREE_VAPID_PUBLIC_KEY", pair[0])
+			t.Setenv("SOIREE_VAPID_PRIVATE_KEY", pair[1])
+			t.Setenv("SOIREE_VAPID_SUBJECT", "mailto:ada@example.test")
+
+			c, err := Load()
+			if err == nil {
+				if c.Client().VAPIDPublicKey == privateKey {
+					t.Fatal("started with the two variables transposed, publishing the signing key to anyone who asks for the page")
+				}
+				t.Fatal("started with a VAPID set that cannot work")
+			}
+			// This message goes to stdout and into the cluster's log pipeline,
+			// and in the transposed case the variable it is about holds the
+			// signing key. It may name variables and lengths, never a value.
+			for _, secret := range []string{privateKey, publicKey} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("the refusal prints key material: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// webpush-go decodes a key as padded base64url first and raw second, so a pair
+// that was written down with padding sends perfectly well. The check that reads
+// the same two variables has to accept exactly what the sender accepts, or it
+// refuses a deployment that works.
+func TestAPaddedVAPIDPairIsAccepted(t *testing.T) {
+	publicKey, privateKey := vapidPair(t)
+	repad := func(raw string) string {
+		b, err := base64.RawURLEncoding.DecodeString(raw)
+		if err != nil {
+			t.Fatalf("decode the generated key: %v", err)
+		}
+		return base64.URLEncoding.EncodeToString(b)
+	}
+
+	t.Setenv("SOIREE_VAPID_PUBLIC_KEY", repad(publicKey))
+	t.Setenv("SOIREE_VAPID_PRIVATE_KEY", repad(privateKey))
+	t.Setenv("SOIREE_VAPID_SUBJECT", "mailto:ada@example.test")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load() refused a padded pair: %v", err)
+	}
+	if !c.VAPID.Enabled() {
+		t.Error("a padded pair does not report itself enabled")
 	}
 }
 

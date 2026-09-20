@@ -124,20 +124,29 @@ func TestSMTPConfigMapsOntoTheTransport(t *testing.T) {
 // disagreement is silent. A page that offers to subscribe against a key the
 // sender does not have, and a sender holding keys the page never publishes,
 // both present as notifications that simply never arrive.
+//
+// A real pair rather than two labelled strings, because a complete set is now
+// checked at startup — which also means this pins the order GenerateKeys hands
+// them back in, the thing that gets transposed once and not noticed.
 func TestBothReadersOfTheVAPIDKeysAgree(t *testing.T) {
+	publicKey, privateKey, err := push.GenerateKeys()
+	if err != nil {
+		t.Fatalf("generate a VAPID pair: %v", err)
+	}
+
 	for name, env := range map[string]map[string]string{
 		"nothing set": {},
 		"complete": {
-			"SOIREE_VAPID_PUBLIC_KEY":  "BPublicHalf",
-			"SOIREE_VAPID_PRIVATE_KEY": "the-private-half",
+			"SOIREE_VAPID_PUBLIC_KEY":  publicKey,
+			"SOIREE_VAPID_PRIVATE_KEY": privateKey,
 			"SOIREE_VAPID_SUBJECT":     "mailto:ada@example.test",
 		},
 		"a public key alone": {
-			"SOIREE_VAPID_PUBLIC_KEY": "BPublicHalf",
+			"SOIREE_VAPID_PUBLIC_KEY": publicKey,
 		},
 		"a pair with no subject": {
-			"SOIREE_VAPID_PUBLIC_KEY":  "BPublicHalf",
-			"SOIREE_VAPID_PRIVATE_KEY": "the-private-half",
+			"SOIREE_VAPID_PUBLIC_KEY":  publicKey,
+			"SOIREE_VAPID_PRIVATE_KEY": privateKey,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

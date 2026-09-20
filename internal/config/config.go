@@ -5,7 +5,11 @@
 package config
 
 import (
+	"bytes"
+	"crypto/ecdh"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/mail"
@@ -404,7 +408,9 @@ func Load() (Config, error) {
 	if err := c.loadAccounts(); err != nil {
 		return Config{}, err
 	}
-	c.loadPush()
+	if err := c.loadPush(); err != nil {
+		return Config{}, err
+	}
 	if err := c.loadAttachments(); err != nil {
 		return Config{}, err
 	}
@@ -471,10 +477,9 @@ func (c *Config) loadAttachments() error {
 
 // loadPush reads the Web Push identity.
 //
-// It returns nothing, because none of this can fail. Unset means push is off,
-// exactly as an unset SOIREE_SMTP_HOST means mail is off, and the binary has to
-// start with neither — that is what a bare `docker run` and the image smoke
-// test do.
+// Unset means push is off, exactly as an unset SOIREE_SMTP_HOST means mail is
+// off, and the binary has to start with neither — that is what a bare
+// `docker run` and the image smoke test do.
 //
 // A half-configured pair is not refused, which is the opposite of the rule
 // SMTP follows two functions down. The reason the two differ: a sender with no
@@ -483,12 +488,91 @@ func (c *Config) loadAttachments() error {
 // reaches the browser and never has anything subscribed against it. The
 // operator hears about it from the startup log instead of from a refusal to
 // boot — see reminders.Start.
-func (c *Config) loadPush() {
+//
+// A complete set is checked, because that reasoning stops covering it: three
+// values that are present but do not form a pair do reach the browser.
+func (c *Config) loadPush() error {
 	c.VAPID = VAPIDConfig{
 		PublicKey:  strings.TrimSpace(os.Getenv("SOIREE_VAPID_PUBLIC_KEY")),
 		PrivateKey: strings.TrimSpace(os.Getenv("SOIREE_VAPID_PRIVATE_KEY")),
 		Subject:    strings.TrimSpace(os.Getenv("SOIREE_VAPID_SUBJECT")),
 	}
+	if !c.VAPID.Enabled() {
+		return nil
+	}
+	return c.VAPID.validate()
+}
+
+// validate checks that the two keys are halves of one P-256 pair.
+//
+// Two mistakes are worth catching here, and here is the only place either can
+// be caught: nothing between this and the first send looks at the keys at all,
+// and the library decodes them per send.
+//
+// Transposing the two variables is the mistake docs/operating.md warns about,
+// because webpush.GenerateVAPIDKeys returns the pair the other way round. It
+// publishes the signing key in the config block of a page served without a
+// session to anyone, and nothing afterwards reports it: a browser refuses to
+// subscribe against a 32-byte applicationServerKey, so no subscription is ever
+// made, no digest is ever sent, and no line appears in any log. The length
+// rules below are what make that impossible — a 32-byte scalar can never be
+// published as a 65-byte point.
+//
+// A key that is merely malformed fails at the first weekly send instead, a week
+// after the browser's permission prompt was spent, and a push service's 401 is
+// treated as transient, so it recurs every week after that.
+//
+// Nothing here may put a key in its error: this message goes to stdout and into
+// whatever collects it, and in the transposed case the public variable holds
+// the private half. Variable names and byte lengths only.
+func (v VAPIDConfig) validate() error {
+	pub, err := decodePushKey(v.PublicKey)
+	if err != nil {
+		return fmt.Errorf("SOIREE_VAPID_PUBLIC_KEY is not base64url: %w", err)
+	}
+	priv, err := decodePushKey(v.PrivateKey)
+	if err != nil {
+		return fmt.Errorf("SOIREE_VAPID_PRIVATE_KEY is not base64url: %w", err)
+	}
+
+	if len(pub) == vapidPrivateLen && len(priv) == vapidPublicLen {
+		return fmt.Errorf("the two SOIREE_VAPID keys are the wrong way round: the public one is %d bytes and the private one %d, which is the pair transposed (webpush.GenerateVAPIDKeys returns the private key first)",
+			len(pub), len(priv))
+	}
+	if len(pub) != vapidPublicLen || pub[0] != 4 {
+		return fmt.Errorf("SOIREE_VAPID_PUBLIC_KEY must be an uncompressed P-256 point: %d bytes, want %d beginning 0x04",
+			len(pub), vapidPublicLen)
+	}
+	if len(priv) != vapidPrivateLen {
+		return fmt.Errorf("SOIREE_VAPID_PRIVATE_KEY must be a P-256 scalar: %d bytes, want %d",
+			len(priv), vapidPrivateLen)
+	}
+
+	key, err := ecdh.P256().NewPrivateKey(priv)
+	if err != nil {
+		return fmt.Errorf("SOIREE_VAPID_PRIVATE_KEY is not a usable P-256 key: %w", err)
+	}
+	if !bytes.Equal(key.PublicKey().Bytes(), pub) {
+		return errors.New("SOIREE_VAPID_PUBLIC_KEY is not the public half of SOIREE_VAPID_PRIVATE_KEY; a browser would subscribe against a key this deployment cannot sign for")
+	}
+	return nil
+}
+
+// The two halves of a VAPID pair, in bytes: an uncompressed P-256 point and
+// the scalar it was derived from.
+const (
+	vapidPublicLen  = 65
+	vapidPrivateLen = 32
+)
+
+// decodePushKey accepts padded base64url and then raw, in that order, which is
+// what webpush-go's own decoder does. Accepting less than the sender accepts
+// would refuse a deployment that works.
+func decodePushKey(key string) ([]byte, error) {
+	if b, err := base64.URLEncoding.DecodeString(key); err == nil {
+		return b, nil
+	}
+	return base64.RawURLEncoding.DecodeString(key)
 }
 
 // loadAccounts reads everything the accounts milestone added and rejects the
