@@ -875,9 +875,16 @@ accounts surface names its own refusals — `invalid_email`, `revision_required`
 `api/openapi.yaml`. `current` appears only on a `409`. The database's own
 rejections are translated rather than surfaced as a `500`: a foreign key
 violation is a `400` saying the request referred to something that is not there,
-and a unique violation is a `409`. A `500` never carries the error — that goes
-to the log, because it contains SQL and column names — but it always goes
-*somewhere*, since a 500 whose cause was dropped cannot be operated on.
+and a unique violation is a `409`. A data exception, SQLSTATE class `22`, is a
+`400` too: a figure past what its column holds, or a NUL byte in a text field.
+By class rather than by code, because a list of codes is what lets the next
+column added bring the `500` back. `qty` is bounded and scale-checked before it
+gets that far, so the limit is named rather than merely refused: `numeric(12,3)`
+rounds a fourth decimal away silently, and a client that then compares what it
+sent with what it holds rewrites the row on every pass. A `500` never carries
+the error — that goes to the log, because it contains SQL and column names —
+but it always goes *somewhere*, since a 500 whose cause was dropped cannot be
+operated on.
 
 Nothing under `/api/v1` is cached. Every response carries `no-store`: a budget
 two people are editing is the last thing that should come from a proxy, a

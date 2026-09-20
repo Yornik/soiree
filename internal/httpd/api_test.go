@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -416,6 +417,56 @@ func TestCreateDefaultsQtyToOne(t *testing.T) {
 	zero := created(t, h, "budget-items", `{"item":"Cancelled extra","unit":"5.00","qty":0}`)
 	if got := num(t, zero, "qty"); got != 0 {
 		t.Errorf("qty = %v, want the explicit 0", got)
+	}
+}
+
+// TestQtyIsHeldToItsColumn: qty is the one figure on this boundary that is not
+// money, and `numeric(12,3)` bounds it as exactly as a currency's decimals
+// bound an amount. Past that bound Postgres answers with an error the client
+// can do nothing about, and a fourth decimal is quietly rounded away, which
+// leaves the row the browser is holding different from the row the server has,
+// for as long as both are open.
+func TestQtyIsHeldToItsColumn(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	for _, tc := range []struct{ name, body, want string }{
+		{"a billion", `{"item":"Cake","qty":1000000000}`, "999999999.999"},
+		{"a billion once rounded", `{"item":"Cake","qty":999999999.9996}`, "999999999.999"},
+		{"a fourth decimal", `{"item":"Cake","qty":0.3333}`, "decimal places"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := call(t, h, http.MethodPost, "/api/v1/budget-items", tc.body)
+			if res.status != http.StatusBadRequest {
+				t.Fatalf("POST -> %d, want 400\n%s", res.status, res.body)
+			}
+			row := decode(t, res)
+			if got := str(t, row, "error"); got != errBadRequest {
+				t.Errorf("error = %q, want %q", got, errBadRequest)
+			}
+			// Naming the limit is the whole of it: a caller told only that
+			// something went wrong can do nothing but send the value again.
+			msg := str(t, row, "message")
+			if !strings.HasPrefix(msg, "qty ") || !strings.Contains(msg, tc.want) {
+				t.Errorf("message = %q, want it to name qty and %q", msg, tc.want)
+			}
+		})
+	}
+
+	// The patch path too, which is the one the grid takes on every keystroke.
+	item := created(t, h, "budget-items", `{"item":"Cake","qty":1}`)
+	res := call(t, h, http.MethodPatch, "/api/v1/budget-items/"+str(t, item, "id"),
+		`{"revision":1,"qty":1000000000}`)
+	if res.status != http.StatusBadRequest {
+		t.Fatalf("PATCH -> %d, want 400\n%s", res.status, res.body)
+	}
+
+	// And everything the column does hold still goes through unchanged. A
+	// bound that refuses a storable figure is a worse bug than the one it fixes.
+	for _, qty := range []string{"999999999.999", "0.001", "2.5", "0"} {
+		row := created(t, h, "budget-items", `{"item":"Cake","qty":`+qty+`}`)
+		if got := strconv.FormatFloat(num(t, row, "qty"), 'f', -1, 64); got != qty {
+			t.Errorf("qty = %s, want the %s that was sent", got, qty)
+		}
 	}
 }
 
@@ -862,6 +913,13 @@ func TestBadRequestsAreRefused(t *testing.T) {
 		// reporting it as a 500 tells them this server is broken instead.
 		{"unknown phase", http.MethodPost, "/api/v1/budget-items",
 			`{"item":"Cake","phaseId":"` + uuid.New().String() + `"}`, http.StatusBadRequest},
+		// A figure past what numeric(12,3) holds, for the same reason.
+		{"qty past its column", http.MethodPost, "/api/v1/budget-items", `{"item":"Cake","qty":1000000000}`, http.StatusBadRequest},
+		{"qty with a fourth decimal", http.MethodPost, "/api/v1/budget-items", `{"item":"Cake","qty":0.3333}`, http.StatusBadRequest},
+		// A NUL byte reaches no bound this API checks. Postgres refuses it as a
+		// data exception, and that class has to arrive as a 400 as well, or the
+		// next column added brings the 500 back.
+		{"a NUL byte in a text field", http.MethodPost, "/api/v1/budget-items", `{"item":"Ca\u0000ke"}`, http.StatusBadRequest},
 	}
 
 	for _, tc := range cases {
