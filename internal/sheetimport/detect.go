@@ -5,27 +5,31 @@ import (
 	"strings"
 )
 
-// headerKeywords proposes a field for a column title. It is English-leaning
-// on purpose and that is a limitation, not a feature: detection exists to
-// save typing on ordinary sheets, and anything it fails to recognise is
-// listed as unmapped for the operator to fill in by hand. Nothing here is
-// ever applied without the operator passing the mapping back in.
+// headerKeywords proposes a field for a column title. The words are English,
+// Dutch and Indonesian, the three languages the interface ships in, because
+// a sheet in one of the other two is an ordinary sheet to the person who
+// wrote it. A title in a fourth language is listed as unmapped for the
+// operator to fill in by hand, and so is a word that means two things in its
+// own language: "jumlah" is a quantity as often as it is a total and "harga"
+// a line total as often as a unit price, and guessing either wrong writes a
+// money figure nobody typed. Nothing here is ever applied without the
+// operator passing the mapping back in.
 var headerKeywords = []struct {
 	field string
 	words []string
 }{
-	{"vendor", []string{"vendor", "supplier", "provider", "shop", "contact"}},
-	{"qty", []string{"qty", "quantity", "pcs", "pax", "count", "number of"}},
-	{"paid", []string{"paid", "deposit", "down payment", "dp", "settled"}},
-	{"total", []string{"total", "amount", "line total", "subtotal"}},
-	{"unit", []string{"unit", "unit price", "price", "rate", "cost", "estimate", "estimated price"}},
-	{"lockBy", []string{"deadline", "decide by", "lock by", "confirm by"}},
-	{"due", []string{"due", "due date", "date"}},
-	{"owner", []string{"owner", "pic", "responsible", "assignee", "who"}},
+	{"vendor", []string{"vendor", "supplier", "provider", "shop", "contact", "leverancier", "toko"}},
+	{"qty", []string{"qty", "quantity", "pcs", "pax", "count", "number of", "aantal", "stuks"}},
+	{"paid", []string{"paid", "deposit", "down payment", "dp", "settled", "betaald", "voldaan", "aanbetaling", "dibayar", "uang muka"}},
+	{"total", []string{"total", "amount", "line total", "subtotal", "bedrag", "totaal", "subtotaal"}},
+	{"unit", []string{"unit", "unit price", "price", "rate", "cost", "estimate", "estimated price", "prijs", "stukprijs", "tarief", "harga satuan"}},
+	{"lockBy", []string{"deadline", "decide by", "lock by", "confirm by", "tenggat"}},
+	{"due", []string{"due", "due date", "date", "datum", "tanggal"}},
+	{"owner", []string{"owner", "pic", "responsible", "assignee", "who", "wie", "verantwoordelijke", "penanggung jawab"}},
 	{"status", []string{"status", "progress", "state"}},
-	{"note", []string{"note", "notes", "remark", "remarks", "comment", "description"}},
-	{"phase", []string{"phase", "stage", "segment", "session"}},
-	{"item", []string{"item", "name", "what", "activity", "task", "need", "needs"}},
+	{"note", []string{"note", "notes", "remark", "remarks", "comment", "description", "opmerking", "notitie", "toelichting", "catatan", "keterangan"}},
+	{"phase", []string{"phase", "stage", "segment", "session", "fase", "tahap"}},
+	{"item", []string{"item", "name", "what", "activity", "task", "need", "needs", "omschrijving", "onderdeel", "taak", "keperluan", "uraian", "tugas"}},
 }
 
 // minDetectRows keeps a stray label or a two-line signature block from being

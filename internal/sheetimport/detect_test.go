@@ -161,11 +161,12 @@ func TestDetectNamesTheBlockItCouldNotPropose(t *testing.T) {
 }
 
 func TestDetectNamesASheetItCouldNotRead(t *testing.T) {
-	// Titles in a language the keywords do not speak. "Found nothing" is true
-	// and useless; which rows were looked at is what the operator can act on.
-	const csv = "Omschrijving;Leverancier;Aantal;Prijs\n" +
-		"Zaalhuur;Acme;1;1000\n" +
-		"Stoelen;Acme;150;4\n"
+	// Titles in a language the keywords do not speak: they cover the three
+	// the interface ships in and stop there. "Found nothing" is true and
+	// useless; which rows were looked at is what the operator can act on.
+	const csv = "Kuvaus;Toimittaja;Määrä;Hinta\n" +
+		"Salin vuokra;Acme;1;1000\n" +
+		"Tuolit;Acme;150;4\n"
 	book, _, err := ReadCSV(strings.NewReader(csv), 0)
 	if err != nil {
 		t.Fatalf("ReadCSV: %v", err)
@@ -176,6 +177,87 @@ func TestDetectNamesASheetItCouldNotRead(t *testing.T) {
 	}
 	if !noted(notes, "rows 1-3") {
 		t.Errorf("the block that was not proposed is named nowhere; notes: %q", notes)
+	}
+}
+
+// A cost table and a task list as the other two interface languages write
+// them. Nothing about either sheet is unusual to the person who made it.
+const dutchCostsCSV = "Omschrijving;Leverancier;Aantal;Prijs;Betaald;Opmerking\n" +
+	"Zaalhuur;Acme;1;1000;500;inclusief stoelen\n" +
+	"Catering;Kok;40;25;0;\n"
+
+const dutchTasksCSV = "Taak;Wie;Deadline;Status\n" +
+	"Zaal boeken;Ada;2027-01-05;klaar\n" +
+	"Uitnodigingen sturen;Grace;2027-02-01;bezig\n"
+
+// "Jumlah" is a quantity as often as it is a total, so it stays out of the
+// vocabulary and is listed for the operator instead.
+const indonesianCostsCSV = "Keperluan;Vendor;Jumlah;Harga satuan;Dibayar;Catatan\n" +
+	"Sewa aula;Acme;1;1000;500;\n" +
+	"Katering;Koki;40;25;0;\n"
+
+func TestDetectReadsDutchColumnTitles(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(dutchCostsCSV), ';')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, notes := Detect(book)
+	if len(cfg.Tables) != 1 {
+		t.Fatalf("proposed %d tables; want 1 (notes: %q):\n%+v", len(cfg.Tables), notes, cfg.Tables)
+	}
+	for field, want := range map[string]string{"item": "A", "vendor": "B", "qty": "C", "unit": "D", "paid": "E", "note": "F"} {
+		if got := cfg.Tables[0].Columns[field]; got != want {
+			t.Errorf("proposed %s = %q; want %q (columns: %v)", field, got, want, cfg.Tables[0].Columns)
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("proposal is not valid: %v", err)
+	}
+}
+
+func TestDetectReadsADutchTaskList(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(dutchTasksCSV), ';')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, notes := Detect(book)
+	if len(cfg.Tables) != 1 {
+		t.Fatalf("proposed %d tables; want 1 (notes: %q):\n%+v", len(cfg.Tables), notes, cfg.Tables)
+	}
+	if cfg.Tables[0].Kind != KindTasks {
+		t.Errorf("proposed kind %q; want tasks", cfg.Tables[0].Kind)
+	}
+	for field, want := range map[string]string{"name": "A", "owner": "B", "due": "C", "status": "D"} {
+		if got := cfg.Tables[0].Columns[field]; got != want {
+			t.Errorf("proposed %s = %q; want %q (columns: %v)", field, got, want, cfg.Tables[0].Columns)
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("proposal is not valid: %v", err)
+	}
+}
+
+func TestDetectReadsIndonesianColumnTitles(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(indonesianCostsCSV), ';')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, notes := Detect(book)
+	if len(cfg.Tables) != 1 {
+		t.Fatalf("proposed %d tables; want 1 (notes: %q):\n%+v", len(cfg.Tables), notes, cfg.Tables)
+	}
+	for field, want := range map[string]string{"item": "A", "vendor": "B", "unit": "D", "paid": "E", "note": "F"} {
+		if got := cfg.Tables[0].Columns[field]; got != want {
+			t.Errorf("proposed %s = %q; want %q (columns: %v)", field, got, want, cfg.Tables[0].Columns)
+		}
+	}
+	// A word the vocabulary refuses to guess at has to be named, or the
+	// operator reviews a mapping that has quietly lost a column of figures.
+	if !noted(notes, `C ("Jumlah")`) {
+		t.Errorf("the column left out as ambiguous is named nowhere; notes: %q", notes)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("proposal is not valid: %v", err)
 	}
 }
 
