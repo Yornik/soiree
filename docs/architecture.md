@@ -318,7 +318,10 @@ Five consequences worth stating, because each is easy to undo:
   not that uuid, because the shape is what tells a reload which rows have ever
   been sent. Adopting the id the answer carries is a rename everywhere the old
   id was referred to — otherwise a budget line keeps pointing at a sponsor id
-  that only ever existed in this browser.
+  that only ever existed in this browser. The rename also lets go of a copy of
+  the row that a plan read brought in under that uuid while the answer was
+  missing, because one id held by two rows is a difference no later pass can
+  settle.
 - **Collections are sent in dependency order.** Sponsors before budget items,
   because a line tagged with a sponsor created in the same debounce window has
   to reach a server that already knows that sponsor, or the attribution is a

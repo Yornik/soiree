@@ -1629,6 +1629,20 @@
     if (!serverId || localId === serverId) return;
     idMap[localId] = serverId;
 
+    // The answer is not always the first thing to bring the row here. A plan
+    // read between the create committing and its answer arriving carries it
+    // under the very id the create named, and applyPlan cannot tell that from
+    // a row somebody else added, so it is already on the page. Renaming onto
+    // it would leave one id held by two rows, and everything downstream reads
+    // this list by id: the difference is computed from both and sent from
+    // whichever comes first, so the other never comes to match and the pass
+    // goes round again for as long as the page is open. The copy from the
+    // plan is the row as it was when it committed, and the copy being renamed
+    // carries whatever was typed since, so the plan's is the one to let go of
+    // and the difference between them goes up as the patch that follows.
+    var fromPlan = findRow(state[coll.key], serverId);
+    if (fromPlan) dropRow(state[coll.key], fromPlan);
+
     var row = findRow(state[coll.key], localId);
     if (row) row.id = serverId;
 
@@ -1641,6 +1655,17 @@
       state.budgetItems.forEach(function (i) {
         i.sponsors = (i.sponsors || []).map(mapId);
       });
+    }
+
+    // A row has left the page, so what it was drawn in is drawn again, once
+    // the rename above has left the state agreeing with itself. The figures
+    // belong to no caret and are always current, the way applyPlan has them;
+    // the table waits for a caret that is inside it, which is what
+    // scheduleRefresh is for.
+    if (fromPlan) {
+      scheduleRefresh(coll);
+      renderBudgetTotals();
+      renderOverview();
     }
   }
 
