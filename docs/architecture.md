@@ -1569,6 +1569,19 @@ the one that tag's `Dockerfile` names rather than whichever Go patch shipped
 last. A CI job builds the binary twice on independent builders with the cache
 off and fails if the bytes differ.
 
+**A release waits for the checks.** The jobs every change passes live in their
+own workflow, `checks.yaml`, and both jobs that publish an image list it in
+`needs`, so a release is built only once that commit's own tests are green.
+Both paths needed it: v1.1.0 and v1.2.1 were pushed as `:latest` and signed
+from commits whose run was red, and a `vX.Y.Z` tag pushed by hand skipped every
+check outright. A red run withholds the image and nothing else, since the tag
+and the GitHub Release are made by an earlier job, so re-run the failed jobs
+for a flake and fix forward for anything worse. Merging into `main` is still
+unenforced; that needs a repository ruleset requiring the `checks / ...`
+contexts, which is a setting rather than a file here. **The signed image is
+built cold**, without the shared Actions cache every job on `main` can write,
+for the reason the reproducibility job turns it off.
+
 Both release workflows then re-run the exact verification command
 [docs/verifying-releases.md](verifying-releases.md) gives third parties, against
 the image they just pushed. If the documented command stops working, the

@@ -1,0 +1,257 @@
+name: checks
+
+# The jobs a change has to pass. They live in their own workflow so that both
+# release paths can list them in `needs`: until they did, nothing connected a
+# release to its tests, and v1.1.0 and v1.2.1 were built, pushed as `:latest`
+# and signed from commits whose own run was red. ci.yaml calls this on every
+# pull request and push, release-please.yaml before it publishes, and a tag
+# push now runs it instead of skipping every job.
+#
+# Building and signing stay with the callers: the cosign certificate names the
+# workflow that signed, and docs/verifying-releases.md quotes those two names.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Keep in step with the Dockerfile, or the tested toolchain differs from the
+# shipped one. Renovate tracks both (see customManagers in renovate.json).
+env:
+  GO_VERSION: '1.27.1'
+
+# Every action is pinned to a commit digest, not a tag: a tag is mutable and
+# whoever can move it can run arbitrary code with this workflow's token. The
+# trailing comment is the human-readable version, and is the exact format
+# Renovate reads and rewrites (helpers:pinGitHubActionDigests in renovate.json).
+
+jobs:
+  lint:
+    name: Lint (golangci-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: gofmt -l . | tee /tmp/fmt.out && test ! -s /tmp/fmt.out
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          # Pinned for the reason stated beside the redocly pin below, which
+          # weighs more here than anywhere else in the file: there is no
+          # configuration for golangci-lint in the repository, so its default
+          # linter set is what runs, and a release that adds a linter to that
+          # set fails main with nothing of ours having changed. Every automerge
+          # rule in renovate.json waits for green checks, so the dependency
+          # updates would stop along with it. The trailing comment names the
+          # package, which is what the customManager in renovate.json reads.
+          version: v2.13.2 # golangci/golangci-lint
+
+  test:
+    name: Test (go test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # -timeout, because Go's default is ten minutes per package and
+      # internal/httpd reached it. Nothing hung: under the race detector that
+      # package took 522 s, then 554 s, and the activity tests took it past
+      # 600, where Go kills the binary and reports whichever test happened to
+      # be running - one second into it - as if it were the culprit. The
+      # limit has to be somewhere the suite is not. Why the package is that
+      # slow under -race is a separate question, and not the first guess:
+      # a fresh database and its migrations cost 0.23 s a test, measured,
+      # which is a twentieth of the total.
+      - run: go test -race -cover -timeout 25m ./...
+
+  # The Go tests prove the right bytes are served. They cannot prove the page
+  # works, and soiree is mostly frontend — so this drives the real binary in a
+  # real browser. The suite lives in e2e/ and is outside the Go module: it adds
+  # nothing to go.mod, so neither `go test ./...` nor the image build notice it.
+  #
+  # Blocking, like every other job here, and with no retry budget. The app is
+  # static, makes no third-party requests and has no animation, so the usual
+  # sources of browser-test flake are absent; every wait in the suite is on a
+  # condition rather than on a clock. A job that is allowed to fail is a job
+  # nobody reads, and an unread test is a deleted test. If it ever does turn
+  # flaky, `continue-on-error: true` here is the honest stopgap — better than
+  # papering over it with retries.
+  #
+  # A failing `playwright install` is infrastructure, not test logic: re-run
+  # the job rather than treating it as a finding.
+  browser:
+    name: Browser tests (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Playwright builds and starts the real binary itself, so this job needs
+      # the same toolchain the others use.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      # From the lockfile, so CI runs the versions that were reviewed.
+      - name: Install the test harness
+        working-directory: e2e
+        run: npm ci
+
+      # The browser is pinned by the Playwright version in that lockfile, so it
+      # moves only when a reviewed dependency bump moves it.
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the browser tests
+        working-directory: e2e
+        run: npm test
+
+      # Traces are kept only for failures, so this is usually a near-empty
+      # upload — and exactly what is wanted on the run where it is not.
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  openapi:
+    name: API description (redocly lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      # Checks that the document is valid OpenAPI 3.1. It does not check that
+      # the document is true: that the routes it describes exist is
+      # TestEveryDocumentedRouteExists, and what they answer is
+      # TestTheDocumentedErrorContractHolds. Both ask the running server.
+      #
+      # Pinned rather than @latest, like every action in this file: a floating
+      # version changes CI with no commit, and Renovate cannot track it.
+      - run: npx --yes @redocly/cli@2.53.3 lint api/openapi.yaml
+
+  vuln:
+    name: Vulnerabilities (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Reports only vulnerabilities actually reachable from this code, so a
+      # finding here is real rather than a CVE in an unused code path.
+      #
+      # Pinned like the rest: the advisory database is fetched when the scanner
+      # runs, so a fixed version still reports today's vulnerabilities, and the
+      # scanner itself is then one more thing that changes only in a commit.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  build:
+    name: Build image (validate)
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: soiree:ci
+          build-args: |
+            VERSION=ci
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A green unit test suite does not prove the image boots. Start it and
+      # check that configuration actually reaches the rendered page.
+      - name: Smoke test the image
+        run: |
+          docker run -d --name soiree-ci -p 8080:8080 \
+            -e SOIREE_EVENT_NAME='CI Smoke Test' \
+            -e SOIREE_EVENT_DATE='2030-01-01T00:00:00Z' \
+            soiree:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/healthz
+          curl -fsS http://localhost:8080/ | grep -q 'CI Smoke Test'
+          curl -fsS http://localhost:8080/sw.js >/dev/null
+          echo "image serves configured content"
+          docker rm -f soiree-ci
+
+  # The claim "-trimpath, CGO_ENABLED=0, fixed toolchain" is only worth
+  # something if it is checked. Build the binary twice from the same source and
+  # compare the bytes, so an accidental source of nondeterminism (an embedded
+  # timestamp, a generated file, VCS stamping) fails a PR instead of quietly
+  # making releases unverifiable.
+  #
+  # Scope, honestly: this asserts that the *binary* is bit-identical, not that
+  # the image digest is. BuildKit stamps the build time into the image config,
+  # so two builds produce different image digests unless SOURCE_DATE_EPOCH and
+  # timestamp rewriting are in play. The binary is the part that matters for
+  # "does this image contain the code it claims to".
+  reproducible:
+    name: Reproducible build (binary is bit-identical)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Two independent builder instances, each with its own cache. Sharing one
+      # builder risks BuildKit short-circuiting the second build and comparing a
+      # hash to itself, which would make this check pass vacuously.
+      - name: Create two independent builders
+        run: |
+          set -euo pipefail
+          docker buildx create --name repro-a --driver docker-container
+          docker buildx create --name repro-b --driver docker-container
+
+      # type=local exports the final (scratch) stage's filesystem, which is just
+      # the binary — no image load needed. Export outside the workspace: writing
+      # out-a/ into the checkout would put it in build B's context and the two
+      # builds would no longer be comparing like with like.
+      - name: Build twice
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for b in a b; do
+            docker buildx build \
+              --builder "repro-$b" \
+              --no-cache \
+              --build-arg VERSION=repro \
+              --build-arg "COMMIT=${COMMIT}" \
+              --output "type=local,dest=${RUNNER_TEMP}/out-$b" \
+              .
+          done
+
+      - name: Compare the two binaries
+        run: |
+          set -euo pipefail
+          a=$(sha256sum "${RUNNER_TEMP}/out-a/soiree" | cut -d' ' -f1)
+          b=$(sha256sum "${RUNNER_TEMP}/out-b/soiree" | cut -d' ' -f1)
+          echo "build A: $a"
+          echo "build B: $b"
+          if [ "$a" != "$b" ]; then
+            echo "::error::the build is not reproducible: two builds of the same source produced different binaries"
+            ls -l "${RUNNER_TEMP}/out-a/soiree" "${RUNNER_TEMP}/out-b/soiree"
+            exit 1
+          fi
+          echo "reproducible: both builds produced $a"
