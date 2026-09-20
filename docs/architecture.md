@@ -1496,9 +1496,11 @@ The ledger still records a single claim per period, because the claim is taken
 before the first copy goes out. A crash half-way through the list loses the
 copies still to send rather than offering anybody a second one, which is the
 at-most-once stance already chosen. A copy the relay refuses is logged by its
-position in the list, never by address, and leaves the claim standing: the
-others are out, so a retry would send them the same digest twice. Push goes to
-the devices of active admins by the same rule.
+position in the list rather than by the address the scheduler holds, though the
+relay's own answer is carried through as it came and can quote the mailbox back
+inside it. That copy leaves the claim standing: the others are out, so a retry
+would send them the same digest twice. Push goes to the devices of active
+admins by the same rule.
 
 The two channels get separate time budgets inside the run's two minutes. With
 one shared deadline a relay that stalls would spend the whole run before push

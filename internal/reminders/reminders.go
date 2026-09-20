@@ -423,9 +423,13 @@ func (s *Service) mailEach(ctx context.Context, msg mailer.Message, to []string)
 		if err := s.sender.Send(mailCtx, one); err != nil {
 			r.failed++
 			r.ambiguous = r.ambiguous || mailer.Ambiguous(err)
-			// The position in the recipient list, never the address: a log
-			// file is read by more people than the configuration is, and the
-			// addresses are the thing this loop exists to keep apart.
+			// The position in the recipient list rather than the address we
+			// hold: a log file is read by more people than the configuration
+			// is, and the addresses are the thing this loop exists to keep
+			// apart. Not a promise that no address appears: the relay's answer
+			// is carried through as it came, and both a 550 and an address
+			// the mailer could not parse can quote the mailbox back inside
+			// it.
 			s.log.Error("a copy of the reminder digest was not delivered", "recipient", i, "err", err)
 			r.err = errors.Join(r.err, err)
 			continue
