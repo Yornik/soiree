@@ -532,8 +532,9 @@ Open, in the order they matter:
 
 - **Translate the deadline digest.** The invitation and the reset mail are
   written in a language chosen for that mail. The digest
-  (`internal/reminders/render.go`) is one body for every admin and is in
-  English; per-recipient bodies would mean one send per language.
+  (`internal/reminders/render.go`) is one English body composed once; each
+  recipient already gets a send of their own, so what is left is rendering
+  that body in a language chosen per recipient.
 - **What an expired session leaves behind.** Signing out removes this browser's
   copy of the plan. A session that ends by itself does not, because the unsent
   edits are in that copy — so a tab abandoned on a shared computer still shows
