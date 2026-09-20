@@ -172,8 +172,16 @@ func claimPeriod(ctx context.Context, conn *pgxpool.Conn, key string, claimedAt 
 // confirmSent marks the claim as delivered. A period with a claim and no
 // confirmation is the trace of a process that died between handing the message
 // to the server and hearing back.
+//
+// Detached from the caller's context for the same reason releaseClaim is, and
+// with more at stake: by the time this runs the digest is irrevocably out, so a
+// context that died during the send — a SIGTERM mid-conversation, or the run's
+// two minutes spent on a slow relay and a slow push service — would leave the
+// ledger reporting a digest everybody received as the one case it calls lost.
 func confirmSent(ctx context.Context, conn *pgxpool.Conn, key string, sentAt time.Time) error {
-	if _, err := conn.Exec(ctx,
+	updCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+	defer cancel()
+	if _, err := conn.Exec(updCtx,
 		`UPDATE reminders_sent SET sent_at = $2 WHERE period_key = $1`, key, sentAt); err != nil {
 		return fmt.Errorf("confirm reminder sent: %w", err)
 	}

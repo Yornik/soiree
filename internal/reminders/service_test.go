@@ -26,11 +26,20 @@ type fakeSender struct {
 	mu   sync.Mutex
 	sent []mailer.Message
 	err  error
+
+	// cancel, when set, is called from inside Send: a real relay keeps talking
+	// after the run's context dies, because net/smtp stops watching it once it
+	// has dialled, so the message is handed over and the caller is left
+	// holding a context it can no longer write the ledger with.
+	cancel context.CancelFunc
 }
 
 func (f *fakeSender) Send(_ context.Context, m mailer.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.cancel != nil {
+		f.cancel()
+	}
 	if f.err != nil {
 		return f.err
 	}
@@ -407,6 +416,36 @@ func TestARefusedSendReleasesThePeriod(t *testing.T) {
 	}
 	if working.count() != 1 {
 		t.Errorf("the retry sent %d digests, want 1", working.count())
+	}
+}
+
+// A digest the relay accepted is recorded as delivered even when the run's
+// context dies while the message is in flight — a SIGTERM from a second
+// rollout, or the mail and push budgets between them using up the run. The
+// confirmation comes after the point of no return, so obeying the cancellation
+// there would turn a digest everybody received into the one the ledger reports
+// as lost.
+func TestADigestSentAsTheContextDiesIsStillMarkedSent(t *testing.T) {
+	f := newFixture(t)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	sender := &fakeSender{cancel: cancel}
+	if err := f.service(t, sender).RunOnce(ctx); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if sender.count() != 1 {
+		t.Fatalf("sent %d mails, want 1", sender.count())
+	}
+
+	led := f.ledger(t)
+	if len(led) != 1 {
+		t.Fatalf("ledger has %d rows, want 1", len(led))
+	}
+	if !led[0].Sent {
+		t.Error("a digest that was delivered is recorded as claimed but never confirmed, which reads as a lost digest")
 	}
 }
 
