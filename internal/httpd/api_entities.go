@@ -3,6 +3,8 @@ package httpd
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -62,6 +64,17 @@ type entity[T any] struct {
 
 // --- budget items ------------------------------------------------------
 
+// The qty column, stated here so a figure it cannot hold is a 400 naming the
+// limit rather than a 500 carrying Postgres' numeric_field_overflow, which is
+// the reasoning the rate bounds in api_settings.go are written from.
+// `numeric(12,3)` holds twelve digits with three after the point: maxQty is
+// the largest quantity there is, and qtyScale is that third decimal place as
+// the multiplier a scale check needs.
+const (
+	maxQty   = 999999999.999
+	qtyScale = 1000
+)
+
 type budgetItemBody struct {
 	echoed
 
@@ -85,7 +98,7 @@ func (b budgetItemBody) apply(currency string, row store.BudgetItem) (store.Budg
 	setValue(&f, "item", b.Item, &row.Item)
 	setValue(&f, "vendor", b.Vendor, &row.Vendor)
 	setMoney(&f, "unit", currency, b.Unit, &row.Unit)
-	setValue(&f, "qty", b.Qty, &row.Qty)
+	setQty(&f, "qty", b.Qty, &row.Qty)
 	setMoney(&f, "paid", currency, b.Paid, &row.Paid)
 	setDate(b.LockBy, &row.LockBy)
 	setValue(&f, "note", b.Note, &row.Note)
@@ -100,6 +113,44 @@ func (b budgetItemBody) apply(currency string, row store.BudgetItem) (store.Budg
 		}
 	}
 	return row, f.err
+}
+
+// setQty applies the quantity: setValue plus the range and the scale of the
+// column behind it.
+//
+// The scale is checked as well as the range, and not because the column would
+// complain: it rounds a fourth decimal away without a word, which is the
+// problem. The answer then carries a figure the client did not send, so a
+// client that compares what it holds with what it sent finds a difference no
+// further write can close, and writes again on every pass for as long as the
+// page is open. Money has refused excess precision rather than rounding it
+// since ParseMajor; this is that rule for the one figure here that is not
+// money.
+//
+// It stays separate from setRate rather than growing it a scale argument: the
+// two settings rates round the same way, and whether that should also become a
+// refusal is a question about settings, not about this column.
+func setQty(f *fieldErrs, field string, o optional[float64], dst *float64) {
+	if !o.set {
+		return
+	}
+	if o.value == nil {
+		f.fail(field, "must not be null")
+		return
+	}
+	v := *o.value
+	if v < -maxQty || v > maxQty {
+		limit := strconv.FormatFloat(maxQty, 'f', -1, 64)
+		f.fail(field, fmt.Sprintf("must be between -%s and %s", limit, limit))
+		return
+	}
+	// Exact over the whole range: below the bound above, v*1000 is under 2^53,
+	// so the product of a quantity the column can hold is the integer itself.
+	if math.Round(v*qtyScale)/qtyScale != v {
+		f.fail(field, "must have at most 3 decimal places")
+		return
+	}
+	*dst = v
 }
 
 func budgetItemEntity(s *store.Store, currency string) entity[store.BudgetItem] {

@@ -440,6 +440,17 @@ func constraintError(err error) (status int, code, message string, ok bool) {
 	case "23502", "23514": // not_null_violation, check_violation
 		return http.StatusBadRequest, errBadRequest, "the database refused that value", true
 	default:
+		// Class 22 is "data exception": a figure past what its column holds, a
+		// NUL byte in a text field, a date that does not exist. Those are all
+		// properties of the value that was sent, so the caller is the only one
+		// who can act on them. The whole class rather than a list of codes,
+		// because a list is what lets the next column added bring back the 500
+		// this translation exists to prevent. The cost is that a class 22 this
+		// server caused itself, a literal built wrongly in some future query,
+		// now answers 400 and writes no log line.
+		if strings.HasPrefix(pgErr.Code, "22") {
+			return http.StatusBadRequest, errBadRequest, "the database refused that value", true
+		}
 		return 0, "", "", false
 	}
 }

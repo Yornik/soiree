@@ -1732,6 +1732,10 @@ components:
         The body does not parse, a field is unknown, a field holds the wrong
         type, or a value fails a rule. Read `message`.
 
+        A value the database itself refuses as data is a **400** as well, not
+        a **500**: a figure past what its column holds, a NUL byte in a text
+        field. It is the value that has to change, and only you can change it.
+
         On the plan, the collections, the settings and the push paths, the
         code is `bad_request`.
 
@@ -2487,7 +2491,15 @@ components:
         item: { type: string }
         vendor: { type: string }
         unit: { $ref: '#/components/schemas/Money' }
-        qty: { type: number, format: double }
+        qty:
+          type: number
+          format: double
+          minimum: -999999999.999
+          maximum: 999999999.999
+          description: |
+            The column holds twelve digits with three after the point. A
+            bigger figure, or a fourth decimal, is a **400** naming the limit
+            rather than a value the server rounds on your behalf.
         paid: { $ref: '#/components/schemas/Money' }
         lockBy:
           oneOf:
