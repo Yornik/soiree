@@ -184,7 +184,7 @@ async function plannerWithWorker(path) {
 
   const shown = () => page.evaluate(async () => {
     const reg = await navigator.serviceWorker.ready;
-    return (await reg.getNotifications()).map((n) => ({ title: n.title, body: n.body, tag: n.tag, url: n.data && n.data.url }));
+    return (await reg.getNotifications()).map((n) => ({ title: n.title, body: n.body, tag: n.tag, renotify: n.renotify, url: n.data && n.data.url }));
   });
 
   return {
@@ -225,16 +225,16 @@ async function plannerWithWorker(path) {
 test('a push that reaches the worker is shown as the server wrote it, and the next one replaces it', async () => {
   const { full, push } = await plannerWithWorker('/');
   try {
-    await push(JSON.stringify(DIGEST), [{ title: DIGEST.title, body: DIGEST.body, tag: DIGEST.tag, url: DIGEST.url }]);
+    await push(JSON.stringify(DIGEST), [{ title: DIGEST.title, body: DIGEST.body, tag: DIGEST.tag, renotify: true, url: DIGEST.url }]);
 
     // Same tag, so tomorrow's digest takes today's place instead of joining it.
     await push(JSON.stringify({ ...DIGEST, title: 'Four things need attention' }),
-      [{ title: 'Four things need attention', body: DIGEST.body, tag: DIGEST.tag, url: DIGEST.url }]);
+      [{ title: 'Four things need attention', body: DIGEST.body, tag: DIGEST.tag, renotify: true, url: DIGEST.url }]);
 
     // A payload the worker cannot read is still shown as something. The
     // subscription is userVisibleOnly: a push handled in silence is one the
     // browser counts against the site, and eventually ends the subscription for.
-    await push('not json', [{ title: 'soiree', body: '', tag: DIGEST.tag, url: '/' }]);
+    await push('not json', [{ title: 'soiree', body: '', tag: DIGEST.tag, renotify: true, url: '/' }]);
   } finally {
     await full.close();
   }
@@ -246,7 +246,7 @@ test('tapping a reminder leaves an open planner on the screen it was on', async 
   const { full, context, page, push, shown } = await plannerWithWorker('/#tasks');
   try {
     await page.evaluate(() => { window.__neverReloaded = true; });
-    await push(JSON.stringify(DIGEST), [{ title: DIGEST.title, body: DIGEST.body, tag: DIGEST.tag, url: DIGEST.url }]);
+    await push(JSON.stringify(DIGEST), [{ title: DIGEST.title, body: DIGEST.body, tag: DIGEST.tag, renotify: true, url: DIGEST.url }]);
 
     // The tap itself cannot be made from here, so the event is: the real
     // handler, in the real worker, given the real notification. What a made

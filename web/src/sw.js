@@ -73,6 +73,13 @@ self.addEventListener('push', function (event) {
   event.waitUntil(self.registration.showNotification(payload.title || 'soiree', {
     body: payload.body || '',
     tag: payload.tag || 'soiree-deadlines',
+    // The tag is what makes a newer digest replace an older one, and a
+    // replacement is silent: no sound, no vibration, nothing on the lock
+    // screen. So the phone still holding last week's digest, which is the
+    // phone this week's is for, is told nothing about it. renotify asks for
+    // the alert anyway. It needs a tag and there is always one, and the
+    // browsers that do not know the option ignore it.
+    renotify: true,
     data: { url: payload.url || '/' }
   }));
 });
