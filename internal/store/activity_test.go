@@ -192,6 +192,13 @@ func TestTheActivityFeedNarrowsToOneRow(t *testing.T) {
 		t.Errorf("the budget's history has %d entries, want both lines' three", len(lines))
 	}
 
+	// A row id with no entity beside it names no row, the log being read by
+	// the pair. Answering it with the whole feed would hand every account's
+	// history to a caller that asked about one line.
+	if _, err := s.Activity(ctx, store.ActivityFilter{EntityID: &venue.ID}, 0, 0); err == nil {
+		t.Error("a row id with no entity was read as no filter at all")
+	}
+
 	singleton, err := s.Activity(ctx, store.ActivityFilter{Entity: store.EntitySettings}, 0, 0)
 	if err != nil {
 		t.Fatal(err)

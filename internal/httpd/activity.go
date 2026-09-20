@@ -123,9 +123,15 @@ func (s *Server) serveActivity(w http.ResponseWriter, r *http.Request) {
 	if raw := q.Get("entityId"); raw != "" {
 		// A row is only a row of some table, and the log is indexed on the
 		// pair; an id on its own would be looked for in every entity. Settings
-		// are asked for by naming the entity alone, the singleton having no id.
+		// are asked for by naming the entity alone: the singleton's entity_id
+		// is null, so no id can match it, and the empty feed that comes back
+		// reads as "nothing happened" rather than as the wrong question.
 		if filter.Entity == "" {
 			writeError(w, http.StatusBadRequest, errBadRequest, "entityId needs the entity whose row it is")
+			return
+		}
+		if filter.Entity == store.EntitySettings {
+			writeError(w, http.StatusBadRequest, errBadRequest, "settings is one row with no id of its own: ask for the entity alone")
 			return
 		}
 		id, err := uuid.Parse(raw)

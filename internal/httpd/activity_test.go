@@ -189,7 +189,11 @@ func TestTheActivityFeedPages(t *testing.T) {
 		// a typo in it would read as a feed with nothing in it, and an empty
 		// feed looks like an answer.
 		"entity=budget_item", "entity=budget_items&entityId=the-venue",
-		"entityId=6ba7b810-9dad-11d1-80b4-00c04fd430c8"} {
+		"entityId=6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+		// The settings singleton is one row with no id, so an id beside it
+		// matches nothing whatever is asked, and that empty feed reads as an
+		// answer in the same way.
+		"entity=settings&entityId=6ba7b810-9dad-11d1-80b4-00c04fd430c8"} {
 		if rec := f.do(t, http.MethodGet, "/api/v1/activity?"+bad, nil, admin); rec.Code != http.StatusBadRequest {
 			t.Errorf("?%s: %d, want 400", bad, rec.Code)
 		}
@@ -236,7 +240,7 @@ func TestTheActivityFeedNarrowsToOneRow(t *testing.T) {
 	}
 
 	// An entity on its own is every row of it, which is how the settings
-	// singleton — a row with no id — is asked for too.
+	// singleton, a row with no id, is asked for too.
 	rec = f.do(t, http.MethodGet, "/api/v1/activity?entity=tasks", nil, admin)
 	tasks := decodeRec[activityPageJSON](t, rec)
 	if len(tasks.Entries) != 1 || tasks.Entries[0].Entity != store.EntityTasks {

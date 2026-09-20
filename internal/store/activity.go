@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 )
@@ -86,6 +87,13 @@ const (
 // this one, that carries the naming field. On a delete that field's `new` is
 // null and its `old` is the name, hence the COALESCE.
 func (s *Store) Activity(ctx context.Context, filter ActivityFilter, before int64, limit int) ([]ActivityEntry, error) {
+	// A row id with no entity beside it names no row, the log being read by
+	// the pair. Refused here rather than dropped, because dropping it answers
+	// a question about one line with every account's history, and the caller
+	// that asked the narrower question would never know.
+	if filter.EntityID != nil && filter.Entity == "" {
+		return nil, errors.New("change_log: a row id with no entity to read it in")
+	}
 	if limit <= 0 {
 		limit = defaultActivityLimit
 	}
