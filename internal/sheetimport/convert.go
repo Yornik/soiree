@@ -251,8 +251,16 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 		// and every comparison after it is against a figure no row will
 		// equal, which is how a sheet in sections came in at three times its
 		// size with a single warning.
-		section, grand sumRun
-		lastSummary    int
+		//
+		// A flag can be a coincidence, though, and then the row left out was a
+		// line: two of 500 under a heading, and the total at the bottom equals
+		// neither sum. So the third figure takes the other reading, in which
+		// every row flagged so far was money. It is the plain running sum this
+		// check began as, and keeping it means nothing that sum caught is
+		// missed now. What it does not reach is a coincidence inside a later
+		// section: there the subtotal still holds the earlier ones.
+		section, grand, all sumRun
+		lastSummary         int
 	)
 
 	for n := first; n <= last; n++ {
@@ -337,6 +345,8 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 			equals = fmt.Sprintf("the %d rows since the summary row at row %d", section.rows, lastSummary)
 		case grand.matches(lineTotal):
 			equals = fmt.Sprintf("all %d rows above it that are not summary rows themselves", grand.rows)
+		case all.matches(lineTotal):
+			equals = fmt.Sprintf("all %d rows above it, the ones flagged as sums counted as lines", all.rows)
 		}
 		if equals != "" {
 			tr.warn(n, fmt.Sprintf("%s equals the sum of %s — if this is a total line, add its exact label to totalKeywords (matching is exact, not by substring) or leave it outside the row range",
@@ -346,6 +356,7 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 			section.add(lineTotal)
 			grand.add(lineTotal)
 		}
+		all.add(lineTotal)
 
 		rows = append(rows, builtRow{item: item, row: n, child: child})
 	}

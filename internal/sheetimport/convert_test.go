@@ -392,6 +392,40 @@ func TestConvertStartsANewSectionAfterAKeywordRow(t *testing.T) {
 	}
 }
 
+func TestConvertFlagsTheTotalBelowACoincidence(t *testing.T) {
+	// No sections here, only a line that happens to equal what is above it:
+	// two lines of 500 under a heading, or 200 after two of 100. That flag is
+	// wrong, and the line it lands on is money. Left out of every sum the way a
+	// real subtotal is, it takes the total at the bottom with it: 1300 and 700
+	// equal nothing any more, and come in as one more line under a report that
+	// looks handled.
+	for _, tc := range []struct {
+		name, csv, line string
+	}{
+		{"under a heading", "Item,Amount\nVENUE,\nHall,500\nCleaning,500\nSecurity,300\nTotaal,1300\n", "Cleaning"},
+		{"among the lines", "Item,Amount\nFlowers,100\nCandles,100\nLinen,200\nChairs,300\nTotaal,700\n", "Linen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			book, _, err := ReadCSV(strings.NewReader(tc.csv), 0)
+			if err != nil {
+				t.Fatalf("ReadCSV: %v", err)
+			}
+			cfg := &Config{Tables: []Table{{HeaderRow: 1, Columns: map[string]string{"item": "A", "unit": "B"}}}}
+			state, report, err := Convert(book, cfg)
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			tr := &report.Tables[0]
+			if !warnedRow(tr, 6, "equals the sum") {
+				t.Errorf("row 6 is the total of every line above it and should be flagged; warnings: %v", tr.Warnings)
+			}
+			if findItem(state.BudgetItems, tc.line) == nil {
+				t.Errorf("%q was flagged by coincidence and must still be imported", tc.line)
+			}
+		})
+	}
+}
+
 func TestConvertReportsFiguresItWillNotGuess(t *testing.T) {
 	// Text cells, which is every cell of a CSV. Each of these used to import
 	// as a confident figure under a report reading "0 warnings": 2500, 250,
