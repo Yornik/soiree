@@ -203,12 +203,12 @@ func TestSendAtTheDotIsAmbiguous(t *testing.T) {
 // was delivered, so a retry cannot deliver it twice, and a caller keeping a
 // ledger may try again rather than burn the period.
 func TestSendRefusedAtTheDotIsNotAmbiguous(t *testing.T) {
-	for _, reply := range []string{
-		"554 5.7.1 message rejected as spam",
-		"451 4.7.1 greylisted, try again later",
+	for _, reply := range []struct{ code, reason string }{
+		{"554", "5.7.1 message rejected as spam"},
+		{"451", "4.7.1 greylisted, try again later"},
 	} {
-		t.Run(reply, func(t *testing.T) {
-			f := &fakeSMTP{t: t, rejectAtDot: reply}
+		t.Run(reply.code, func(t *testing.T) {
+			f := &fakeSMTP{t: t, rejectAtDot: reply.code + " " + reply.reason}
 			host, port := f.start()
 
 			err := f.sender(host, port).Send(t.Context(), Message{
@@ -220,7 +220,11 @@ func TestSendRefusedAtTheDotIsNotAmbiguous(t *testing.T) {
 			if Ambiguous(err) {
 				t.Errorf("an explicit refusal was reported as an uncertain delivery: %v", err)
 			}
-			if !strings.Contains(err.Error(), reply) {
+			// The two halves separately: whether textproto quotes the reason
+			// when it renders a reply has changed between Go versions, and
+			// what matters is that the operator reads the relay's own words
+			// rather than how they are punctuated.
+			if !strings.Contains(err.Error(), reply.code) || !strings.Contains(err.Error(), reply.reason) {
 				t.Errorf("error = %v, want it to carry the server's reply", err)
 			}
 		})
