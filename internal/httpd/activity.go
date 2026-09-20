@@ -3,6 +3,7 @@ package httpd
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,11 @@ import (
 // only an admin can read today; a feed open to every editor would hand the same
 // list out through a second door, annotated with what each person did and when.
 //
+// A page can be narrowed with `entity`, and with `entityId` to one row of it.
+// The log was written to answer "who moved the venue figure, and when", and an
+// admin paging the whole feed backwards past every pause in typing a note is
+// not an answer to that.
+//
 // It is a read of the change history the store has kept since before there was
 // anything to show it with, translated into the API's own language on the way
 // out: camelCase field names, because that is what every other response calls
@@ -28,6 +34,16 @@ import (
 // guess.
 
 const maxActivityLabel = 120
+
+// activityEntities are the tables the log records, and so the only names
+// `entity` can take. Checked rather than passed through, because a table name
+// with a typo in it would answer with a feed that has nothing in it, and an
+// empty feed reads as "nothing happened to that line" rather than as a typo.
+var activityEntities = []string{
+	store.EntityAttachments, store.EntityBudgetItems, store.EntityNotes,
+	store.EntityPhases, store.EntityProgrammeEntries, store.EntitySettings,
+	store.EntitySponsors, store.EntityTasks, store.EntityUsers,
+}
 
 // moneyFields are stored as minor units and spoken as major-unit strings.
 var moneyFields = map[string]map[string]bool{
@@ -95,8 +111,38 @@ func (s *Server) serveActivity(w http.ResponseWriter, r *http.Request) {
 		}
 		before = n
 	}
+	var filter store.ActivityFilter
+	if raw := q.Get("entity"); raw != "" {
+		if !slices.Contains(activityEntities, raw) {
+			writeError(w, http.StatusBadRequest, errBadRequest,
+				"entity must be one of "+strings.Join(activityEntities, ", "))
+			return
+		}
+		filter.Entity = raw
+	}
+	if raw := q.Get("entityId"); raw != "" {
+		// A row is only a row of some table, and the log is indexed on the
+		// pair; an id on its own would be looked for in every entity. Settings
+		// are asked for by naming the entity alone: the singleton's entity_id
+		// is null, so no id can match it, and the empty feed that comes back
+		// reads as "nothing happened" rather than as the wrong question.
+		if filter.Entity == "" {
+			writeError(w, http.StatusBadRequest, errBadRequest, "entityId needs the entity whose row it is")
+			return
+		}
+		if filter.Entity == store.EntitySettings {
+			writeError(w, http.StatusBadRequest, errBadRequest, "settings is one row with no id of its own: ask for the entity alone")
+			return
+		}
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, errBadRequest, "entityId must be the id of a row")
+			return
+		}
+		filter.EntityID = &id
+	}
 
-	entries, err := s.store.Activity(r.Context(), before, limit)
+	entries, err := s.store.Activity(r.Context(), filter, before, limit)
 	if err != nil {
 		writeInternal(w, err)
 		return

@@ -37,7 +37,7 @@ func TestTheActivityFeedNamesWhatChangedAndWho(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	feed, err := s.Activity(ctx, 0, 0)
+	feed, err := s.Activity(ctx, store.ActivityFilter{}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestTheActivityFeedNamesWhatChangedAndWho(t *testing.T) {
 	if err := s.DeleteUser(ctx, ada.ID, ada.Revision); err != nil {
 		t.Fatalf("delete user: %v", err)
 	}
-	feed, err = s.Activity(ctx, 0, 0)
+	feed, err = s.Activity(ctx, store.ActivityFilter{}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestTheActivityFeedPagesWithoutRepeating(t *testing.T) {
 		}
 	}
 
-	first, err := s.Activity(ctx, 0, 2)
+	first, err := s.Activity(ctx, store.ActivityFilter{}, 0, 2)
 	if err != nil || len(first) != 2 {
 		t.Fatalf("first page: %d entries, %v", len(first), err)
 	}
@@ -119,7 +119,7 @@ func TestTheActivityFeedPagesWithoutRepeating(t *testing.T) {
 	if _, err := s.CreateTask(ctx, store.Task{Name: "f"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.Activity(ctx, first[len(first)-1].ID, 2)
+	second, err := s.Activity(ctx, store.ActivityFilter{}, first[len(first)-1].ID, 2)
 	if err != nil || len(second) != 2 {
 		t.Fatalf("second page: %d entries, %v", len(second), err)
 	}
@@ -133,9 +133,92 @@ func TestTheActivityFeedPagesWithoutRepeating(t *testing.T) {
 	}
 
 	// The ceiling holds whatever is asked for.
-	all, err := s.Activity(ctx, 0, 100000)
+	all, err := s.Activity(ctx, store.ActivityFilter{}, 0, 100000)
 	if err != nil || len(all) != 6 {
 		t.Fatalf("a huge limit read %d entries, %v", len(all), err)
+	}
+}
+
+// The question this table exists for is asked about one line, "who moved the
+// venue figure, and when", so the feed narrows to an entity and to one row of
+// it. The settings singleton has no id, and is therefore asked for by naming
+// the entity and no row.
+func TestTheActivityFeedNarrowsToOneRow(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	venue, err := s.CreateBudgetItem(ctx, store.BudgetItem{Item: "Venue", Unit: 250000, Qty: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	venue.Paid = 50000
+	if _, err := s.UpdateBudgetItem(ctx, venue, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateBudgetItem(ctx, store.BudgetItem{Item: "Band", Unit: 100000, Qty: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateTask(ctx, store.Task{Name: "Book the hall"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Ceiling = store.ToMinor("EUR", 7000)
+	if _, err := s.UpdateSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+
+	oneRow := store.ActivityFilter{Entity: store.EntityBudgetItems, EntityID: &venue.ID}
+	feed, err := s.Activity(ctx, oneRow, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feed) != 2 {
+		t.Fatalf("the venue's history has %d entries, want the create and the payment", len(feed))
+	}
+	for _, e := range feed {
+		if e.Entity != store.EntityBudgetItems || e.EntityID == nil || *e.EntityID != venue.ID {
+			t.Errorf("entry %d is %s %v", e.ID, e.Entity, e.EntityID)
+		}
+	}
+
+	lines, err := s.Activity(ctx, store.ActivityFilter{Entity: store.EntityBudgetItems}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 3 {
+		t.Errorf("the budget's history has %d entries, want both lines' three", len(lines))
+	}
+
+	// A row id with no entity beside it names no row, the log being read by
+	// the pair. Answering it with the whole feed would hand every account's
+	// history to a caller that asked about one line.
+	if _, err := s.Activity(ctx, store.ActivityFilter{EntityID: &venue.ID}, 0, 0); err == nil {
+		t.Error("a row id with no entity was read as no filter at all")
+	}
+
+	singleton, err := s.Activity(ctx, store.ActivityFilter{Entity: store.EntitySettings}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(singleton) != 1 || singleton[0].EntityID != nil {
+		t.Errorf("the settings history = %+v, want the one update of a row with no id", singleton)
+	}
+
+	// A narrowed page is still a page: the second one carries the venue's
+	// create and nothing that happened to anything else in between.
+	page, err := s.Activity(ctx, oneRow, 0, 1)
+	if err != nil || len(page) != 1 {
+		t.Fatalf("first page: %d entries, %v", len(page), err)
+	}
+	older, err := s.Activity(ctx, oneRow, page[0].ID, 1)
+	if err != nil || len(older) != 1 {
+		t.Fatalf("second page: %d entries, %v", len(older), err)
+	}
+	if older[0].Action != store.ChangeCreate || older[0].EntityID == nil || *older[0].EntityID != venue.ID {
+		t.Errorf("the page after the payment = %+v, want the venue's create", older[0])
 	}
 }
 

@@ -184,9 +184,90 @@ func TestTheActivityFeedPages(t *testing.T) {
 		t.Errorf("second page = %s", rec.Body)
 	}
 
-	for _, bad := range []string{"limit=0", "limit=201", "limit=lots", "before=0", "before=-4", "before=x"} {
+	for _, bad := range []string{"limit=0", "limit=201", "limit=lots", "before=0", "before=-4", "before=x",
+		// A filter nobody can spell is worse than no filter: a table name with
+		// a typo in it would read as a feed with nothing in it, and an empty
+		// feed looks like an answer.
+		"entity=budget_item", "entity=budget_items&entityId=the-venue",
+		"entityId=6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+		// The settings singleton is one row with no id, so an id beside it
+		// matches nothing whatever is asked, and that empty feed reads as an
+		// answer in the same way.
+		"entity=settings&entityId=6ba7b810-9dad-11d1-80b4-00c04fd430c8"} {
 		if rec := f.do(t, http.MethodGet, "/api/v1/activity?"+bad, nil, admin); rec.Code != http.StatusBadRequest {
 			t.Errorf("?%s: %d, want 400", bad, rec.Code)
+		}
+	}
+}
+
+// The log exists to answer "who moved the venue figure, and when". Paging the
+// whole feed backwards to find one line is not that answer, so the feed
+// narrows: to an entity, and to one row of it.
+func TestTheActivityFeedNarrowsToOneRow(t *testing.T) {
+	f := newPushFixture(t)
+	f.seed(t, "admin@example.test", store.RoleAdmin, activityPassword)
+	admin := f.login(t, "admin@example.test", activityPassword)
+
+	line := func(item string) budgetItemJSON {
+		rec := f.do(t, http.MethodPost, "/api/v1/budget-items",
+			map[string]any{"item": item, "unit": "2500.00", "qty": 1}, admin)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d %s", item, rec.Code, rec.Body)
+		}
+		return decodeRec[budgetItemJSON](t, rec)
+	}
+	venue, band := line("Venue"), line("Band")
+	rec := f.do(t, http.MethodPatch, "/api/v1/budget-items/"+venue.ID.String(),
+		map[string]any{"paid": "500.00", "revision": venue.Revision}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch the venue: %d %s", rec.Code, rec.Body)
+	}
+	rec = f.do(t, http.MethodPost, "/api/v1/tasks", map[string]any{"name": "Book the hall"}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create the task: %d %s", rec.Code, rec.Body)
+	}
+
+	venueOnly := "/api/v1/activity?entity=budget_items&entityId=" + venue.ID.String()
+	rec = f.do(t, http.MethodGet, venueOnly, nil, admin)
+	page := decodeRec[activityPageJSON](t, rec)
+	if len(page.Entries) != 2 {
+		t.Fatalf("the venue's history has %d entries, want the create and the payment: %s", len(page.Entries), rec.Body)
+	}
+	for _, e := range page.Entries {
+		if e.Entity != store.EntityBudgetItems || e.EntityID == nil || *e.EntityID != venue.ID {
+			t.Errorf("entry %d is %s %v, and the venue is what was asked about", e.ID, e.Entity, e.EntityID)
+		}
+	}
+
+	// An entity on its own is every row of it, which is how the settings
+	// singleton, a row with no id, is asked for too.
+	rec = f.do(t, http.MethodGet, "/api/v1/activity?entity=tasks", nil, admin)
+	tasks := decodeRec[activityPageJSON](t, rec)
+	if len(tasks.Entries) != 1 || tasks.Entries[0].Entity != store.EntityTasks {
+		t.Errorf("the tasks feed = %s", rec.Body)
+	}
+
+	// The narrowing is the query's, not the page's: a page of one holds one of
+	// the venue's own entries and offers the one before it, where a feed read
+	// whole and sifted afterwards would hand back an empty page and an id to
+	// somebody else's row.
+	rec = f.do(t, http.MethodGet, venueOnly+"&limit=1", nil, admin)
+	first := decodeRec[activityPageJSON](t, rec)
+	if len(first.Entries) != 1 || first.NextBefore == nil {
+		t.Fatalf("a filtered first page = %s", rec.Body)
+	}
+	rec = f.do(t, http.MethodGet, venueOnly+"&limit=1&before="+itoa(*first.NextBefore), nil, admin)
+	next := decodeRec[activityPageJSON](t, rec)
+	if len(next.Entries) != 1 || next.Entries[0].ID >= first.Entries[0].ID {
+		t.Fatalf("the page after it = %s", rec.Body)
+	}
+	if next.Entries[0].EntityID == nil || *next.Entries[0].EntityID != venue.ID {
+		t.Errorf("paging the venue's history reached %v", next.Entries[0].EntityID)
+	}
+
+	for _, e := range append(append([]activityEntryJSON{}, page.Entries...), next.Entries...) {
+		if e.EntityID != nil && *e.EntityID == band.ID {
+			t.Errorf("entry %d is the band's", e.ID)
 		}
 	}
 }
