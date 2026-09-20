@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // SheetNameCSV is the single sheet a CSV file presents, so mappings can name
@@ -29,6 +30,9 @@ func ReadCSV(r io.Reader, comma rune) (*Book, rune, error) {
 		return nil, 0, fmt.Errorf("read csv: %w", err)
 	}
 	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) // Excel writes a BOM
+	if err := checkUTF8(raw); err != nil {
+		return nil, 0, err
+	}
 
 	if comma == 0 {
 		comma = sniffDelimiter(raw)
@@ -57,6 +61,50 @@ func ReadCSV(r io.Reader, comma rune) (*Book, rune, error) {
 		sheet.Rows = append(sheet.Rows, row)
 	}
 	return &Book{Sheets: []Sheet{sheet}}, comma, nil
+}
+
+// checkUTF8 refuses text that this reader would otherwise mangle in silence.
+//
+// Excel's plain "CSV (comma delimited)" is Windows-1252 and its "Unicode
+// text" is UTF-16. Read as UTF-8, the first turns every accented letter into
+// a replacement character and the second puts a NUL between every letter,
+// which the planner's own API then refuses on sync. Decoding on a guess is
+// the kind of guess this package does not make, and it is not needed: the
+// spreadsheet can be exported again, while the mangled text cannot be
+// restored.
+func checkUTF8(raw []byte) error {
+	const remedy = `re-save it as "CSV UTF-8" or as .ods and run again`
+	switch {
+	case bytes.HasPrefix(raw, []byte{0xFF, 0xFE}), bytes.HasPrefix(raw, []byte{0xFE, 0xFF}):
+		return fmt.Errorf(`read csv: the file is UTF-16 (Excel's "Unicode text"): %s`, remedy)
+	case bytes.IndexByte(raw, 0) >= 0:
+		return fmt.Errorf("read csv: line %d holds a NUL byte, which nothing writes into a spreadsheet on purpose (UTF-16 without a byte order mark?): %s",
+			lineOf(raw, bytes.IndexByte(raw, 0)), remedy)
+	}
+	if i := firstInvalidUTF8(raw); i >= 0 {
+		return fmt.Errorf(`read csv: line %d is not UTF-8 (byte %#02x; Excel's plain "CSV" is Windows-1252): %s`,
+			lineOf(raw, i), raw[i], remedy)
+	}
+	return nil
+}
+
+// firstInvalidUTF8 is the offset of the first byte that begins no valid
+// encoding, or -1. A U+FFFD the file itself spells out is valid UTF-8 and is
+// left alone: the damage it records happened before the file reached us.
+func firstInvalidUTF8(raw []byte) int {
+	for i := 0; i < len(raw); {
+		r, size := utf8.DecodeRune(raw[i:])
+		if r == utf8.RuneError && size <= 1 {
+			return i
+		}
+		i += size
+	}
+	return -1
+}
+
+// lineOf is the 1-based line the byte at offset i sits on.
+func lineOf(raw []byte, i int) int {
+	return 1 + bytes.Count(raw[:i], []byte{'\n'})
 }
 
 // sniffDelimiter picks the separator that appears most consistently in the
