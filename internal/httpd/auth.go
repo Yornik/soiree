@@ -89,7 +89,13 @@ const (
 	// a third of their hour's allowance on the endpoint they still need.
 	resetIPBurst  = 10
 	resetIPWindow = time.Hour
-	redeemIPBurst = 20
+	// A much tighter bucket per account, because a reset is the one request
+	// here whose cost lands on somebody who did not send it: their inbox, and
+	// the relay's standing with whoever hosts it. Three an hour is more than
+	// anybody who has genuinely lost a password needs.
+	resetAcctBurst  = 3
+	resetAcctWindow = time.Hour
+	redeemIPBurst   = 20
 	// redeemIPWindow bounds guessing at a token. 20 an hour against 256 bits
 	// is not a race anybody wins; the limit is here so the attempt costs
 	// something rather than because it could ever succeed.
@@ -158,6 +164,7 @@ type Auth struct {
 	loginIP        *limiter
 	loginAcct      *limiter
 	resetIP        *limiter
+	resetAcct      *limiter
 	redeemIP       *limiter
 	passkeyBeginIP *limiter
 
@@ -198,6 +205,7 @@ func NewAuth(o AuthOptions) *Auth {
 		loginIP:        newLimiter(loginIPBurst, loginIPWindow),
 		loginAcct:      newLimiter(loginAcctBurst, loginAcctWindow),
 		resetIP:        newLimiter(resetIPBurst, resetIPWindow),
+		resetAcct:      newLimiter(resetAcctBurst, resetAcctWindow),
 		redeemIP:       newLimiter(redeemIPBurst, redeemIPWindow),
 		passkeyBeginIP: newLimiter(passkeyBeginIPBurst, passkeyBeginIPWindow),
 		params:         auth.DefaultParams,
@@ -490,6 +498,13 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		if email == "" {
 			return
 		}
+		// With no relay there is nobody to send the link to, and issuing one
+		// supersedes whatever is outstanding. On a deployment without SMTP
+		// this request would consume the link an admin is in the middle of
+		// passing on by hand, in exchange for a link nobody ever sees.
+		if a.mailer == nil {
+			return
+		}
 		user, err := a.store.UserByEmail(ctx, email)
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
@@ -500,6 +515,21 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		// A disabled account gets nothing. Re-enabling is an admin's decision,
 		// not something a reset link should route around.
 		if user.Status == store.StatusDisabled {
+			return
+		}
+		// Keyed on the account, which is the thing being spent: an address
+		// nobody has an account for never gets this far, so the map holds a
+		// dozen entries rather than one per address anybody cares to type.
+		// Safe here in a way it would not be at login, because nothing about
+		// this bucket reaches the caller: the 202 above is already written,
+		// and refusing costs neither a different answer nor a different
+		// amount of time.
+		//
+		// Refusing means issuing nothing at all, so the last link stays the
+		// live one. Somebody who knows an address can use up its allowance,
+		// which is the same trade loginAcct already makes, and an admin's
+		// re-invite is not charged to this bucket.
+		if !a.resetAcct.allow(user.ID.String()) {
 			return
 		}
 		purpose := store.PurposeReset

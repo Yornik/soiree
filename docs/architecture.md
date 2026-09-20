@@ -959,17 +959,21 @@ one-time link does, and it is useless once used or expired.
 Set-password and reset both use the same short-lived token: ≥128 bits from a
 CSPRNG, stored only as a hash, single-use, expiring in 24 hours, consumed
 inside a transaction so it cannot be redeemed twice, and rate-limited per IP.
-Requesting a reset returns the same response whether or not the address exists,
-so the endpoint cannot be used to enumerate accounts.
+A reset is limited per account as well, so that knowing somebody's address is
+not a way to fill their inbox. Requesting a reset returns the same response
+whether or not the address exists, so the endpoint cannot be used to enumerate
+accounts.
 
 Mail goes out over SMTP (`SOIREE_SMTP_*`). If SMTP is not configured, account
 creation still succeeds and the admin is shown the set-password link to pass on
-directly — so a deployment without mail is degraded, not broken.
+directly — so a deployment without mail is degraded, not broken. Asking for a
+reset there issues nothing at all: a link nobody can be sent would still
+supersede the one the admin is passing on by hand.
 
 **The first account is the exception, and needs its own way in.** Every route
-that hands back a set-password link is admin-only, and `password-reset` gives
-its link to the mailer and discards it — so on an empty database with no
-working SMTP there is no path to the first admin at all. `SOIREE_BOOTSTRAP_ADMIN`
+that hands back a set-password link is admin-only, and `password-reset` issues
+nothing without a mailer — so on an empty database with no working SMTP there
+is no path to the first admin at all. `SOIREE_BOOTSTRAP_ADMIN`
 creates that account; `SOIREE_BOOTSTRAP_PASSWORD` optionally gives it a
 password, hashed with the same Argon2id parameters as any other, so it can log
 in immediately. Both are consumed only while no admin exists, which is what
