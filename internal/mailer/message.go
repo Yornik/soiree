@@ -62,7 +62,7 @@ func (c Config) Build(m Message, date time.Time, messageID string) ([]byte, erro
 	// Q-encoded, because the event names this serves are Dutch and Indonesian
 	// and a raw é in a header is not portable. mime.QEncoding leaves pure
 	// ASCII alone, so the common case stays readable in a raw transcript.
-	header(&buf, "Subject", mime.QEncoding.Encode("utf-8", m.Subject))
+	encodedHeader(&buf, "Subject", m.Subject)
 	header(&buf, "Date", date.Format(time.RFC1123Z))
 	header(&buf, "Message-ID", messageID)
 	header(&buf, "MIME-Version", "1.0")
@@ -94,6 +94,40 @@ func (c Config) Build(m Message, date time.Time, messageID string) ([]byte, erro
 // always nil, so this returns nothing and discards it explicitly.
 func header(buf *bytes.Buffer, name, value string) {
 	_, _ = buf.WriteString(name + ": " + value + "\r\n")
+}
+
+// maxEncodedLine is what RFC 2047 section 2 allows a line that holds an
+// encoded-word: 76 characters, field name included.
+const maxEncodedLine = 76
+
+// encodedHeader writes a header value in the form a reader can decode, folded
+// when one line will not hold it.
+//
+// mime.QEncoding caps an encoded-word at 75 characters and separates several
+// of them with a space, counting nothing for the "Subject: " in front of the
+// first — so an event name with one accent in it, plus the headline after it,
+// is two words on a line of 115 octets where 76 is the limit. Folding between
+// the words is not enough on its own, because the first line would still be
+// the field name and a word of up to 75. The value therefore starts on the
+// line after the colon, and every line is one space and one word.
+//
+// Splitting on the space is safe for an encoded value and only for one: a
+// Q-encoded word holds no space, because a space in the text is written as "_"
+// or "=20", so the only spaces here are the separators the encoder put in. A
+// value that came back as it went in is pure ASCII, holds no encoded-word, and
+// is written on one line as before — the 76 does not apply to it, and even a
+// long subject is nowhere near the 998 octets a line may not pass.
+func encodedHeader(buf *bytes.Buffer, name, raw string) {
+	value := mime.QEncoding.Encode("utf-8", raw)
+	if value == raw || len(name)+len(": ")+len(value) <= maxEncodedLine {
+		header(buf, name, value)
+		return
+	}
+
+	_, _ = buf.WriteString(name + ":\r\n")
+	for _, word := range strings.Split(value, " ") {
+		_, _ = buf.WriteString(" " + word + "\r\n")
+	}
 }
 
 // part writes one alternative, quoted-printable encoded.

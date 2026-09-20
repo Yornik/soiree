@@ -75,6 +75,44 @@ func TestPasswordTokenIsSingleUse(t *testing.T) {
 	}
 }
 
+// Redeeming a link sets a password and activates an account, which is the
+// change an admin goes looking for after a suspected takeover. It is recorded
+// like every other write in this package — with the hash itself redacted,
+// which is what redactedFields is for.
+func TestRedeemingALinkIsRecorded(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	user, hash := invite(t, s, "ada@example.test", store.RoleEditor)
+	if _, err := s.ConsumePasswordToken(ctx, hash, "$argon2id$chosen"); err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+
+	entries := history(t, s, store.EntityUsers, user.ID)
+	if len(entries) != 2 {
+		t.Fatalf("history has %d entries, want the create and the redemption", len(entries))
+	}
+
+	redemption := entries[0]
+	hashed, changed := redemption.Changes["password_hash"]
+	if !changed {
+		t.Fatal("the redemption did not record that the password hash changed")
+	}
+	if asString(t, hashed.New) != "redacted" {
+		t.Errorf("the password hash was recorded verbatim: %s", hashed.New)
+	}
+	status := redemption.Changes["status"]
+	if asString(t, status.Old) != string(store.StatusInvited) || asString(t, status.New) != string(store.StatusActive) {
+		t.Errorf("status change = %v, want invited to active", status)
+	}
+	// The account, because no session exists at redemption and the link
+	// belonged to it. Who was holding the link is a question no entry here
+	// can answer.
+	if redemption.ActorID == nil || *redemption.ActorID != user.ID {
+		t.Errorf("actor = %v, want the account the link belonged to", redemption.ActorID)
+	}
+}
+
 func TestPasswordTokenExpires(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
@@ -396,6 +434,46 @@ func TestBootstrapAdminRunsOnce(t *testing.T) {
 	}
 	if len(users) != 1 {
 		t.Fatalf("%d accounts exist, want 1", len(users))
+	}
+}
+
+// The first admin is the one account nobody created, and the entry saying so
+// is also what names it: the activity feed reads an account's address out of
+// the log rather than out of the row, so without a create entry every later
+// change to this account is reported with no name attached.
+func TestBootstrapAdminIsRecorded(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	if _, err := s.EnsureBootstrapAdmin(ctx, "ada@example.test", ""); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	admin, err := s.UserByEmail(ctx, "ada@example.test")
+	if err != nil {
+		t.Fatalf("read bootstrap admin: %v", err)
+	}
+
+	entries := history(t, s, store.EntityUsers, admin.ID)
+	if len(entries) != 1 {
+		t.Fatalf("history has %d entries, want the create", len(entries))
+	}
+	if entries[0].Action != store.ChangeCreate {
+		t.Errorf("action = %q, want create", entries[0].Action)
+	}
+	if asString(t, entries[0].Changes["email"].New) != "ada@example.test" {
+		t.Errorf("email = %v, want the address the account was created with", entries[0].Changes["email"])
+	}
+	if entries[0].ActorLabel != "system" || entries[0].ActorID != nil {
+		t.Errorf("actor = %q/%v, want the deployment itself and no account",
+			entries[0].ActorLabel, entries[0].ActorID)
+	}
+
+	// A restart writes nothing, so it records nothing either.
+	if _, err := s.EnsureBootstrapAdmin(ctx, "ada@example.test", ""); err != nil {
+		t.Fatalf("second bootstrap: %v", err)
+	}
+	if entries := history(t, s, store.EntityUsers, admin.ID); len(entries) != 1 {
+		t.Errorf("history has %d entries after a restart, want the create alone", len(entries))
 	}
 }
 

@@ -45,6 +45,11 @@ import (
 // One table is left out on purpose rather than missed: user_ui_prefs. Column
 // widths are one person's own layout, shared with nobody and owed to nobody, so
 // there is no argument for a history of them to settle.
+//
+// One write is left out too, and also on purpose: SetPasswordHash re-encodes a
+// correct password at raised cost parameters during a login, so the stored
+// bytes change while the password does not. Choosing a password is the change
+// worth recording, and redeeming a link is where that happens.
 
 // Entity names, matching the table each change happened to. They are what
 // ChangeHistory is asked for, so they live as constants rather than as string

@@ -124,6 +124,19 @@ func (s *Store) ConsumePasswordToken(ctx context.Context, tokenHash []byte, pass
 			return User{}, fmt.Errorf("password_tokens: %w", err)
 		}
 
+		// The account as it stands, and held until this transaction ends: the
+		// "before" side of the history entry further down.
+		before, err := lockRow[User](ctx, tx, EntityUsers, userColumns, userID)
+		if isNotFound(err) {
+			// Deleted between the two statements, which the UPDATE below
+			// would have found for itself: one answer for every way a link
+			// can fail to be redeemable.
+			return User{}, ErrInvalidToken
+		}
+		if err != nil {
+			return User{}, err
+		}
+
 		// `invited` becomes `active`; anything else keeps the status it had.
 		// A blanket 'active' would let a redeemed link resurrect an account
 		// somebody deliberately disabled — and a disabled account's link is
@@ -145,6 +158,19 @@ func (s *Store) ConsumePasswordToken(ctx context.Context, tokenHash []byte, pass
 			return User{}, ErrInvalidToken
 		}
 		if err != nil {
+			return User{}, err
+		}
+
+		// Setting a password is a change to the account like any other, and
+		// the one somebody goes looking for after a suspected takeover. The
+		// hash is redacted in the entry, so what it records is that the
+		// credential changed and that an invited account became active.
+		//
+		// The actor is the account itself: there is no session at redemption,
+		// so the only thing the entry can name is who the link belonged to,
+		// which is not the same claim as who was holding it.
+		if err := recordUpdate(ctx, tx, EntityUsers, userID, &user.Revision, before, user,
+			Actor{ID: &userID}); err != nil {
 			return User{}, err
 		}
 
@@ -183,6 +209,11 @@ func (s *Store) DeleteExpiredPasswordTokens(ctx context.Context, grace time.Dura
 // encoding has — so there is no concurrent edit for the caller to reconcile
 // with, and refusing the write would leave the account on weak parameters
 // forever because of a race that changed nothing.
+//
+// It is also the one write to `users` that records nothing, for the same
+// reason: the stored bytes change and the password does not, so there is
+// nothing here that a history entry could tell anybody. The revision it bumps
+// without an entry is a gap in the log for that reason, not a missed edit.
 func (s *Store) SetPasswordHash(ctx context.Context, id uuid.UUID, hash string) error {
 	n, err := s.exec(ctx, "users",
 		`UPDATE users SET password_hash = $1, revision = revision + 1, updated_at = now()
@@ -229,15 +260,31 @@ func (s *Store) EnsureBootstrapAdmin(ctx context.Context, email, passwordHash st
 		hash = passwordHash
 	}
 
-	n, err := s.exec(ctx, "users",
-		`INSERT INTO users (email, role, status, password_hash)
-		 SELECT $1, 'admin', $2, $3
-		  WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')
-		 ON CONFLICT DO NOTHING`, email, status, hash)
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
+	return inTx(ctx, s, func(tx pgx.Tx) (bool, error) {
+		user, err := queryOne[User](ctx, tx, "users",
+			`INSERT INTO users (email, role, status, password_hash)
+			 SELECT $1, 'admin', $2, $3
+			  WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'admin')
+			 ON CONFLICT DO NOTHING
+			 RETURNING `+userColumns, email, status, hash)
+		if isNotFound(err) {
+			// An admin already exists, or the address does. Nothing was
+			// written, so there is nothing to report and nothing to record.
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		// Recorded as the deployment's own doing, because at startup there is
+		// nobody else it could be. The entry is also where the account gets
+		// its name from: the activity feed reads an address out of the log
+		// rather than out of the row, so without this every later change to
+		// the first admin would be reported with no name attached.
+		if err := recordCreate(ctx, tx, EntityUsers, user.ID, &user.Revision, user, SystemActor); err != nil {
+			return false, err
+		}
+		return true, nil
+	})
 }
 
 // IsUniqueViolation reports whether err is Postgres refusing a duplicate.
