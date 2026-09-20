@@ -228,8 +228,10 @@ func proposeTable(sh *Sheet, blk block) (*Table, []string) {
 			sh.Name, blk.first, blk.last)
 		if header > 1 && !sh.RowEmpty(header-1) {
 			// No blank row above: blocks() split a run here because this row
-			// reads like a header. "CATERING | see quote" reads like one too.
-			note += fmt.Sprintf(", or if row %d is a section heading and not a header, extend lastRow of the table above it to %d",
+			// reads like a header. "CATERING | see quote" reads like one too,
+			// and so does a line whose only figure was refused ("2 x 500").
+			// The rows above may not have been proposed either, hence the if.
+			note += fmt.Sprintf(", or if row %d is not a header (a section heading, or a line whose figure could not be read) and the rows above it were proposed, extend lastRow of the table above it to %d",
 				header, blk.last)
 		}
 		notes = append(notes, note)
