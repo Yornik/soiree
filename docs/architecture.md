@@ -439,6 +439,13 @@ in `api-other`.
 Logs are JSON on stdout via `log/slog`, which is what the cluster's log
 pipeline expects.
 
+A handler panic is recovered where the request is counted, so it arrives as one
+ERROR line carrying the route and the stack, and as a `status="500"` sample.
+Left to net/http it would be neither: its own "panic serving" line goes through
+the standard log bridge, which emits at INFO, and a request that never returned
+was never counted. Both servers are given an `ErrorLog` of their own for the
+same reason — the metrics listener is not behind the instrumentation.
+
 ## Roadmap
 
 State is shared, the API is guarded, and the browser uses all of it. What is

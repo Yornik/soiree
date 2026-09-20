@@ -167,9 +167,16 @@ func main() {
 			"total_mb", cfg.Attachments.TotalBytes>>20)
 	}
 
+	// net/http complains through a std log.Logger, and without one of its own
+	// that is the std bridge into slog, which emits every line at INFO — a
+	// panic it had to catch itself included. They are not INFO, and a
+	// level=ERROR query is how this deployment is looked at first.
+	serverErrors := slog.NewLogLogger(log.Handler(), slog.LevelError)
+
 	hs := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           srv.Handler(),
+		ErrorLog:          serverErrors,
 		ReadHeaderTimeout: httpd.ReadHeaderTimeout,
 		ReadTimeout:       httpd.ReadTimeout,
 		WriteTimeout:      httpd.WriteTimeout,
@@ -187,8 +194,11 @@ func main() {
 	// anyone who asked. The probes stay on the main listener, because that is
 	// the port kubelet reaches.
 	ms := &http.Server{
-		Addr:              cfg.MetricsAddr,
-		Handler:           srv.MetricsHandler(),
+		Addr:    cfg.MetricsAddr,
+		Handler: srv.MetricsHandler(),
+		// The metrics listener is not behind the instrumentation that recovers
+		// a panic, so this is the only thing raising the level of one here.
+		ErrorLog:          serverErrors,
 		ReadHeaderTimeout: httpd.ReadHeaderTimeout,
 		ReadTimeout:       httpd.ReadTimeout,
 		WriteTimeout:      httpd.WriteTimeout,
