@@ -51,7 +51,13 @@
   --font-display: 'Bricolage Grotesque', 'Arial Narrow', 'Helvetica Neue', Arial, sans-serif;
   --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
+/* A theme chosen by hand has to be told to the browser as well, not only to
+   the tokens: scrollbars, the date picker and the native popup of a select are
+   drawn by the user agent, and with nothing but the `light dark` meta to go on
+   it draws them in the device's scheme. That is the one case the three-way
+   control exists for, so it is the one case that must not come out half dark. */
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --paper: #1D1633;
   --tint: #2A2146;
   --raise: #342A55;
@@ -66,6 +72,9 @@
   --rule-mid: rgba(241,238,248,0.28);
   --rule-ink: rgba(241,238,248,0.70);
 }
+/* Light needs no tokens of its own, being the :root default, but it does need
+   the same sentence said to the browser, for the device that is dark. */
+:root[data-theme="light"] { color-scheme: light; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --paper: #1D1633;
@@ -1171,7 +1180,9 @@ body.is-archived .when-data { display: block; }
     box-shadow: none;
     padding-bottom: 4px;
   }
-  table.budget td.item-cell textarea { font-size: 16px; font-weight: 600; }
+  /* A step above the 16px floor the touch block gives every other field, so
+     the item still leads the entry rather than merely matching it. */
+  table.budget td.item-cell textarea { font-size: 18px; font-weight: 600; }
   table.budget textarea { height: auto; min-height: 44px; }
   table.budget tbody td.calc { padding: 2px 0; }
   table.budget td.empty-cell { display: block; min-height: 0; padding: 18px 0; }
@@ -1201,8 +1212,16 @@ body.is-archived .when-data { display: block; }
    usable with a thumb, and a narrow viewport is a phone whatever the pointer
    emulation claims. */
 @media (pointer: coarse), (max-width: 720px) {
+  /* 16px is not a taste in type size: iOS Safari zooms the whole page the
+     moment a focused field is smaller than that, and does not zoom back out.
+     At 14px every tap into a field on a phone shifted the layout and left the
+     person to pinch their way back, on the set-password screen an invited
+     person meets first as much as on the ledger. The rule under it, and the
+     three at the foot of this file, outrank it and would otherwise go on
+     setting their own 13px. */
   input[type="text"], input[type="number"], input[type="date"],
-  input[type="email"], input[type="password"], select, textarea { min-height: 44px; }
+  input[type="email"], input[type="password"], select, textarea { min-height: 44px; font-size: 16px; }
+  table.budget td.note-cell textarea { font-size: 16px; }
   .toggle-line input, .sp-pop input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; }
   .del-btn { min-width: 44px; min-height: 44px; }
   .files-btn { min-width: 44px; height: 44px; top: 0; right: 0; justify-content: center; }
@@ -1535,4 +1554,7 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
      look at. */
   .link-btn { display: inline-flex; align-items: center; min-height: 44px; }
   .person-role { min-height: 44px; }
+  /* These three are styled after the touch block above, so the 16px that
+     keeps iOS from zooming on focus has to be said again here. */
+  .auth-link-out input, .person-role, .person-language { font-size: 16px; }
 }
