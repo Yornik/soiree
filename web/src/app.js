@@ -829,10 +829,11 @@
    * ------------------------------------------------------------------
    * Every read and write of planner data goes through Store. Nothing else in
    * this file touches localStorage. To move onto a shared backend, replace
-   * the two methods below and leave the rest of the file alone.
+   * the three methods below and leave the rest of the file alone.
    *
-   *   Store.read()       -> state object, or null if nothing saved yet
+   *   Store.read()       -> what was saved, or null if nothing was yet
    *   Store.write(state) -> persist the whole state object
+   *   Store.keep()       -> persist it again, because the merge base moved
    *
    * save() is debounced, so the write path is already async-shaped: that is
    * what lets the shared backend below hang off Store.write without touching
@@ -851,6 +852,12 @@
    * localStorage is written synchronously in both modes and first in both
    * modes. pagehide has no time to wait on a promise, and the whole point of
    * a deferred write is that the round trip is not on the interaction path.
+   *
+   * With an API there is a second thing worth keeping: the shadow, the version
+   * of every row the server last confirmed. It goes under the same key and in
+   * the same setItem as the state, never beside it under a key of its own —
+   * two writes are two moments, and a state paired on the next load with a
+   * base another tab wrote differs from it in ways neither of them edited.
    * ------------------------------------------------------------------ */
   var Store = {
     key: STORAGE_KEY,
@@ -861,10 +868,25 @@
       } catch (e) { return null; }
     },
     write: function (s) {
-      try { localStorage.setItem(this.key, JSON.stringify(s)); } catch (e) { /* storage unavailable */ }
+      this.put(s);
       // A no-op until the probe has found an API, so the local-only
       // deployment never touches the network again after it.
       Sync.push();
+    },
+    // The base moved with nobody typing: a write was confirmed, or a plan was
+    // merged. Kept at once rather than at the next save, because the state and
+    // the base have to be a pair — a page that came back holding a row the
+    // base does not know would post it a second time, and a base holding a row
+    // the state does not would delete it.
+    keep: function () {
+      if (shadow) this.put(state);
+    },
+    put: function (s) {
+      // The base travels with the state or not at all: with no database there
+      // is no base, and a bare state is also what every save before this one
+      // looks like, which Store.read has to go on accepting.
+      var value = shadow ? { state: s, shadow: shadow, idMap: idMap } : s;
+      try { localStorage.setItem(this.key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
     },
     clear: function () {
       try { localStorage.removeItem(this.key); } catch (e) { /* storage unavailable */ }
@@ -877,9 +899,20 @@
   // between "this is a cached copy of the server's plan" and "this is the only
   // copy in existence", and adopt() has to know which it is looking at.
   var hadSavedCopy = false;
+  // The merge base the last page left behind, and the ids it had adopted by
+  // then. Both are installed further down, where the shadow they belong to is
+  // declared; what matters here is that they are taken out of the same value
+  // as the state, so the two cannot be from different moments.
+  var savedBase = null;
+  var savedIdMap = null;
   try {
     var saved = Store.read();
     hadSavedCopy = saved !== null;
+    if (saved && saved.state && saved.shadow) {
+      savedBase = saved.shadow;
+      savedIdMap = saved.idMap;
+      saved = saved.state;
+    }
     state = saved || (CONFIG.demoData ? demoState() : emptyState());
   } catch (e) {
     state = emptyState();
@@ -939,7 +972,7 @@
 
   var apiMode = false;     // the origin answered /plan: there is a database
   var dirty = false;       // something was edited before the plan arrived
-  var shadow = null;       // rows as the server last confirmed them
+  var shadow = null;       // rows as the server last confirmed them (restored below)
   var idMap = {};          // this browser's optimistic ids -> the server's uuids
   var blocked = {};        // writes the server refused, parked until they change
 
@@ -1184,6 +1217,31 @@
     return sh;
   }
 
+  /* The real one, as the last page left it.
+   *
+   * A base that outlives the page is the whole of what tells an unsent edit
+   * apart from a copy that is merely old. Without one `dirty` is false on the
+   * next load, adopt() replaces the cached copy with the plan, and whatever
+   * had not reached the server goes with it — after a status line that said it
+   * was safe in this browser.
+   *
+   * Taken whole or not at all. A collection missing from it would read as
+   * "somebody else added every row in that collection", which is a worse
+   * answer than falling back to the copy as it was loaded.
+   */
+  function baseFromStored(v) {
+    if (!v || !v.settings || !v.settings.row) return null;
+    var whole = COLLECTIONS.every(function (c) {
+      return v[c.key] && typeof v[c.key] === 'object';
+    });
+    return whole ? v : null;
+  }
+
+  // Installed before anything can save, so that a keystroke landing before the
+  // plan does writes the base back out rather than dropping it.
+  shadow = baseFromStored(savedBase);
+  if (shadow && savedIdMap) idMap = savedIdMap;
+
   // The server's answer to a write is the row as it now stands, so it is also
   // the new agreed version. Stored as its own object: a shadow that shared
   // references with `state` would diff to nothing forever, because every edit
@@ -1192,6 +1250,11 @@
     var entry = { row: rowFromWire(coll, wireRow), revision: Number(wireRow.revision) || 0 };
     if (coll.singleton) shadow.settings = entry;
     else shadow[coll.key][wireRow.id] = entry;
+    // With the state it belongs to, at the moment they agree. A create that
+    // landed is the case that cannot wait for the next keystroke: the row is
+    // now in both under the server's id, and a page that came back holding
+    // only the state would post it all over again.
+    Store.keep();
   }
 
   function shadowEntry(coll, id) {
@@ -1357,6 +1420,9 @@
       // Already gone is the outcome that was asked for.
       if (res.status === 204 || res.status === 404) {
         delete shadow[c.key][op.id];
+        // The other half of the pair kept by shadowPut: gone from both, so a
+        // page that came back cannot read it as a row somebody else added.
+        Store.keep();
         return true;
       }
       if (res.status === 409 && res.body && res.body.current) {
@@ -1918,6 +1984,15 @@
    */
   function adopt(plan) {
     takeAttachments(plan);
+
+    // What the last page left unsent, if it left anything. `dirty` is a fact
+    // about this page alone — the first keystroke since it painted sets it —
+    // and an edit that never reached the server is exactly as unsent after a
+    // reload as it was before one. Asked before the base is replaced, because
+    // the base is what those edits are a difference from.
+    var base = shadow;
+    if (base && planOps().length) dirty = true;
+
     shadow = shadowFromPlan(plan);
     apiMode = true;
 
@@ -1938,14 +2013,21 @@
     // current revision and so with no 409, and POSTs back every row they
     // deleted.
     //
-    // So this is a merge as well, and the copy as it was loaded stands in for
-    // the shadow that was lost with the last page: a field that differs from
-    // it was edited here and is ours; everything else is theirs. Only rows the
-    // server once knew go into it — a row under an id this browser minted has
-    // never been sent, and applyPlan() must read its absence from the plan as
-    // "not created yet", not as "somebody deleted it".
+    // So this is a merge as well, against the base the last page persisted:
+    // a field that differs from it was edited here and is ours; everything
+    // else is theirs. Only rows the server once knew are in it — a row under
+    // an id this browser minted has never been sent, and applyPlan() must read
+    // its absence from the plan as "not created yet", not as "somebody deleted
+    // it".
+    //
+    // With no base there is the copy as it was loaded, which is the same
+    // reasoning one degree weaker: it stands in for the base, and it is right
+    // only about the edits made since this page painted. The unsent edits of
+    // an earlier page are in it too, so a merge against it reads them as
+    // "unchanged here" and takes the server's values over them. That is what
+    // persisting the base is for.
     if (dirty && !planIsEmpty) {
-      shadow = shadowFromLoaded();
+      shadow = base || shadowFromLoaded();
       applyPlan(plan);
       renderAll();
       openLive();
@@ -1977,6 +2059,10 @@
     }
 
     renderAll();
+    // Written before anything is sent, as everything here is: this is the
+    // first moment the page has a base at all, and the first load is also the
+    // one a tab is most likely not to survive.
+    Store.keep();
     Sync.push();
     openLive();
     pushRefresh();
@@ -2232,7 +2318,9 @@
     // Before the early return below: a merge can leave work to do even when
     // nothing on screen moved — a delete of ours that the plan shows already
     // gone settles here, and a pending one keeps its shadow entry and still has
-    // to go out.
+    // to go out. The base has moved either way, so the state it is now a base
+    // for is written with it.
+    Store.keep();
     Sync.push();
 
     var keys = Object.keys(touched);
@@ -4577,9 +4665,12 @@
   })();
 
   /* ---------- The language switcher ----------
-   * In place, never by reloading. A reload throws away whatever somebody typed
-   * while signed out — it is on screen and in `state`, but `dirty` does not
-   * survive a reload, so the plan that arrives afterwards simply replaces it.
+   * In place, never by reloading. A page that has a base behind it now comes
+   * back from a reload with its unsent edits intact, but a page that has never
+   * reached the server has no base and nothing to merge against, so a reload
+   * still throws away whatever was typed into it — and a reload is disruptive
+   * in its own right: it takes the screen somebody is on and the field they
+   * are halfway through.
    * Everything this page says comes from three calls, so saying it again in
    * another language is those three calls, plus the few things that bake a
    * label when they are built.
