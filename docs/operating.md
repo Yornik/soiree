@@ -401,6 +401,17 @@ Responses under `/api/v1` always carry `Cache-Control: no-store`. If something
 in front of the deployment is adding its own caching there, a budget two people
 are editing will be served stale from a proxy.
 
+A write that answers `403` with the code `cross_origin` was refused because a
+browser said it came from another origin: another site, a sibling subdomain, or
+another port of the same host. `curl` and scripts send no such statement and
+are never refused. One honest setup can trip it, which is a proxy that rewrites
+`Host` on the way in. A current browser is unaffected, because its
+`Sec-Fetch-Site` header is believed before anything else, but a browser from
+before 2023 sends only `Origin`, that is compared with `Host`, and every write
+it makes is then refused. Traefik, Caddy and HAProxy pass `Host` through as it
+arrived; nginx's `proxy_pass` replaces it unless told
+`proxy_set_header Host $host;`.
+
 ### Live sync
 
 ```bash

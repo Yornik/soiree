@@ -265,7 +265,36 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/", s.serveIndex)
 
-	return securityHeaders(s.cfg.AllowIndexing)(s.metrics.instrument(mux))
+	return securityHeaders(s.cfg.AllowIndexing)(s.metrics.instrument(sameOriginWrites(mux)))
+}
+
+// sameOriginWrites refuses a write that a browser says came from another
+// origin.
+//
+// The session cookie is SameSite=Lax, and a site is wider than an origin: a
+// page on a sibling subdomain, or on another port of localhost, is same-site,
+// so a form it submits arrives with the session attached. Such a form cannot
+// send application/json, but it can send text/plain whose bytes are JSON, and
+// nothing here reads the request's Content-Type. That was enough to invite an
+// admin at an address of the form's choosing.
+//
+// Sec-Fetch-Site is the browser's own statement of where a request came from,
+// and a page cannot set it. A browser from before 2023 sends none, and then
+// Origin is compared with Host. With neither header the caller is not a
+// browser: curl and the e2e suite have no ambient session for anybody to
+// borrow, and are let through. GET, HEAD and OPTIONS always pass, which is
+// what lets the link in a mail still arrive logged in, and is safe while no
+// GET here changes anything.
+//
+// Around the whole mux rather than the API subtree, so a route added later is
+// covered without anybody remembering to, and inside instrument, so a refusal
+// is counted like any other answer.
+func sameOriginWrites(next http.Handler) http.Handler {
+	cop := http.NewCrossOriginProtection()
+	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusForbidden, "cross_origin", "this request came from another origin")
+	}))
+	return cop.Handler(next)
 }
 
 // MetricsHandler returns the handler for the private metrics listener.

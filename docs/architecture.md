@@ -868,8 +868,9 @@ Every non-2xx response has one shape — `{error, message?, current?}` — so a
 client never has to guess. The codes are stable strings, because clients branch
 on them: `bad_request`, `not_found`, `stale_revision`, `payload_too_large`,
 `conflict`, `internal` from the plan itself, and `unauthenticated` (`401`),
-`read_only` and `forbidden` (`403`) from the guard in front of it. The accounts
-surface names its own refusals — `invalid_email`, `revision_required`,
+`read_only` and `forbidden` (`403`) from the guard in front of it, and
+`cross_origin` (`403`) from the origin check in front of everything. The
+accounts surface names its own refusals — `invalid_email`, `revision_required`,
 `self_change`, `rate_limited` and the rest; the full list is in
 `api/openapi.yaml`. `current` appears only on a `409`. The database's own
 rejections are translated rather than surfaced as a `500`: a foreign key
@@ -1006,6 +1007,17 @@ what the row stores, so a copy of the database contains nothing replayable.
   browsers treat `localhost` as a secure context, so `docker run` still works.
   `SameSite=Lax`, so a form on another site cannot post here with the session
   attached while an ordinary link from a mail still arrives logged in.
+- `SameSite` is a *site* boundary, and an origin is narrower than a site. A
+  page on a sibling subdomain, or on another port of `localhost`, is same-site,
+  so a form there posts with the session attached, and a `text/plain` form
+  whose bytes happen to be JSON is a body the API accepts. The origin boundary
+  is `net/http`'s `CrossOriginProtection`, around the whole mux: a request that
+  is not a GET, HEAD or OPTIONS is refused with 403 `cross_origin` when the
+  browser's `Sec-Fetch-Site` says it came from anywhere but this origin, or,
+  from a browser too old to send that, when `Origin` does not match `Host`. A
+  caller that sends neither is not a browser and has no ambient session to
+  lend, so curl and scripts are untouched. It sits inside the metrics wrapper,
+  so refusals are counted.
 - No `__Host-` prefix, deliberately. It is stricter, and it would also require
   HTTPS outright, which breaks a bare `docker run` entirely.
 - Seven days idle, thirty days absolute. The idle window is slid in the database
