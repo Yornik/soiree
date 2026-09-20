@@ -301,6 +301,37 @@ test('the theme is a per-device choice, kept out of the planner', async ({ page 
   expect(await stored()).toEqual([STORAGE_KEY]);
 });
 
+/*
+ * The half of a chosen theme that is not the page's to paint.
+ *
+ * Scrollbars, the date picker on a due date and the popup a native select
+ * opens are drawn by the browser, from the colour scheme it thinks is in
+ * force. Repainting the tokens does not tell it anything, so a person on a
+ * light device who picks Dark used to get a near-white popup list carrying
+ * the dark theme's near-white text. That disagreement is the case the
+ * three-way control exists for, which is why the test forces it.
+ */
+test('a chosen theme is told to the browser too, not only to the page', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await openPlanner(page);
+  const scheme = () => page.evaluate(
+    () => window.getComputedStyle(document.documentElement).colorScheme,
+  );
+  const themes = page.getByRole('group', { name: 'Theme' }).getByRole('button');
+
+  // The device says light throughout. Each pill has to win over it.
+  await themes.nth(2).click();
+  expect(await scheme()).toBe('dark');
+
+  await themes.nth(1).click();
+  expect(await scheme()).toBe('light');
+
+  // Following the device means claiming neither, and leaving the meta in the
+  // head to answer for both.
+  await themes.nth(0).click();
+  expect(await scheme()).toBe('normal');
+});
+
 test('a corrupt saved planner is repaired rather than fatal', async ({ page }) => {
   // What a hand-edited export, or an older version, might leave behind:
   // missing arrays, wrong types, a line tagged to a sponsor that no longer

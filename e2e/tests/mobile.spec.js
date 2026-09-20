@@ -180,3 +180,25 @@ test('a line can still be edited and removed with nothing but taps', async ({ pa
   await row.remove.click();
   await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
 });
+
+test('no field is small enough to make the browser zoom into it', async ({ page }) => {
+  // iOS Safari zooms the whole page whenever a focused control is set under
+  // 16px, and does not zoom back out afterwards. So this is a floor rather
+  // than a preference: at 14px every tap into a field shifted the layout and
+  // left the person to pinch their way back.
+  //
+  // Every control the document carries, not only the ones this spec fills in.
+  // The accounts screens are in the same document, and the first field an
+  // invited person meets on a phone is the one on set-password.
+  const small = await page.evaluate(() => {
+    const fields = 'input[type="text"], input[type="number"], input[type="date"],'
+      + ' input[type="email"], input[type="password"], select, textarea';
+    return Array.from(document.querySelectorAll(fields))
+      .map((el) => ({
+        field: el.id || el.className || el.tagName.toLowerCase(),
+        size: parseFloat(window.getComputedStyle(el).fontSize),
+      }))
+      .filter((f) => f.size < 16);
+  });
+  expect(small).toEqual([]);
+});
