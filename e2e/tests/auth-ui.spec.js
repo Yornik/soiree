@@ -29,6 +29,17 @@ const ADA = { id: 'a0000000-0000-4000-8000-000000000001', email: 'ada@example.te
 const GRACE = { id: 'a0000000-0000-4000-8000-000000000002', email: 'grace@example.test', role: 'editor', status: 'active', createdBy: ADA.id, createdAt: '2026-02-11T10:00:00Z', revision: 3, updatedAt: '2026-02-11T10:00:00Z' };
 const LINUS = { id: 'a0000000-0000-4000-8000-000000000003', email: 'linus@example.test', role: 'viewer', status: 'invited', createdBy: ADA.id, createdAt: '2026-03-02T10:00:00Z', revision: 1, updatedAt: '2026-03-02T10:00:00Z' };
 
+// One entry of the shape /activity answers with, so the list has something
+// to draw when the request it is asked for works.
+const ENTRY = {
+  at: '2026-03-04T11:52:09Z',
+  actor: { kind: 'user', email: ADA.email },
+  action: 'update',
+  entity: 'budget_items',
+  label: 'Venue deposit',
+  changes: [{ field: 'paid', old: '0', new: '500' }],
+};
+
 const PASSWORD = 'a-long-enough-one';
 // Stands in for the 256-bit token a real link carries. It is a fixture, and
 // the assertions on it are the point: it must arrive in the body and must not
@@ -50,6 +61,10 @@ async function mountAccounts(page, opts = {}) {
     // A test sets this to make the next write answer 409 with the row as the
     // server has it, which is the concurrent-edit path.
     stale: opts.stale || null,
+    activity: opts.activity || [],
+    // How many /activity requests are refused before one is answered. The
+    // screen's own retry is what is being tested, so the failure has to stop.
+    activityFails: opts.activityFails || 0,
     calls: [],
   };
 
@@ -89,7 +104,19 @@ async function mountAccounts(page, opts = {}) {
       state.session = null;
       return route.fulfill({ status: 204, body: '' });
     }
+    // Everything past here is behind a session, and the server answers for
+    // that before it looks at what was asked.
+    if (!state.session) return json(route, 401, { error: 'unauthenticated' });
+
     if (path === '/auth/passkeys') return json(route, 200, { passkeys: state.passkeys });
+
+    if (path === '/activity') {
+      if (state.activityFails > 0) {
+        state.activityFails -= 1;
+        return json(route, 500, { error: 'internal' });
+      }
+      return json(route, 200, { entries: state.activity, nextBefore: null });
+    }
 
     if (path === '/users' && req.method() === 'GET') {
       if (!state.session || state.session.role !== 'admin') return json(route, 403, { error: 'forbidden' });
@@ -111,6 +138,13 @@ async function mountAccounts(page, opts = {}) {
         setPasswordUrl: state.mailSent ? undefined : `http://127.0.0.1/#/set-password?token=${TOKEN}`,
       });
     }
+    // A row another admin removed: the server re-reads it and finds nothing,
+    // which is a 404 whatever was being asked of it.
+    const target = path.match(/^\/users\/([^/]+)(?:\/invite)?$/);
+    if (target && req.method() !== 'GET' && !user(target[1])) {
+      return json(route, 404, { error: 'not_found' });
+    }
+
     const invite = path.match(/^\/users\/([^/]+)\/invite$/);
     if (invite) {
       const who = user(invite[1]);
@@ -304,17 +338,42 @@ test('a set-password link is redeemed from the body, and the token leaves the UR
   await page.fill('#newPassword2', PASSWORD);
   await page.click('#setPasswordSubmit');
 
-  await expect(page.locator('#panelNote')).toBeVisible();
-  await expect(page.locator('#authNote')).toContainText('Your password is saved');
+  // Straight to the form they need next, rather than a screen whose one
+  // button leads to it, and what just happened is still on screen while they
+  // use it.
+  await expect(page.locator('#panelLogin')).toBeVisible();
+  await expect(page.locator('#authLede')).toContainText('Your password is saved');
 
   const sent = server.calls.find((c) => c.path === '/auth/set-password');
   expect(sent.body).toEqual({ token: TOKEN, password: PASSWORD });
   // In the body, never the query string.
   expect(sent.search).toBe('');
+});
 
-  // From here the only thing to do is sign in, and the button says so.
-  await page.click('#authNoteAct');
-  await expect(page.locator('#panelLogin')).toBeVisible();
+test('the password being chosen can be looked at, and is covered up again by itself', async ({ page }) => {
+  await mountAccounts(page, { users: [LINUS] });
+  await page.goto(`/#/set-password?token=${TOKEN}`);
+
+  // Twelve characters or more, typed on a phone, twice, with nothing to check
+  // them against: this is the way to check them.
+  await page.fill('#newPassword', PASSWORD);
+  await expect(page.locator('#newPassword')).toHaveAttribute('type', 'password');
+
+  await page.click('#showPassword');
+  await expect(page.locator('#newPassword')).toHaveAttribute('type', 'text');
+  await expect(page.locator('#newPassword2')).toHaveAttribute('type', 'text');
+  await expect(page.locator('#showPassword')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#showPassword')).toHaveText('Hide password');
+
+  await page.click('#showPassword');
+  await expect(page.locator('#newPassword')).toHaveAttribute('type', 'password');
+  await expect(page.locator('#showPassword')).toHaveText('Show password');
+
+  // And it does not stay on for the next person to arrive at this screen.
+  await page.click('#showPassword');
+  await page.goto(`/#/set-password?token=${TOKEN}`);
+  await expect(page.locator('#newPassword')).toHaveAttribute('type', 'password');
+  await expect(page.locator('#showPassword')).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('a password that cannot work is refused before it costs a round trip', async ({ page }) => {
@@ -460,6 +519,75 @@ test("another admin's change is adopted rather than overwritten", async ({ page 
   // instead of this browser's guess — and says why it changed under them.
   await expect(row.locator('select.person-role')).toHaveValue('viewer');
   await expect(page.locator('#adminMsg')).toContainText('Somebody else changed that account first');
+});
+
+test('an account that is already gone comes off the list instead of refusing for ever', async ({ page }) => {
+  const MARIE = { ...GRACE, id: 'a0000000-0000-4000-8000-000000000004', email: 'marie@example.test' };
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS, MARIE] });
+  await open(page, '/#/admin');
+  await expect(page.locator('#peopleList .person')).toHaveCount(4);
+
+  // Another admin, or this one in another tab, removed all three while this
+  // screen still had them drawn. Every write to a row that is not there is
+  // refused the same way, so "try again" is an instruction that cannot be
+  // followed.
+  server.users = server.users.filter((u) => u.id === ADA.id);
+
+  await page.locator('.person', { hasText: GRACE.email }).getByText('Turn off access').click();
+  await expect(page.locator('#adminMsg')).toContainText('no longer exists');
+  await expect(page.locator('.person', { hasText: GRACE.email })).toHaveCount(0);
+
+  // The same answer to the same question from the other two buttons a row
+  // carries: a fresh link, and removing it.
+  await page.locator('.person', { hasText: LINUS.email }).getByText('Send the link again').click();
+  await expect(page.locator('.person', { hasText: LINUS.email })).toHaveCount(0);
+
+  page.on('dialog', (d) => d.accept().catch(() => {}));
+  await page.locator('.person', { hasText: MARIE.email }).getByText('Remove').click();
+  await expect(page.locator('.person', { hasText: MARIE.email })).toHaveCount(0);
+  await expect(page.locator('#peopleList .person')).toHaveCount(1);
+});
+
+test('a session that ended while the people screen was open opens the sign-in form', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE] });
+  await open(page, '/#/admin');
+  await expect(page.locator('#peopleList .person')).toHaveCount(2);
+
+  // It expired, or somebody signed out in another tab. Saying "sign in again"
+  // on a screen with nothing to sign in with is the failure the planner had
+  // removed from it already.
+  server.session = null;
+
+  await page.locator('.person', { hasText: GRACE.email }).getByText('Turn off access').click();
+  await expect(page.locator('#panelLogin')).toBeVisible();
+  await expect(page.locator('#authLede')).toContainText('Your session has ended');
+  await expect(page.locator('#panelAdmin')).toBeHidden();
+});
+
+/* ------------------------------------------------------------------
+ * Activity
+ * ------------------------------------------------------------------ */
+
+test('an activity list that would not load offers something to try again with', async ({ page }) => {
+  const server = await mountAccounts(page, {
+    session: ADA, users: [ADA], activity: [ENTRY], activityFails: 1,
+  });
+  await open(page, '/#/activity');
+
+  // Nothing is listed, so there is no "Show older" to press and no way back
+  // to this screen from a screen it hides. Without a control here the only
+  // way to ask again is to leave and come back.
+  await expect(page.locator('#activityMsg')).toContainText('Could not load the activity');
+  const again = page.locator('#activityMore');
+  await expect(again).toBeVisible();
+  await expect(again).toHaveText('Try again');
+
+  await again.click();
+  await expect(page.locator('#activityList .activity')).toHaveCount(1);
+  // And the refusal goes with the load that worked, rather than staying under
+  // the list it is no longer about.
+  await expect(page.locator('#activityMsg')).toHaveText('');
+  expect(server.calls.filter((c) => c.path.startsWith('/activity'))).toHaveLength(2);
 });
 
 test("an account with no password cannot be switched on, and the server's reason is shown", async ({ page }) => {
@@ -645,6 +773,7 @@ test('an invitation opened in Indonesian is in Indonesian from the first screen'
   await expect(page.locator('#authTitle')).toHaveText('Buat kata sandi');
   await expect(page.locator('label[for="newPassword"]')).toHaveText('Kata sandi baru');
   await expect(page.locator('#setPasswordSubmit')).toHaveText('Simpan kata sandi');
+  await expect(page.locator('#showPassword')).toHaveText('Tampilkan kata sandi');
   expect(page.url()).not.toContain('token=');
 
   await page.fill('#newPassword', 'pendek');
@@ -655,8 +784,10 @@ test('an invitation opened in Indonesian is in Indonesian from the first screen'
   await page.fill('#newPassword', PASSWORD);
   await page.fill('#newPassword2', PASSWORD);
   await page.click('#setPasswordSubmit');
-  await expect(page.locator('#authTitle')).toHaveText('Kata sandi tersimpan');
-  await expect(page.locator('#authNoteAct')).toHaveText('Masuk');
+  // And the sign-in form it leads to, still saying what just happened.
+  await expect(page.locator('#authTitle')).toHaveText('Masuk');
+  await expect(page.locator('#authLede'))
+    .toHaveText('Kata sandimu sudah tersimpan. Masuk dengan kata sandi itu untuk membuka perencana.');
 });
 
 test('no accounts screen leaves English, or a raw key, showing in another language', async ({ page }) => {
