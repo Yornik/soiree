@@ -248,17 +248,22 @@ func proposeTable(sh *Sheet, blk block) (*Table, []string) {
 	return table, notes
 }
 
-// tasksColumns keeps only the fields a tasks table understands, renaming item
-// to name.
+// tasksColumns renames the fields a tasks table has its own word for, and
+// drops nothing: a field it cannot hold is left in place for the caller's
+// "has no place for" loop to report as unmapped. Filtering here instead took
+// a column out of the proposal without a word, which is the one thing
+// detection is not allowed to do — and a task's deadline is its due date, so
+// that column was a date the reminders would never have run on.
 func tasksColumns(in map[string]string) map[string]string {
 	out := map[string]string{}
 	for field, ref := range in {
-		if field == "item" {
+		switch {
+		case field == "item":
 			field = "name"
+		case field == "lockBy" && in["due"] == "":
+			field = "due"
 		}
-		if _, err := canonicalField(KindTasks, field); err == nil {
-			out[field] = ref
-		}
+		out[field] = ref
 	}
 	return out
 }

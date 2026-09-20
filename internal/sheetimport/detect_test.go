@@ -72,6 +72,61 @@ func TestDetectProposesATaskTable(t *testing.T) {
 	}
 }
 
+// A task list whose date column is headed "Deadline", which is what people
+// write above the date a task has to be done by.
+const taskDeadlineCSV = "Task;Owner;Deadline;Status\n" +
+	"Book the venue;Ada;2027-03-04;done\n" +
+	"Send invitations;Grace;2027-05-01;in progress\n"
+
+func TestDetectReadsATaskDeadlineAsItsDueDate(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(taskDeadlineCSV), ';')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, notes := Detect(book)
+	if len(cfg.Tables) != 1 {
+		t.Fatalf("proposed %d tables; want 1:\n%+v", len(cfg.Tables), cfg.Tables)
+	}
+	// "Deadline" is a budget word here, and a task has no second date to
+	// decide by, so that column is the task's due date or it is nowhere —
+	// and those dates are what the deadline digest runs on.
+	if got := cfg.Tables[0].Columns["due"]; got != "C" {
+		t.Errorf("proposed due = %q; want C (columns: %v; notes: %q)", got, cfg.Tables[0].Columns, notes)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("proposal is not valid: %v", err)
+	}
+}
+
+// Both a deadline and a due date, so only one of the two can be the column
+// the tasks table keeps.
+const taskTwoDatesCSV = "Task;Owner;Deadline;Due date;Status\n" +
+	"Book the venue;Ada;2027-01-05;2027-03-04;done\n" +
+	"Send invitations;Grace;2027-02-01;2027-05-01;in progress\n"
+
+func TestDetectNamesADateATaskTableCannotHold(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(taskTwoDatesCSV), ';')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, notes := Detect(book)
+	if len(cfg.Tables) != 1 {
+		t.Fatalf("proposed %d tables; want 1:\n%+v", len(cfg.Tables), cfg.Tables)
+	}
+	if got := cfg.Tables[0].Columns["due"]; got != "D" {
+		t.Errorf("proposed due = %q; want D (columns: %v)", got, cfg.Tables[0].Columns)
+	}
+	// The column that lost is the one the operator has to hear about: a
+	// proposal that leaves it out without a word is the quiet drop this
+	// file's own contract rules out.
+	if !noted(notes, "C (looks like lockBy") {
+		t.Errorf("the date column the proposal could not keep is named nowhere; notes: %q", notes)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("proposal is not valid: %v", err)
+	}
+}
+
 // One table to the person who made it: a header, three lines, a section
 // heading, three more lines. To detection the heading is a second header, so
 // rows 5-8 become a block of their own whose "titles" match nothing.
