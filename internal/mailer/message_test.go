@@ -227,6 +227,91 @@ func TestSubjectIsEncoded(t *testing.T) {
 	}
 }
 
+// subjectLines returns the Subject field as it goes out on the wire: its own
+// line, and every folded continuation after it.
+func subjectLines(t *testing.T, raw string) []string {
+	t.Helper()
+	head, _, ok := strings.Cut(raw, "\r\n\r\n")
+	if !ok {
+		t.Fatalf("no blank line between headers and body:\n%s", raw)
+	}
+	var out []string
+	for _, line := range strings.Split(head, "\r\n") {
+		switch {
+		case strings.HasPrefix(line, "Subject:"):
+			out = append(out, line)
+		case len(out) == 0:
+			continue
+		case strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t"):
+			out = append(out, line)
+		default:
+			return out
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no Subject header:\n%s", head)
+	}
+	return out
+}
+
+// One accent Q-encodes the whole subject, and mime.QEncoding then splits it
+// into encoded-words of up to 75 characters — counting nothing for the
+// "Subject: " in front of the first one. RFC 2047 section 2 allows a line
+// holding an encoded-word 76, so an event name with an é in it and the digest
+// headline after it goes out over that limit unless the header is folded.
+//
+// Only the subject's own lines are measured. Content-Type carries a
+// 60-character multipart boundary and is past 76 by construction, and it holds
+// no encoded-word, so its length is a different question from this one.
+func TestLongEncodedSubjectIsFolded(t *testing.T) {
+	const subject = "Célébration: 3 items need a decision before the weekend, 2 already late"
+
+	raw, err := testConfig.Build(Message{
+		To:      []string{"ada@example.test"},
+		Subject: subject,
+		Text:    "body",
+	}, testTime, "<abc@example.test>")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	for _, line := range subjectLines(t, string(raw)) {
+		if len(line) > 76 {
+			t.Errorf("subject line of %d octets exceeds the 76 RFC 2047 allows: %q", len(line), line)
+		}
+	}
+
+	// Folding is only worth something if it unfolds: the words go back
+	// together with the space between them, which a decoder drops.
+	msg, err := mail.ReadMessage(strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	decoded, err := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
+	if err != nil {
+		t.Fatalf("decode subject: %v", err)
+	}
+	if decoded != subject {
+		t.Errorf("decoded subject = %q, want %q", decoded, subject)
+	}
+}
+
+// A subject that fits stays on one line, encoded or not: folding every encoded
+// subject would cost a raw transcript its readability and buy nothing.
+func TestShortEncodedSubjectStaysOnOneLine(t *testing.T) {
+	raw, err := testConfig.Build(Message{
+		To:      []string{"ada@example.test"},
+		Subject: "Soirée: 2 items past their date",
+		Text:    "body",
+	}, testTime, "<abc@example.test>")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if lines := subjectLines(t, string(raw)); len(lines) != 1 {
+		t.Errorf("subject was folded into %d lines: %q", len(lines), lines)
+	}
+}
+
 // A newline in the subject is header injection: everything after it is read by
 // the server as a header of its own, which is how a subject becomes a Bcc.
 func TestBuildRejectsHeaderInjection(t *testing.T) {
