@@ -257,7 +257,10 @@ sends only the fields that differ, carrying the revision they were read at. A
 write somebody else got to first comes back `409` with the row as it now
 stands, and the two are merged three ways against that copy: a field this
 browser did not touch takes their value, a field it did keeps ours and goes
-again. Nothing is silently overwritten in either direction.
+again. A field both people changed at once is the one case where one of the two
+values has to go: the list of who is paying for a line is a set, so there both
+survive, and anywhere else this browser's value wins and the page says so
+rather than claiming both were kept.
 
 ## Status
 
@@ -287,7 +290,10 @@ What works end to end:
   history.
 - **Live sync.** The page holds one `EventSource` on `GET /api/v1/events`. A
   second person's edit arrives on its own, and is merged three ways against the
-  copy both sides started from, so nothing anybody is typing is overwritten.
+  copy both sides started from, so nothing being typed in this browser is
+  overwritten. Where both people changed the same field, who is paying for a
+  line is merged as the set it is, and anything else keeps this browser's
+  value.
 - **Signing out takes the plan off that browser.** The offline copy is a ledger
   of names against money; a sign-out removes it from every tab, after trying to
   send anything unsent and asking before discarding what it could not.
