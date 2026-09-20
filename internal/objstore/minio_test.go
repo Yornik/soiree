@@ -27,6 +27,8 @@ func startMinIO(ctx context.Context) (string, func(), error) {
 				"MINIO_ROOT_USER":     s3test.ContainerAccessKey,
 				"MINIO_ROOT_PASSWORD": s3test.ContainerSecretKey,
 			},
+			// That the process is up, and no more than that: MinIO answers
+			// this before it can serve S3. s3test.Get waits for the rest.
 			WaitingFor: wait.ForHTTP("/minio/health/ready").WithPort("9000/tcp").
 				WithStartupTimeout(3 * time.Minute),
 		},
