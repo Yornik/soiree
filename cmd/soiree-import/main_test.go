@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,12 +106,32 @@ func TestRunImportsWithFlagMapping(t *testing.T) {
 	if state.Tasks == nil {
 		t.Error("tasks must be an array, or the app refuses the file")
 	}
-	var total float64
+	// In whole cents from a rounded unit price, which is how the page adds a
+	// budget up. The float product would forgive a unit price that does not
+	// survive being stored. math.Round and the page's Math.round part ways
+	// only on a negative half, and nothing in this fixture is negative.
+	var cents float64
 	for _, item := range state.BudgetItems {
-		total += item.Unit * item.Qty
+		cents += math.Round(math.Round(item.Unit*100) * item.Qty)
 	}
-	if total != 4720 {
-		t.Errorf("budget total = %v; want 4720 with the sub-items counted once", total)
+	if cents != 472000 {
+		t.Errorf("budget total = %v cents; want 472000 with the sub-items counted once", cents)
+	}
+}
+
+func TestRunRefusesACurrencyThatIsNotACode(t *testing.T) {
+	csv := writeFixture(t, "costs.csv", costsCSV)
+
+	var err error
+	quiet(t, func() {
+		err = run([]string{"-header", "1", "-map", "item=A,qty=B,total=C", "-currency", "euro", "-dry-run", csv})
+	})
+	// A misspelt code would quietly fall back to two decimals, which for a
+	// zero-decimal currency is the check not running at all. The wording is
+	// pinned because "currency" alone is also in what a binary without the
+	// flag answers, and that is not this refusal.
+	if err == nil || !strings.Contains(err.Error(), "ISO 4217") {
+		t.Fatalf("run -currency euro = %v; want it refused as not a code", err)
 	}
 }
 

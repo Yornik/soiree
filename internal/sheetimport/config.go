@@ -42,6 +42,10 @@ var defaultChildPrefixes = []string{"-", "–", "—", "•", "*", "·"}
 type Config struct {
 	// Decimal is auto, dot or comma. See DecimalMode.
 	Decimal string `json:"decimal,omitempty"`
+	// Currency is the planner's SOIREE_CURRENCY. Nothing is converted by it;
+	// it says how many decimals the planner keeps, which decides whether a
+	// stated total survives being stored as a unit price. Empty means two.
+	Currency string `json:"currency,omitempty"`
 	// TotalKeywords replaces the defaults for every table.
 	TotalKeywords []string `json:"totalKeywords,omitempty"`
 	// ChildPrefixes replaces the leading marks that make a row a child.
@@ -120,6 +124,9 @@ func (c *Config) WriteJSON(w io.Writer) error {
 func (c *Config) Validate() error {
 	if _, err := ParseDecimalMode(c.Decimal); err != nil {
 		return err
+	}
+	if cur := strings.TrimSpace(c.Currency); cur != "" && len(cur) != 3 {
+		return fmt.Errorf("currency must be a 3-letter ISO 4217 code, got %q", c.Currency)
 	}
 	if len(c.Tables) == 0 {
 		return fmt.Errorf("mapping defines no tables")

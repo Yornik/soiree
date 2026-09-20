@@ -61,6 +61,12 @@ func TestLoadConfigRejectsMistakes(t *testing.T) {
 			want: "unknown decimal mode",
 		},
 		{
+			// It would otherwise fall back to two decimals without a word.
+			name: "currency that is not a code",
+			in:   `{"currency":"euro","tables":[{"columns":{"item":"A"}}]}`,
+			want: "3-letter ISO 4217 code",
+		},
+		{
 			name: "parent item on a task table",
 			in:   `{"tables":[{"kind":"tasks","parentItem":"Catering","columns":{"name":"A"}}]}`,
 			want: "only applies to a budget table",

@@ -3,9 +3,10 @@ package sheetimport
 import (
 	"bytes"
 	"encoding/json"
-	"math"
 	"strings"
 	"testing"
+
+	"github.com/Yornik/soiree/internal/store"
 )
 
 // messyBook is the shape this importer exists for: one sheet holding two
@@ -304,6 +305,321 @@ func TestConvertHonoursConfiguredKeywords(t *testing.T) {
 	}
 }
 
+// A budget in sections, the ordinary shape of a hand-made one: each section
+// closes with its own subtotal and the sheet closes with the total of it all.
+// None of the three labels is a default keyword, so the arithmetic is the only
+// thing standing between this sheet and a budget of three times its size.
+//
+// Row 1 is the header; rows 2-5 and 6-9 are a heading, two lines and their
+// subtotal (1200 and 3800); row 10 is the total (5000).
+const sectionsCSV = "Item;Bedrag\n" +
+	"LOCATIE;\n" +
+	"Zaalhuur;1.000,00\n" +
+	"Schoonmaak;200,00\n" +
+	"Subtotaal locatie;1.200,00\n" +
+	"CATERING;\n" +
+	"Diner;3.000,00\n" +
+	"Drank;800,00\n" +
+	"Subtotaal catering;3.800,00\n" +
+	"Totaal;5.000,00\n"
+
+func sectionsConfig() *Config {
+	return &Config{
+		Decimal: "comma",
+		Tables: []Table{{
+			Name:      "sections",
+			HeaderRow: 1,
+			Columns:   map[string]string{"item": "A", "unit": "B"},
+		}},
+	}
+}
+
+func TestConvertFlagsEverySubtotalAndTheTotal(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(sectionsCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	state, report, err := Convert(book, sectionsConfig())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+
+	// The second subtotal has to be measured against its own section, and the
+	// total against the lines alone: a sum that still holds the first subtotal
+	// matches neither.
+	for _, row := range []int{5, 9, 10} {
+		if !warnedRow(tr, row, "equals the sum") {
+			t.Errorf("row %d is a sum of rows above it and should be flagged; warnings: %v", row, tr.Warnings)
+		}
+	}
+	if len(tr.Warnings) != 3 {
+		t.Errorf("%d warnings; want exactly the three summary rows: %v", len(tr.Warnings), tr.Warnings)
+	}
+	// Flagged, never dropped: the check reads arithmetic, and arithmetic can
+	// be a coincidence.
+	for _, name := range []string{"Subtotaal locatie", "Subtotaal catering", "Totaal"} {
+		if findItem(state.BudgetItems, name) == nil {
+			t.Errorf("%q was flagged and must still be imported", name)
+		}
+	}
+}
+
+func TestConvertStartsANewSectionAfterAKeywordRow(t *testing.T) {
+	// The operator did what the first warning said and listed that label. The
+	// rows below it must not go quiet as a result: a clean report over a
+	// budget that still counts the second subtotal and the total is the worst
+	// outcome there is.
+	book, _, err := ReadCSV(strings.NewReader(sectionsCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg := sectionsConfig()
+	cfg.TotalKeywords = []string{"total", "subtotaal locatie"}
+
+	_, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+	if !skippedRow(tr, 5, "summary row") {
+		t.Fatalf("row 5 should be skipped by its keyword; skips: %v", tr.Skipped)
+	}
+	for _, row := range []int{9, 10} {
+		if !warnedRow(tr, row, "equals the sum") {
+			t.Errorf("row %d should still be flagged after the keyword row; warnings: %v", row, tr.Warnings)
+		}
+	}
+}
+
+func TestConvertFlagsTheTotalBelowACoincidence(t *testing.T) {
+	// No sections here, only a line that happens to equal what is above it:
+	// two lines of 500 under a heading, or 200 after two of 100. That flag is
+	// wrong, and the line it lands on is money. Left out of every sum the way a
+	// real subtotal is, it takes the total at the bottom with it: 1300 and 700
+	// equal nothing any more, and come in as one more line under a report that
+	// looks handled.
+	for _, tc := range []struct {
+		name, csv, line string
+	}{
+		{"under a heading", "Item,Amount\nVENUE,\nHall,500\nCleaning,500\nSecurity,300\nTotaal,1300\n", "Cleaning"},
+		{"among the lines", "Item,Amount\nFlowers,100\nCandles,100\nLinen,200\nChairs,300\nTotaal,700\n", "Linen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			book, _, err := ReadCSV(strings.NewReader(tc.csv), 0)
+			if err != nil {
+				t.Fatalf("ReadCSV: %v", err)
+			}
+			cfg := &Config{Tables: []Table{{HeaderRow: 1, Columns: map[string]string{"item": "A", "unit": "B"}}}}
+			state, report, err := Convert(book, cfg)
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			tr := &report.Tables[0]
+			if !warnedRow(tr, 6, "equals the sum") {
+				t.Errorf("row 6 is the total of every line above it and should be flagged; warnings: %v", tr.Warnings)
+			}
+			if findItem(state.BudgetItems, tc.line) == nil {
+				t.Errorf("%q was flagged by coincidence and must still be imported", tc.line)
+			}
+		})
+	}
+}
+
+func TestConvertReportsFiguresItWillNotGuess(t *testing.T) {
+	// Text cells, which is every cell of a CSV. Each of these used to import
+	// as a confident figure under a report reading "0 warnings": 2500, 250,
+	// 250 and 12032026.
+	const csv = "Item,Amount\n" +
+		"Chairs,2 x 500\n" +
+		"Discount,−250\n" +
+		"Refund,250-\n" +
+		"Deposit paid on,12.03.2026\n"
+	book, _, err := ReadCSV(strings.NewReader(csv), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg := &Config{Tables: []Table{{HeaderRow: 1, Columns: map[string]string{"item": "A", "unit": "B"}}}}
+	state, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+
+	if got := findItem(state.BudgetItems, "Discount").Unit; got != -250 {
+		t.Errorf("Discount = %v; want -250, the minus sign is typographic but it is a minus sign", got)
+	}
+	for row, name := range map[int]string{2: "Chairs", 4: "Refund", 5: "Deposit paid on"} {
+		item := findItem(state.BudgetItems, name)
+		if item.Unit != 0 {
+			t.Errorf("%s = %v; want 0, the cell does not hold one plain figure", name, item.Unit)
+		}
+		if !warnedRow(tr, row, "unit column") {
+			t.Errorf("row %d should warn about the unit column; warnings: %v", row, tr.Warnings)
+		}
+		if !strings.Contains(item.Note, "unit: ") {
+			t.Errorf("%s note = %q; want the unread text kept", name, item.Note)
+		}
+	}
+}
+
+func TestConvertReportsRowsOutsideEveryTable(t *testing.T) {
+	// The mapping is the one -detect proposes for this sheet, which stops at
+	// the section heading in row 5. Every row inside it is accounted for, and
+	// that is the trap: "3 imported, 0 skipped, 0 warnings" over a sheet with
+	// seven rows of data in it.
+	book, _, err := ReadCSV(strings.NewReader(headingCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, _ := Detect(book)
+	_, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	// Rows 5-8 and only those: the header in row 1 is read, not left out.
+	out := report.String()
+	for _, want := range []string{
+		`sheet "csv": rows 5-8 hold data and belong to no table`,
+		"0 warnings, 4 rows outside every table",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestReportIsQuietAboutASheetReadInFull(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(sectionsCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	_, report, err := Convert(book, sectionsConfig())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if out := report.String(); strings.Contains(out, "no table") || strings.Contains(out, "outside every") {
+		t.Errorf("every row is inside the table, so there is nothing to say:\n%s", out)
+	}
+}
+
+// A stated total next to a guest-count quantity. The planner keeps the unit
+// price in whole minor units, so the first three of these come back as
+// 2499.00, 1000.50 and 100.03, and the budget no longer adds up to the figure
+// at the bottom of the sheet. The fourth divides cleanly. The dash row is a
+// child: the page never reads it, its amount reaches the budget inside the
+// parent, and there is nothing to warn about.
+const driftCSV = "Item,Qty,Total\n" +
+	"Invitations,300,2500\n" +
+	"Chairs,150,1000\n" +
+	"Favours,7,100\n" +
+	"Tables,10,450\n" +
+	"Decorations,,\n" +
+	"- Candles,7,100\n"
+
+func driftConfig() *Config {
+	return &Config{Tables: []Table{{
+		HeaderRow: 1,
+		Columns:   map[string]string{"item": "A", "qty": "B", "total": "C"},
+	}}}
+}
+
+func TestConvertWarnsWhenAStatedTotalWillNotSurvive(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(driftCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	_, report, err := Convert(book, driftConfig())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	tr := &report.Tables[0]
+
+	for row, shown := range map[int]string{2: "2499.00", 3: "1000.50", 4: "100.03"} {
+		if !warnedRow(tr, row, shown) {
+			t.Errorf("row %d should warn that the planner will show %s; warnings: %v", row, shown, tr.Warnings)
+		}
+	}
+	if len(tr.Warnings) != 3 {
+		t.Errorf("%d warnings; want 3, none for the line that divides cleanly or for the child row: %v",
+			len(tr.Warnings), tr.Warnings)
+	}
+	// Two decimals was an assumption here, and the report owns up to it.
+	if out := report.String(); !strings.Contains(out, "checked at 2 decimals (assumed") {
+		t.Errorf("the report should say which precision it assumed:\n%s", out)
+	}
+}
+
+func TestConvertChecksStatedTotalsInTheCurrencysOwnDecimals(t *testing.T) {
+	// 100 over 8 is 12.50, a whole number of cents and not a whole number of
+	// rupiah. The same sheet is fine in one currency and a line of 104 in the
+	// other, so the check is only as good as the exponent it is given.
+	const csv = "Item,Qty,Total\n" +
+		"Ribbon,8,100\n" +
+		"Catering,150,20000000\n"
+	for _, c := range []struct {
+		currency string
+		want     map[int]string
+		header   string
+	}{
+		{currency: "EUR", want: map[int]string{3: "19999999.50"}, header: "checked at 2 decimals (EUR)"},
+		{currency: "idr", want: map[int]string{2: "104, not 100", 3: "19999950, not 20000000"}, header: "checked at 0 decimals (IDR)"},
+	} {
+		book, _, err := ReadCSV(strings.NewReader(csv), 0)
+		if err != nil {
+			t.Fatalf("ReadCSV: %v", err)
+		}
+		cfg := driftConfig()
+		cfg.Currency = c.currency
+		_, report, err := Convert(book, cfg)
+		if err != nil {
+			t.Fatalf("Convert: %v", err)
+		}
+		tr := &report.Tables[0]
+		if len(tr.Warnings) != len(c.want) {
+			t.Errorf("%s: %d warnings; want %d: %v", c.currency, len(tr.Warnings), len(c.want), tr.Warnings)
+		}
+		for row, shown := range c.want {
+			if !warnedRow(tr, row, shown) {
+				t.Errorf("%s: row %d should warn with %q; warnings: %v", c.currency, row, shown, tr.Warnings)
+			}
+		}
+		if out := report.String(); !strings.Contains(out, c.header) {
+			t.Errorf("%s: report should say %q:\n%s", c.currency, c.header, out)
+		}
+	}
+}
+
+func TestExponentMirrorsTheStore(t *testing.T) {
+	// Every three-letter code there can be, so that a currency added to one
+	// table and not the other fails here and not in somebody's budget.
+	code := []byte("AAA")
+	for code[0] = 'A'; code[0] <= 'Z'; code[0]++ {
+		for code[1] = 'A'; code[1] <= 'Z'; code[1]++ {
+			for code[2] = 'A'; code[2] <= 'Z'; code[2]++ {
+				if got, want := exponent(string(code)), store.Exponent(string(code)); got != want {
+					t.Errorf("exponent(%s) = %d; internal/store says %d", code, got, want)
+				}
+			}
+		}
+	}
+	if got := exponent(""); got != store.Exponent("") {
+		t.Errorf("exponent of no currency = %d; internal/store says %d", got, store.Exponent(""))
+	}
+}
+
+func TestPlannerTotalRoundsTheWayThePageDoes(t *testing.T) {
+	// Math.round takes a half up, math.Round takes it away from zero. A
+	// refund of 2.5 cents a piece is where the two part ways.
+	if got := plannerTotal(-0.025, 1, 2); got != -2 {
+		t.Errorf("plannerTotal(-0.025, 1) = %v minor units; the page's Math.round gives -2", got)
+	}
+	if got := plannerTotal(2500.0/300, 300, 2); got != 249900 {
+		t.Errorf("plannerTotal(2500/300, 300) = %v minor units; the page shows 2499.00", got)
+	}
+}
+
 func TestConvertRefusesUnmatchedParent(t *testing.T) {
 	// Attaching a quote to the wrong line would be invisible in the output,
 	// so a parent that cannot be found exactly is a hard failure.
@@ -365,12 +681,16 @@ func TestOutputLoadsInTheApp(t *testing.T) {
 	// The flat total the app will show must not double-count the rolled-up
 	// children: 1200 + 0 + 3400 + 2500 + 0 (run of show)
 	//         + 18400000 + 3600000 + 2700000 + 2900000 + 27600000 (costs).
+	//
+	// Added up the way the page adds it up, in whole minor units from a
+	// rounded unit price, and compared exactly. A float product with half a
+	// unit of slack is how a total that drifts by a cent a line stays green.
 	var total float64
 	for _, item := range round.BudgetItems {
-		total += item.Unit * item.Qty
+		total += plannerTotal(item.Unit, item.Qty, defaultExponent)
 	}
-	if want := 55207100.0; math.Abs(total-want) > 0.5 {
-		t.Errorf("flat budget total = %v; want %v", total, want)
+	if want := 5520710000.0; total != want {
+		t.Errorf("flat budget total = %v minor units; want %v", total, want)
 	}
 }
 

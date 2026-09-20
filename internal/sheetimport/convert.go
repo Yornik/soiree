@@ -35,7 +35,7 @@ func Convert(book *Book, cfg *Config) (*State, *Report, error) {
 		mode:  mode,
 		ids:   newIDGen(),
 		state: NewState(),
-		rep:   &Report{Decimal: mode, Tables: make([]TableReport, len(cfg.Tables))},
+		rep:   &Report{Decimal: mode, Currency: cfg.Currency, Tables: make([]TableReport, len(cfg.Tables))},
 	}
 	c.state.Ceiling = cfg.Ceiling
 	c.state.InflationPct = cfg.InflationPct
@@ -52,6 +52,7 @@ func Convert(book *Book, cfg *Config) (*State, *Report, error) {
 			}
 		}
 	}
+	c.reportOutside()
 	return c.state, c.rep, nil
 }
 
@@ -65,6 +66,9 @@ type converter struct {
 	// cols is the current table's column index -> field, resolved once per
 	// table rather than per row.
 	cols map[int]string
+	// read is, per sheet some table touches, the rows that a table answers
+	// for: its row range and its header row.
+	read map[*Sheet]map[int]bool
 }
 
 // builtRow is a row that survived the skip checks, still carrying where it
@@ -84,6 +88,7 @@ func (c *converter) table(idx int) error {
 		return fmt.Errorf("table %s: %w", t.label(idx), err)
 	}
 	first, last := rowRange(t, sh)
+	c.claim(sh, t.HeaderRow, first, last)
 
 	c.cols = t.mappedColumns()
 	tr.Name, tr.Sheet, tr.Kind = t.Name, sh.Name, t.kind()
@@ -104,6 +109,49 @@ func (c *converter) table(idx int) error {
 	return nil
 }
 
+// claim records the rows a table answers for.
+func (c *converter) claim(sh *Sheet, header, first, last int) {
+	if c.read == nil {
+		c.read = map[*Sheet]map[int]bool{}
+	}
+	rows := c.read[sh]
+	if rows == nil {
+		rows = map[int]bool{}
+		c.read[sh] = rows
+	}
+	rows[header] = true
+	for n := first; n <= last; n++ {
+		rows[n] = true
+	}
+}
+
+// reportOutside lists, for every sheet a table reads from, the rows that hold
+// something and that no table answers for.
+//
+// "Never drop a row quietly" is kept table by table, and that is not enough
+// on its own: a mapping whose range ends at a section heading accounts for
+// every row it scanned and says nothing of the rows beneath. A sheet no table
+// names at all is left alone, because leaving a whole sheet out is something
+// the operator did on purpose.
+func (c *converter) reportOutside() {
+	for i := range c.book.Sheets {
+		sh := &c.book.Sheets[i]
+		read, touched := c.read[sh]
+		if !touched {
+			continue
+		}
+		var rows []int
+		for n := 1; n <= len(sh.Rows); n++ {
+			if !read[n] && !sh.RowEmpty(n) {
+				rows = append(rows, n)
+			}
+		}
+		if len(rows) > 0 {
+			c.rep.Outside = append(c.rep.Outside, SheetGap{Sheet: sh.Name, Rows: rows})
+		}
+	}
+}
+
 // rowRange resolves the 1-based, inclusive data range.
 func rowRange(t *Table, sh *Sheet) (first, last int) {
 	first = t.FirstRow
@@ -121,11 +169,13 @@ func rowRange(t *Table, sh *Sheet) (first, last int) {
 }
 
 // skipRow applies the checks every kind shares and returns the row's label.
-// ok is false when the row does not become anything.
-func (c *converter) skipRow(t *Table, tr *TableReport, sh *Sheet, n int, labelField string) (label string, ok bool) {
+// ok is false when the row does not become anything. summary is set when what
+// skipped it was a total keyword: the row is gone, but the budget's sum check
+// still has to know that a section closed there.
+func (c *converter) skipRow(t *Table, tr *TableReport, sh *Sheet, n int, labelField string) (label string, summary, ok bool) {
 	if sh.RowEmpty(n) {
 		tr.Blank++
-		return "", false
+		return "", false, false
 	}
 
 	mappedEmpty := true
@@ -137,12 +187,12 @@ func (c *converter) skipRow(t *Table, tr *TableReport, sh *Sheet, n int, labelFi
 	}
 	if mappedEmpty {
 		tr.skip(n, "nothing in any mapped column")
-		return "", false
+		return "", false, false
 	}
 
 	if t.HeaderRow > 0 && rowRepeatsHeader(sh, t.HeaderRow, n) {
 		tr.skip(n, fmt.Sprintf("repeats the header from row %d", t.HeaderRow))
-		return "", false
+		return "", false, false
 	}
 
 	label = c.text(sh, t, n, labelField)
@@ -169,22 +219,56 @@ func (c *converter) skipRow(t *Table, tr *TableReport, sh *Sheet, n int, labelFi
 	for _, kw := range t.totalKeywords(c.cfg) {
 		if matchesSummaryKeyword(label, kw) {
 			tr.skip(n, fmt.Sprintf("summary row (matched keyword %q)", kw))
-			return "", false
+			return "", true, false
 		}
 	}
-	return label, true
+	return label, false, true
+}
+
+// sumRun is a running figure that a later row is measured against.
+type sumRun struct {
+	sum  float64
+	rows int
+}
+
+func (s *sumRun) add(v float64) {
+	s.sum += v
+	s.rows++
+}
+
+// matches reports a figure that equals the run so far.
+func (s sumRun) matches(v float64) bool {
+	return s.rows >= minSumRows && s.sum > 0 && v != 0 &&
+		math.Abs(v-s.sum) <= sumTolerance*s.sum
 }
 
 func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, last int) error {
 	var (
-		rows       []builtRow
-		runningSum float64
-		preceding  int
+		rows []builtRow
+		// A subtotal adds up its own section and the total at the bottom adds
+		// up every line, so there are two figures to measure a row against.
+		// Neither may ever hold a summary row: leave one subtotal in the sum
+		// and every comparison after it is against a figure no row will
+		// equal, which is how a sheet in sections came in at three times its
+		// size with a single warning.
+		//
+		// A flag can be a coincidence, though, and then the row left out was a
+		// line: two of 500 under a heading, and the total at the bottom equals
+		// neither sum. So the third figure takes the other reading, in which
+		// every row flagged so far was money. It is the plain running sum this
+		// check began as, and keeping it means nothing that sum caught is
+		// missed now. What it does not reach is a coincidence inside a later
+		// section: there the subtotal still holds the earlier ones.
+		section, grand, all sumRun
+		lastSummary         int
 	)
 
 	for n := first; n <= last; n++ {
 		tr.Scanned++
-		label, ok := c.skipRow(t, tr, sh, n, "item")
+		label, summary, ok := c.skipRow(t, tr, sh, n, "item")
+		if summary {
+			section, lastSummary = sumRun{}, n
+		}
 		if !ok {
 			continue
 		}
@@ -213,6 +297,12 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 			v, _ := c.value(tr, n, "total", total, &item.Note)
 			if qty != 0 {
 				item.Unit, item.Qty = v/qty, qty
+				// A row that folds into the one above is exempt: the page
+				// never reads a child, and its amount reaches the budget as
+				// part of the parent's.
+				if folds := child && len(rows) > 0; !folds {
+					c.checkStatedTotal(tr, n, v, qty)
+				}
 			} else {
 				item.Unit, item.Qty = v, 1
 			}
@@ -244,14 +334,29 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 
 		// The keyword list cannot know every word for "total", so flag the
 		// arithmetic as well: a figure that equals everything above it is
-		// almost never another line item.
-		if preceding >= minSumRows && runningSum > 0 && lineTotal != 0 &&
-			math.Abs(lineTotal-runningSum) <= sumTolerance*runningSum {
-			tr.warn(n, fmt.Sprintf("%s equals the sum of the %d rows above it — if this is a total line, add its exact label to totalKeywords (matching is exact, not by substring) or leave it outside the row range",
-				formatNumber(lineTotal), preceding))
+		// almost never another line item. It only ever warns: arithmetic can
+		// be a coincidence, and a deleted line is money missing from the
+		// budget.
+		var equals string
+		switch {
+		case section.matches(lineTotal) && lastSummary == 0:
+			equals = fmt.Sprintf("the %d rows above it", section.rows)
+		case section.matches(lineTotal):
+			equals = fmt.Sprintf("the %d rows since the summary row at row %d", section.rows, lastSummary)
+		case grand.matches(lineTotal):
+			equals = fmt.Sprintf("all %d rows above it that are not summary rows themselves", grand.rows)
+		case all.matches(lineTotal):
+			equals = fmt.Sprintf("all %d rows above it, the ones flagged as sums counted as lines", all.rows)
 		}
-		runningSum += lineTotal
-		preceding++
+		if equals != "" {
+			tr.warn(n, fmt.Sprintf("%s equals the sum of %s — if this is a total line, add its exact label to totalKeywords (matching is exact, not by substring) or leave it outside the row range",
+				formatNumber(lineTotal), equals))
+			section, lastSummary = sumRun{}, n
+		} else {
+			section.add(lineTotal)
+			grand.add(lineTotal)
+		}
+		all.add(lineTotal)
 
 		rows = append(rows, builtRow{item: item, row: n, child: child})
 	}
@@ -287,6 +392,29 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 	}
 	c.state.BudgetItems = append(c.state.BudgetItems, kept...)
 	return nil
+}
+
+// checkStatedTotal warns when total/qty will not come back as total.
+//
+// The planner stores the unit price, in whole minor units, and works the line
+// total out from it. 2500 over 300 invitations is 8.33 a piece and 2499.00 a
+// line; with guest-count quantities the gap is whole euros, and the imported
+// budget stops adding up to the figure at the bottom of the sheet, which is
+// the first thing anybody checks. The plan has nowhere to keep a stated
+// total, so this cannot be put right here without giving up the quantity. It
+// can be said.
+func (c *converter) checkStatedTotal(tr *TableReport, n int, total, qty float64) {
+	exp := exponent(c.cfg.Currency)
+	// Set by the check, not by the warning: the run where nothing fires is
+	// the one where a wrong number of decimals would go unnoticed.
+	c.rep.TotalsChecked = true
+	stated := roundHalfUp(total * math.Pow10(exp))
+	shown := plannerTotal(total/qty, qty, exp)
+	if shown == stated {
+		return
+	}
+	tr.warn(n, fmt.Sprintf("total %s over qty %s is not a whole unit price at %s, so the planner will show this line as %s, not %s: map the unit price instead if the sheet has one, or correct the line after the import",
+		formatNumber(total), formatNumber(qty), count(exp, "decimal"), formatMinor(shown, exp), formatMinor(stated, exp)))
 }
 
 // assemble folds dash-prefixed rows into the row above them.
@@ -397,7 +525,7 @@ func (c *converter) attach(parentName string, items []BudgetItem, tr *TableRepor
 func (c *converter) taskTable(t *Table, tr *TableReport, sh *Sheet, first, last int) {
 	for n := first; n <= last; n++ {
 		tr.Scanned++
-		label, ok := c.skipRow(t, tr, sh, n, "name")
+		label, _, ok := c.skipRow(t, tr, sh, n, "name")
 		if !ok {
 			continue
 		}
@@ -434,7 +562,7 @@ func (c *converter) taskTable(t *Table, tr *TableReport, sh *Sheet, first, last 
 func (c *converter) noteTable(t *Table, tr *TableReport, sh *Sheet, first, last int) {
 	for n := first; n <= last; n++ {
 		tr.Scanned++
-		label, ok := c.skipRow(t, tr, sh, n, "text")
+		label, _, ok := c.skipRow(t, tr, sh, n, "text")
 		if !ok {
 			continue
 		}

@@ -47,11 +47,15 @@ func Detect(book *Book) (*Config, []string) {
 		sh := &book.Sheets[i]
 		for _, blk := range blocks(sh) {
 			table, blockNotes := proposeTable(sh, blk)
+			// Before the nil check, not after it. A block that could not be
+			// proposed is the one whose note matters most: those rows are in
+			// no table, and the mapping printed below looks complete without
+			// them.
+			notes = append(notes, blockNotes...)
 			if table == nil {
 				continue
 			}
 			cfg.Tables = append(cfg.Tables, *table)
-			notes = append(notes, blockNotes...)
 		}
 	}
 	if len(cfg.Tables) == 0 {
@@ -144,9 +148,13 @@ func looksLikeHeader(sh *Sheet, n int) bool {
 	return filled >= 2 && numeric == 0
 }
 
+// proposeTable returns a table, or nil and the reason. Never nil alone: a
+// block left out of the proposal without a word is rows dropped quietly, one
+// step before the import.
 func proposeTable(sh *Sheet, blk block) (*Table, []string) {
 	if blk.last-blk.first+1 < minDetectRows {
-		return nil, nil
+		return nil, []string{fmt.Sprintf("%s %s: too short to be a table and not proposed; map it by hand if it holds data",
+			sh.Name, rowSpan(blk.first, blk.last))}
 	}
 	header := 0
 	first := blk.first
@@ -154,7 +162,8 @@ func proposeTable(sh *Sheet, blk block) (*Table, []string) {
 		header, first = blk.first, blk.first+1
 	}
 	if first > blk.last {
-		return nil, nil
+		return nil, []string{fmt.Sprintf("%s %s: a header with nothing under it; not proposed",
+			sh.Name, rowSpan(blk.first, blk.last))}
 	}
 
 	table := &Table{
@@ -215,8 +224,17 @@ func proposeTable(sh *Sheet, blk block) (*Table, []string) {
 		}
 	}
 	if len(table.Columns) == 0 {
-		notes = append(notes, fmt.Sprintf("%s rows %d-%d: no column titles recognised — map them by hand",
-			sh.Name, blk.first, blk.last))
+		note := fmt.Sprintf("%s rows %d-%d: no column titles recognised — map them by hand",
+			sh.Name, blk.first, blk.last)
+		if header > 1 && !sh.RowEmpty(header-1) {
+			// No blank row above: blocks() split a run here because this row
+			// reads like a header. "CATERING | see quote" reads like one too,
+			// and so does a line whose only figure was refused ("2 x 500").
+			// The rows above may not have been proposed either, hence the if.
+			note += fmt.Sprintf(", or if row %d is not a header (a section heading, or a line whose figure could not be read) and the rows above it were proposed, extend lastRow of the table above it to %d",
+				header, blk.last)
+		}
+		notes = append(notes, note)
 		return nil, notes
 	}
 	if len(unnamed) > 0 {

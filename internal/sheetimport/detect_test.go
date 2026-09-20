@@ -71,3 +71,73 @@ func TestDetectProposesATaskTable(t *testing.T) {
 		t.Errorf("proposal is not valid: %v", err)
 	}
 }
+
+// One table to the person who made it: a header, three lines, a section
+// heading, three more lines. To detection the heading is a second header, so
+// rows 5-8 become a block of their own whose "titles" match nothing.
+const headingCSV = "Item,Vendor,Total\n" +
+	"Hall,Acme,1000\n" +
+	"Cleaning,Acme,200\n" +
+	"Security,Acme,350\n" +
+	"CATERING,see quote,\n" +
+	"Dinner,Cook,3000\n" +
+	"Drinks,Bar,800\n" +
+	"Cake,Bakery,250\n"
+
+func TestDetectNamesTheBlockItCouldNotPropose(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(headingCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, notes := Detect(book)
+	if len(cfg.Tables) != 1 || cfg.Tables[0].LastRow != 4 {
+		t.Fatalf("expected the one proposal to stop at row 4, which is what this guards:\n%+v", cfg.Tables)
+	}
+	// More than half the money is below row 4. A proposal that leaves it out
+	// has to say so, or the operator reviews a mapping that looks complete.
+	if !noted(notes, "rows 5-8") {
+		t.Errorf("the block left out of the proposal is named nowhere; notes: %q", notes)
+	}
+	// And what to do about it, since "no titles recognised" is only half the
+	// story when the row in question was never a row of titles.
+	if !noted(notes, "extend lastRow of the table above it to 8") {
+		t.Errorf("the note should offer the section-heading reading; notes: %q", notes)
+	}
+}
+
+func TestDetectNamesASheetItCouldNotRead(t *testing.T) {
+	// Titles in a language the keywords do not speak. "Found nothing" is true
+	// and useless; which rows were looked at is what the operator can act on.
+	const csv = "Omschrijving;Leverancier;Aantal;Prijs\n" +
+		"Zaalhuur;Acme;1;1000\n" +
+		"Stoelen;Acme;150;4\n"
+	book, _, err := ReadCSV(strings.NewReader(csv), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, notes := Detect(book)
+	if len(cfg.Tables) != 0 {
+		t.Fatalf("proposed %d tables from titles it cannot know:\n%+v", len(cfg.Tables), cfg.Tables)
+	}
+	if !noted(notes, "rows 1-3") {
+		t.Errorf("the block that was not proposed is named nowhere; notes: %q", notes)
+	}
+}
+
+func TestDetectNamesARowTooShortToBeATable(t *testing.T) {
+	// Row 1 of the fixture is a merged title on its own. Leaving it out is
+	// right; leaving it out without a word is not.
+	_, notes := Detect(messyBook(t))
+	if !noted(notes, "Plan row 1:") {
+		t.Errorf("the lone title row is named nowhere; notes: %q", notes)
+	}
+}
+
+func noted(notes []string, want string) bool {
+	for _, n := range notes {
+		if strings.Contains(n, want) {
+			return true
+		}
+	}
+	return false
+}
