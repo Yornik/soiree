@@ -920,7 +920,13 @@ paths:
 
         Reconnect on a drop. The `EventSource` of the browser does this by
         itself. It does not reconnect after a refusal with a status, such as
-        the 503 below or a 401. Reconnect from your own code in that case.
+        the 429 or the 503 below, or a 401. Reconnect from your own code in
+        that case.
+
+        The server ends the stream when the session that opened it ends: a
+        sign-out, an account disabled by an admin, or either session expiry.
+        It reads the session every five minutes, so this is not immediate.
+        The reconnect that follows is answered with a 401.
 
         The stream does not announce a change to an account.
       responses:
@@ -956,6 +962,24 @@ paths:
                     : ping
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '429':
+          description: |
+            This account already holds the maximum number of streams, which is
+            16. The code is `too_many_streams`.
+
+            This limit is about the caller and not about the instance, so
+            somebody else can still open a stream. Close one you hold, or wait
+            for `Retry-After` and open it again.
+          headers:
+            Retry-After:
+              description: Seconds to wait. It is `5`.
+              schema:
+                type: integer
+                examples: [5]
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
         '503':
           description: |
             This instance holds the maximum number of streams. The code is

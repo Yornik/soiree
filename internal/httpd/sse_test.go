@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -26,11 +28,13 @@ import (
 // write announces anything, and whether a terminated backend is reconnected to,
 // are both properties of PostgreSQL as much as of this package.
 //
-// The two exceptions are the drop policy and the subscriber cap. A client slow
-// enough to fill its buffer cannot be simulated over a loopback socket — the
-// kernel's send buffer absorbs everything an SSE frame weighs — so those are
-// exercised against the hub directly, where "this subscriber is not reading" is
-// something a test can actually state.
+// The exceptions are the drop policy, the two caps and which lookup error ends
+// a stream. A client slow enough to fill its buffer cannot be simulated over a
+// loopback socket — the kernel's send buffer absorbs everything an SSE frame
+// weighs — and a database that has stopped answering is not something to
+// arrange either, so those are exercised against the hub and a stub lookup
+// directly, where "this subscriber is not reading" and "the database is not
+// answering" are things a test can actually state.
 
 const (
 	// frameWait is how long a test waits for a frame that should already be on
@@ -196,6 +200,24 @@ func (st *stream) awaitChange(t *testing.T) store.ChangeNotice {
 func (st *stream) awaitResync(t *testing.T) {
 	t.Helper()
 	st.await(t, "resync event", func(f string) bool { return strings.HasPrefix(f, "event: resync\n") })
+}
+
+// awaitEnd waits for the server to end the stream, which reaches a reader as a
+// closed body and so as a closed channel here. Frames still arriving are read
+// past: what is being waited for is the end, not silence.
+func (st *stream) awaitEnd(t *testing.T, why string) {
+	t.Helper()
+	deadline := time.After(frameWait)
+	for {
+		select {
+		case _, ok := <-st.frames:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("the stream was still open %s, %s later", why, frameWait)
+		}
+	}
 }
 
 // awaitListening waits until the LISTEN connection is registered.
@@ -383,6 +405,66 @@ func TestEventsCapsConcurrentSubscribers(t *testing.T) {
 	}
 }
 
+// TestAnAccountIsCappedWellBelowTheInstance: the cap above is a number one
+// caller can reach on everybody else's behalf. Somebody's own share running
+// out is about that caller rather than about this instance, so it is a 429 and
+// it leaves the instance with room for everybody else.
+func TestAnAccountIsCappedWellBelowTheInstance(t *testing.T) {
+	s, ts, _, _ := newLiveServer(t, func(s *Server, _ *httptest.Server) { s.live.maxPerUser = 1 })
+
+	first := openStream(t, ts)
+	first.awaitResync(t)
+	eventually(t, "the first stream to register", func() bool { return s.live.Subscribers() == 1 })
+
+	second := openStreamRaw(t, ts)
+	if second.status != http.StatusTooManyRequests {
+		t.Fatalf("a second stream for the same account -> %d, want 429", second.status)
+	}
+	if retry := second.header.Get("Retry-After"); retry == "" {
+		t.Error("a refused stream should say when to try again")
+	}
+	// The instance is nowhere near full, and the stream that got in is
+	// unaffected.
+	if s.live.Subscribers() != 1 {
+		t.Errorf("subscribers = %d, want 1", s.live.Subscribers())
+	}
+}
+
+// TestAStreamEndsWhenItsSessionIsRevoked.
+//
+// A stream is authorised once, when it is opened, and then lives for hours.
+// Without a re-read, signing out, an admin disabling the account and both
+// session expiries reach every other route on the next request and reach an
+// open stream only when its socket happens to drop — leaving a feed of row ids
+// and revisions going to somebody who is no longer entitled to one, for as
+// long as they care to hold the connection. All four are the same row
+// disappearing from under the cookie, which is what this test does directly.
+func TestAStreamEndsWhenItsSessionIsRevoked(t *testing.T) {
+	s, ts, pool, _ := newLiveServer(t, func(s *Server, _ *httptest.Server) {
+		// The re-read rides the heartbeat, so a fast beat is a fast re-read.
+		s.live.heartbeat = 20 * time.Millisecond
+	})
+
+	st := openStream(t, ts)
+	st.awaitResync(t)
+
+	db := store.New(pool)
+	user, err := db.UserByEmail(t.Context(), string(store.RoleEditor)+"@example.test")
+	if err != nil {
+		t.Fatalf("read the account the stream belongs to: %v", err)
+	}
+	// What disabling an account, deleting one and a password reset all reduce
+	// to, and what a sign-out does to one row rather than all of them.
+	if _, err := db.DeleteSessionsForUser(t.Context(), user.ID); err != nil {
+		t.Fatalf("revoke the sessions: %v", err)
+	}
+
+	st.awaitEnd(t, "after its session was revoked")
+	// And the slot it was holding is somebody else's again, which is the other
+	// half of an admin's only remedy against an account that is misbehaving.
+	eventually(t, "the slot to be released", func() bool { return s.live.Subscribers() == 0 })
+}
+
 // TestEventsRecoversFromADroppedListenConnection.
 //
 // A database failover, a connection reaper, a restarted pod on the other side:
@@ -501,6 +583,9 @@ func newStubHub(t *testing.T, buffer, maxClients int) *changeHub {
 		gauge:      prometheus.NewGauge(prometheus.GaugeOpts{Name: "test_subscribers"}),
 		buffer:     buffer,
 		maxClients: maxClients,
+		// The per-account cap is the global one unless a test lowers it, so
+		// the tests about the global cap keep meeting the global cap.
+		maxPerUser: maxClients,
 		heartbeat:  time.Hour,
 		subs:       map[*subscriber]struct{}{},
 		stopped:    make(chan struct{}),
@@ -518,11 +603,11 @@ func newStubHub(t *testing.T, buffer, maxClients int) *changeHub {
 func TestASlowSubscriberIsDroppedWithoutStallingTheOthers(t *testing.T) {
 	h := newStubHub(t, 1, 10)
 
-	slow, err := h.subscribe()
+	slow, err := h.subscribe(uuid.New())
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	quick, err := h.subscribe()
+	quick, err := h.subscribe(uuid.New())
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -562,11 +647,11 @@ func TestTheSubscriberCapIsEnforced(t *testing.T) {
 	h := newStubHub(t, 4, 2)
 
 	for i := range 2 {
-		if _, err := h.subscribe(); err != nil {
+		if _, err := h.subscribe(uuid.New()); err != nil {
 			t.Fatalf("subscriber %d: %v", i, err)
 		}
 	}
-	if _, err := h.subscribe(); err == nil {
+	if _, err := h.subscribe(uuid.New()); err == nil {
 		t.Fatal("the cap let a third subscriber in")
 	}
 
@@ -581,8 +666,64 @@ func TestTheSubscriberCapIsEnforced(t *testing.T) {
 	h.mu.Unlock()
 	h.release(one)
 
-	if _, err := h.subscribe(); err != nil {
+	if _, err := h.subscribe(uuid.New()); err != nil {
 		t.Fatalf("after a departure: %v", err)
+	}
+}
+
+// TestOneAccountCannotFillTheInstance states the per-account half of the cap
+// without opening seventeen sockets: a caller that has used up its own share
+// is refused while there is still room for everybody else.
+func TestOneAccountCannotFillTheInstance(t *testing.T) {
+	h := newStubHub(t, 4, 10)
+	h.maxPerUser = 2
+
+	greedy, other := uuid.New(), uuid.New()
+	for i := range 2 {
+		if _, err := h.subscribe(greedy); err != nil {
+			t.Fatalf("stream %d: %v", i, err)
+		}
+	}
+	if _, err := h.subscribe(greedy); !errors.Is(err, errTooManyStreamsForUser) {
+		t.Fatalf("a third stream for one account -> %v, want %v", err, errTooManyStreamsForUser)
+	}
+	if _, err := h.subscribe(other); err != nil {
+		t.Fatalf("somebody else, with eight slots free: %v", err)
+	}
+}
+
+// fakeSessions answers the one lookup a stream makes with whatever the case
+// under test needs it to answer.
+type fakeSessions struct{ err error }
+
+func (f fakeSessions) SessionByToken(context.Context, []byte, time.Duration) (store.Session, store.User, error) {
+	return store.Session{}, store.User{}, f.err
+}
+
+// TestOnlyAGoneSessionEndsAStream is the distinction the accounts middleware
+// draws for the same lookup, stated here because this is the other place that
+// makes it. ErrNotFound is the session being gone; anything else is the
+// database not answering, and ending a stream on that would turn a failover of
+// a few seconds into a party without live sync.
+//
+// Runs under -short, because it needs no database — which is the point.
+func TestOnlyAGoneSessionEndsAStream(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"a session that still resolves", nil, false},
+		{"a session that is gone", store.ErrNotFound, true},
+		{"a database that is not answering", errors.New("dial tcp: connection refused"), false},
+		{"a lookup that ran out of time", context.DeadlineExceeded, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sessionEnded(t.Context(), fakeSessions{err: tc.err}, []byte("a token hash"), discardLogger())
+			if got != tc.want {
+				t.Errorf("sessionEnded = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -592,11 +733,11 @@ func TestTheSubscriberCapIsEnforced(t *testing.T) {
 func TestClosingTheHubEndsEveryStream(t *testing.T) {
 	h := newStubHub(t, 4, 10)
 
-	first, err := h.subscribe()
+	first, err := h.subscribe(uuid.New())
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	second, err := h.subscribe()
+	second, err := h.subscribe(uuid.New())
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -610,7 +751,7 @@ func TestClosingTheHubEndsEveryStream(t *testing.T) {
 			t.Errorf("%s stream was not ended by Close", name)
 		}
 	}
-	if _, err := h.subscribe(); err == nil {
+	if _, err := h.subscribe(uuid.New()); err == nil {
 		t.Error("a closed hub accepted a new subscriber")
 	}
 	// Idempotent: main registers it on shutdown and a test may call it too.
