@@ -1014,6 +1014,13 @@ what the row stores, so a copy of the database contains nothing replayable.
   would still be logged out on the seventh day.
 - A cookie that no longer resolves is cleared on the way past, so a browser
   holding a revoked session stops re-presenting it on every request for a month.
+- Only a lookup that answers "no such session" clears it. One that fails
+  because the database is restarting or failing over has said nothing about the
+  session, so the cookie stays and the guarded route answers `503` with
+  `Retry-After` instead of `401`. The page takes a `401` as final and cannot
+  put back a cookie it is not allowed to read, so an outage reported as one
+  would sign out everybody who had the page open, for sessions that were all
+  still valid.
 
 Resolving the session and deciding whether the caller may do something are two
 jobs, kept apart. That is what lets a public endpoint still know that an admin

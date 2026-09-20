@@ -22,7 +22,12 @@ import (
 // request context and have it believed.
 type ctxKey int
 
-const userCtxKey ctxKey = iota
+const (
+	userCtxKey ctxKey = iota
+	// lookupFailedCtxKey marks a request whose session could not be looked
+	// up at all, which is a different thing from one that has no session.
+	lookupFailedCtxKey
+)
 
 // UserFrom returns the account a request is authenticated as.
 //
@@ -39,7 +44,8 @@ func UserFrom(ctx context.Context) (store.User, bool) {
 //
 // It never rejects. Deciding who is calling and deciding whether they may is
 // two jobs, and keeping them apart is what lets a public endpoint still know
-// that an admin is the one calling it.
+// that an admin is the one calling it. The one request it does not pass on is
+// one whose caller hung up during the lookup, because nobody is left to refuse.
 func (a *Auth) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := sessionToken(r)
@@ -49,15 +55,28 @@ func (a *Auth) Authenticate(next http.Handler) http.Handler {
 		}
 
 		sess, user, err := a.store.SessionByToken(r.Context(), auth.HashToken(token), sessionMaxLifetime)
-		if err != nil {
-			if !errors.Is(err, store.ErrNotFound) {
-				a.log.Error("session lookup failed", "err", err)
-			}
+		if errors.Is(err, store.ErrNotFound) {
 			// A cookie that no longer resolves is cleared, so a browser
 			// holding a revoked session stops sending it rather than
 			// re-presenting it on every request for the next month.
 			clearSessionCookie(w)
 			next.ServeHTTP(w, r)
+			return
+		}
+		if err != nil {
+			// The caller hung up and took the query with it. That is not a
+			// database fault, and nothing written here would reach anybody.
+			if r.Context().Err() != nil {
+				return
+			}
+			// Anything else is the database not answering, which says nothing
+			// about the session. The cookie stays: the page takes a 401 as
+			// final and cannot put back a cookie it is not allowed to read,
+			// so clearing it here turned a failover of a few seconds into a
+			// sign-in for everybody who had the page open. Still not a
+			// rejection; the mark is for the guards below to act on.
+			a.log.Error("session lookup failed", "err", err)
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), lookupFailedCtxKey, true)))
 			return
 		}
 
@@ -85,11 +104,28 @@ func (a *Auth) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
+// refuseUnidentified answers a guarded request that reached its guard with no
+// account.
+//
+// Two different things get here, and the page treats them as differently as it
+// can. A 401 signs the person out on the spot. A 503 is an outage, which every
+// loop in the page waits out and asks about again, and Retry-After says a
+// moment later is worth trying. Saying 401 for a lookup that merely failed
+// would be answering a question the database never did.
+func refuseUnidentified(w http.ResponseWriter, r *http.Request) {
+	if failed, _ := r.Context().Value(lookupFailedCtxKey).(bool); failed {
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "")
+		return
+	}
+	writeError(w, http.StatusUnauthorized, "unauthenticated", "")
+}
+
 // RequireAuth refuses anyone without a live session.
 func (a *Auth) RequireAuth(next http.Handler) http.Handler {
 	return a.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := UserFrom(r.Context()); !ok {
-			writeError(w, http.StatusUnauthorized, "unauthenticated", "")
+			refuseUnidentified(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -106,7 +142,7 @@ func (a *Auth) RequireRole(min store.Role) func(http.Handler) http.Handler {
 		return a.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			u, ok := UserFrom(r.Context())
 			if !ok {
-				writeError(w, http.StatusUnauthorized, "unauthenticated", "")
+				refuseUnidentified(w, r)
 				return
 			}
 			if rank(u.Role) < want {
@@ -131,7 +167,7 @@ func (a *Auth) RequireWrite(next http.Handler) http.Handler {
 	return a.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, ok := UserFrom(r.Context())
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "unauthenticated", "")
+			refuseUnidentified(w, r)
 			return
 		}
 		if isMutating(r.Method) && rank(u.Role) < rank(store.RoleEditor) {
