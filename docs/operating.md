@@ -59,6 +59,7 @@ And these say something is off:
 | `SMTP is not configured; the deadline digest goes out as a notification only` | Reminders are on with push as the only channel |
 | `Web Push is half-configured, so notifications are off` | One or two of the three VAPID variables are set |
 | `passkeys unavailable, leaving them off` | Logged with `err`; password login is untouched |
+| `database schema is ahead of this binary` | A newer release migrated this database and this process is a rollback. It serves, but writes made here skip whatever that release added; `unknownVersions`, `unknownNames` and `earliestAppliedAt` say which release and when. Roll forward, or restore to before `earliestAppliedAt` |
 
 `api` on the listening line is the single quickest check that the browser will
 get a shared planner rather than a local one. `migrationsApplied` is the number
@@ -295,7 +296,7 @@ than being absent.
 | All three `SOIREE_VAPID_*` variables set, but the two keys are not halves of one P-256 pair | The public half is published into a page anyone can fetch, so a transposed pair puts the signing key there — and nothing reports it afterwards: a browser refuses to subscribe against it, so no notification is ever sent and nothing ever fails. A pair that is merely wrong fails at the first weekly digest instead, once the permission prompt has been spent. |
 | Some but not all of the five `SOIREE_S3_*` variables | A bucket with no secret starts cleanly, draws the upload control, and fails every upload in somebody's hand. The error names what is set and what is missing. |
 | `SOIREE_ATTACHMENT_MAX_MB` or `SOIREE_ATTACHMENTS_TOTAL_MB` not a whole number above zero, or the first larger than the second | No file could ever be that large; it is a typo. |
-| The database is unreachable, or a migration fails | There is nothing to serve the API from. |
+| The database is unreachable, or a migration fails | There is nothing to serve the API from. A migration error reading `canceling statement due to lock timeout` means another session holds a long lock on a table it alters — an open `psql` transaction, a `pg_dump` in progress — and the migration gave up after ten seconds rather than make the release that is still serving queue behind it. `SELECT pid, state, xact_start, query FROM pg_stat_activity WHERE state <> 'idle' ORDER BY xact_start` finds it; the previous release keeps serving meanwhile. |
 | Either listener cannot bind | A pod that looks healthy while every scrape fails is the failure nobody notices until they need the graph. |
 
 ### Degrades to off

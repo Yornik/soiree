@@ -1,0 +1,6 @@
+# The migration runner records a SHA-256 of every file in migrations/ and
+# refuses to start against a database whose ledger disagrees, so a checkout
+# that turned the line endings into CRLF is a deployment that cannot start.
+# Only *.sql: web/src holds PNG and woff2 files, and the text attribute would
+# rewrite the CR LF bytes inside them.
+*.sql text eol=lf

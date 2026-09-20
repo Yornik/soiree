@@ -178,6 +178,15 @@ migration you added in the same, unmerged pull request is fine; recreate your
 local database (`docker compose down && docker compose up --build`) if it has
 already run.
 
+The checksum covers the whole file, so a comment and a line ending count for
+as much as the SQL does. Correct a stale comment in a migration with
+`COMMENT ON` in a new one — `0009_phase_revision.sql` is the precedent — or in
+`docs/architecture.md`; never in place. `releasedChecksums` in
+`internal/migrate/released_test.go` pins the bytes of every migration that has
+shipped, so a file that changes fails `go test -short` instead of somebody's
+next deploy. A new migration adds its line there in the pull request that adds
+it.
+
 ## Style
 
 Follow what is there. Comments explain *why* a thing is the way it is, not what

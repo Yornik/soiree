@@ -1,9 +1,13 @@
 package migrate
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -226,4 +230,147 @@ func advisoryLocksHeld(t *testing.T, pool *pgxpool.Pool) int {
 		t.Fatalf("count advisory locks: %v", err)
 	}
 	return n
+}
+
+// TestRunWarnsWhenTheSchemaIsAheadOfTheBinary covers a rollback: a newer
+// release migrated the database, and this older binary then started against
+// it. It has to serve — rolling back is the emergency tool — but without a
+// word it is indistinguishable from an ordinary restart.
+func TestRunWarnsWhenTheSchemaIsAheadOfTheBinary(t *testing.T) {
+	pool := pgtest.Pool(t)
+	ctx := t.Context()
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	if _, err := Run(ctx, pool, log); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("a database this binary migrated itself warned: %s", buf.String())
+	}
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO schema_migrations (version, name, checksum)
+		 VALUES (9999, 'from_a_newer_release', 'whatever')`,
+	); err != nil {
+		t.Fatalf("insert ledger row: %v", err)
+	}
+
+	if _, err := Run(ctx, pool, log); err != nil {
+		t.Fatalf("a schema ahead of the binary must not refuse to start: %v", err)
+	}
+
+	logged := buf.String()
+	for _, want := range []string{
+		"database schema is ahead of this binary",
+		"9999", "from_a_newer_release", "binaryHighest",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("startup log does not mention %q: %s", want, logged)
+		}
+	}
+}
+
+// TestWarnIfSchemaAheadTellsTheTwoAnomaliesApart needs no database, because
+// the gap it checks cannot be built out of the embedded files: every version
+// up to the highest has one. A ledger row with no file below that line means a
+// file went missing, which is not a rollback, and saying it is sends the
+// operator looking for a release that was never deployed.
+func TestWarnIfSchemaAheadTellsTheTwoAnomaliesApart(t *testing.T) {
+	row := func(name string) appliedMigration {
+		return appliedMigration{name: name, checksum: "whatever", appliedAt: time.Unix(0, 0).UTC()}
+	}
+	files := func(versions ...int64) []migration {
+		out := make([]migration, 0, len(versions))
+		for _, v := range versions {
+			out = append(out, migration{version: v, name: "file"})
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name    string
+		pending []migration
+		applied map[int64]appliedMigration
+		warns   bool
+	}{
+		{
+			name:    "a version beyond the last file the binary carries",
+			pending: files(1, 2, 3),
+			applied: map[int64]appliedMigration{1: row("one"), 2: row("two"), 3: row("three"), 4: row("four")},
+			warns:   true,
+		},
+		{
+			name:    "a gap below the last file the binary carries",
+			pending: files(1, 3),
+			applied: map[int64]appliedMigration{1: row("one"), 2: row("two"), 3: row("three")},
+			warns:   false,
+		},
+		{
+			name:    "the ledger the binary expects",
+			pending: files(1, 2, 3),
+			applied: map[int64]appliedMigration{1: row("one"), 2: row("two"), 3: row("three")},
+			warns:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+			warnIfSchemaAhead(log, tc.pending, tc.applied)
+
+			if warned := strings.Contains(buf.String(), "ahead of this binary"); warned != tc.warns {
+				t.Errorf("warned = %t, want %t: %s", warned, tc.warns, buf.String())
+			}
+		})
+	}
+}
+
+// TestApplyBoundsItsLockWait covers the lock a migration takes while the
+// previous release is still serving: an ALTER TABLE queued behind a long
+// reader blocks every query that release makes on that table, for as long as
+// the migration is willing to wait.
+func TestApplyBoundsItsLockWait(t *testing.T) {
+	pool := pgtest.Pool(t)
+	ctx := t.Context()
+
+	if _, err := Run(ctx, pool, nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+
+	probe := migration{
+		version:  9001,
+		name:     "lock_timeout_probe",
+		filename: "9001_lock_timeout_probe.sql",
+		sql:      "CREATE TABLE lock_timeout_probe AS SELECT current_setting('lock_timeout') AS value",
+		checksum: "probe",
+	}
+	if err := apply(ctx, conn, probe); err != nil {
+		t.Fatalf("apply probe: %v", err)
+	}
+
+	var inMigration string
+	if err := conn.QueryRow(ctx, "SELECT value FROM lock_timeout_probe").Scan(&inMigration); err != nil {
+		t.Fatalf("read probe: %v", err)
+	}
+	if inMigration != "10s" {
+		t.Errorf("lock_timeout inside the migration is %q, want %q", inMigration, "10s")
+	}
+
+	// SET LOCAL rather than SET: a timeout left on the session would also
+	// bound the pg_advisory_lock wait, which a replica legitimately sits in
+	// for the length of another replica's whole run.
+	var afterCommit string
+	if err := conn.QueryRow(ctx, "SELECT current_setting('lock_timeout')").Scan(&afterCommit); err != nil {
+		t.Fatalf("read session lock_timeout: %v", err)
+	}
+	if afterCommit != "0" {
+		t.Errorf("lock_timeout is %q on the pooled session after the migration, want %q", afterCommit, "0")
+	}
 }

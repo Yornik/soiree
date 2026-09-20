@@ -35,6 +35,19 @@ const advisoryLockKey int64 = 0x5010_1EE0_0001
 // to finish.
 const unlockTimeout = 5 * time.Second
 
+// lockTimeoutSQL bounds how long one statement in a migration waits for a
+// lock. The new replica migrates while the previous release is still serving,
+// so an ALTER TABLE queued behind a long reader — a pg_dump, a forgotten psql
+// transaction — does not wait alone: every query the old release makes on that
+// table queues behind the pending ACCESS EXCLUSIVE request and the site hangs
+// until something kills the new pod. A migration that cannot have its lock
+// promptly should give up and be retried by the restart instead.
+//
+// It is SET LOCAL, so it reverts with the transaction. At session level it
+// would also bound the pg_advisory_lock wait above, which a replica
+// legitimately sits in for the length of another replica's whole run.
+const lockTimeoutSQL = "SET LOCAL lock_timeout = '10s'"
+
 // ledgerDDL creates the record of what has already been applied.
 //
 // It is not itself a migration file, because it has to exist before the first
@@ -103,20 +116,20 @@ func Run(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) ([]int64, er
 		return nil, fmt.Errorf("create schema_migrations: %w", err)
 	}
 
-	applied, err := appliedChecksums(ctx, conn)
+	applied, err := appliedMigrations(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
 
 	var ran []int64
 	for _, m := range pending {
-		if sum, ok := applied[m.version]; ok {
+		if row, ok := applied[m.version]; ok {
 			// An applied migration whose file has since changed means two
 			// databases now disagree about their schema. Refusing to start is
 			// the only honest response; silently skipping hides it until
 			// something else breaks far from the cause.
-			if sum != m.checksum {
-				return ran, fmt.Errorf("migration %s was modified after it was applied (recorded %s, file %s)", m.filename, sum, m.checksum)
+			if row.checksum != m.checksum {
+				return ran, fmt.Errorf("migration %s was modified after it was applied (recorded %s, file %s)", m.filename, row.checksum, m.checksum)
 			}
 			continue
 		}
@@ -127,7 +140,61 @@ func Run(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) ([]int64, er
 		ran = append(ran, m.version)
 	}
 
+	warnIfSchemaAhead(log, pending, applied)
+
 	return ran, nil
+}
+
+// warnIfSchemaAhead reports ledger rows this binary has no file for.
+//
+// That is what a rollback looks like from in here: a newer release migrated
+// the database, and then this older binary started against it. It cannot
+// maintain whatever that release added — writes made here skip it — and the
+// only thing it has to say for itself otherwise is migrationsApplied: 0, which
+// reads exactly like an ordinary restart.
+//
+// A warning and not a refusal, because rolling back is the emergency tool and
+// every migration so far has been additive, so the older binary does serve.
+// Taking the tool away would be worse than the silence it replaces.
+func warnIfSchemaAhead(log *slog.Logger, pending []migration, applied map[int64]appliedMigration) {
+	var highest int64
+	for _, m := range pending {
+		if m.version > highest {
+			highest = m.version
+		}
+	}
+
+	// Above the highest file this binary carries, rather than merely absent
+	// from the set. A ledger row below that line with no file behind it means
+	// a migration went missing from the tree, which is a different fault with
+	// a different remedy; calling it a rollback would send the operator
+	// looking for a release nobody deployed.
+	var unknown []int64
+	for version := range applied {
+		if version > highest {
+			unknown = append(unknown, version)
+		}
+	}
+	if len(unknown) == 0 {
+		return
+	}
+	sort.Slice(unknown, func(i, j int) bool { return unknown[i] < unknown[j] })
+
+	names := make([]string, 0, len(unknown))
+	var earliest time.Time
+	for _, version := range unknown {
+		row := applied[version]
+		names = append(names, row.name)
+		if earliest.IsZero() || row.appliedAt.Before(earliest) {
+			earliest = row.appliedAt
+		}
+	}
+
+	log.Warn("database schema is ahead of this binary",
+		"unknownVersions", unknown,
+		"unknownNames", names,
+		"binaryHighest", highest,
+		"earliestAppliedAt", earliest)
 }
 
 // apply runs one migration and records it in the same transaction, so a
@@ -138,6 +205,10 @@ func apply(ctx context.Context, conn *pgxpool.Conn, m migration) error {
 		return fmt.Errorf("begin %s: %w", m.filename, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, lockTimeoutSQL); err != nil {
+		return fmt.Errorf("bound lock wait for %s: %w", m.filename, err)
+	}
 
 	// No arguments, so pgx sends this over the simple protocol — which is
 	// what lets one file hold several statements.
@@ -157,21 +228,30 @@ func apply(ctx context.Context, conn *pgxpool.Conn, m migration) error {
 	return nil
 }
 
-func appliedChecksums(ctx context.Context, conn *pgxpool.Conn) (map[int64]string, error) {
-	rows, err := conn.Query(ctx, "SELECT version, checksum FROM schema_migrations")
+// appliedMigration is one row of the ledger. The name and the time are here
+// for the rows this binary has no file for, which is all it can say about a
+// release it does not contain.
+type appliedMigration struct {
+	name      string
+	checksum  string
+	appliedAt time.Time
+}
+
+func appliedMigrations(ctx context.Context, conn *pgxpool.Conn) (map[int64]appliedMigration, error) {
+	rows, err := conn.Query(ctx, "SELECT version, name, checksum, applied_at FROM schema_migrations")
 	if err != nil {
 		return nil, fmt.Errorf("read schema_migrations: %w", err)
 	}
 	defer rows.Close()
 
-	out := make(map[int64]string)
+	out := make(map[int64]appliedMigration)
 	for rows.Next() {
 		var version int64
-		var checksum string
-		if err := rows.Scan(&version, &checksum); err != nil {
+		var row appliedMigration
+		if err := rows.Scan(&version, &row.name, &row.checksum, &row.appliedAt); err != nil {
 			return nil, fmt.Errorf("scan schema_migrations: %w", err)
 		}
-		out[version] = checksum
+		out[version] = row
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read schema_migrations: %w", err)
