@@ -297,6 +297,94 @@ func TestRedeemingRevokesExistingSessions(t *testing.T) {
 	}
 }
 
+// Revoking takes away everything an account can be signed in with, which a
+// password reset does not: it ends the sessions and leaves a passkey somebody
+// registered from a borrowed one exactly where it was.
+func TestRevokingCredentialsLeavesNothingToSignInWith(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	ada, adaInvite := invite(t, s, "ada@example.test", store.RoleEditor)
+	grace, graceInvite := invite(t, s, "grace@example.test", store.RoleEditor)
+
+	// Everything one account can be signed in with: a password that has been
+	// set, a live session, a registered passkey, a registration in flight and
+	// a link nobody has used yet. Redeeming comes first, because it is what
+	// makes the account active and it clears the sessions on its way past.
+	live := func(t *testing.T, user store.User, invited []byte) (cookie []byte, challenge string, link []byte) {
+		t.Helper()
+		if _, err := s.ConsumePasswordToken(ctx, invited, "$argon2id$"+user.Email); err != nil {
+			t.Fatalf("activate %s: %v", user.Email, err)
+		}
+		cookie = auth.HashToken("session-" + user.Email)
+		if _, err := s.CreateSession(ctx, store.Session{
+			UserID: user.ID, TokenHash: cookie, ExpiresAt: time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("create session for %s: %v", user.Email, err)
+		}
+		seedPasskey(t, s, user.ID, "cred-"+user.Email, "a phone")
+		challenge = "challenge-" + user.Email
+		if _, err := s.CreatePasskeyChallenge(ctx, store.PasskeyChallenge{
+			Challenge: challenge, Ceremony: store.PasskeyCeremonyRegister, UserID: &user.ID,
+			SessionData: []byte(`{}`), ExpiresAt: time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("begin a ceremony for %s: %v", user.Email, err)
+		}
+		link = auth.HashToken("link-" + user.Email)
+		if _, err := s.IssuePasswordToken(ctx, store.PasswordToken{
+			UserID: user.ID, TokenHash: link, Purpose: store.PurposeReset,
+			ExpiresAt: time.Now().Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("issue a link for %s: %v", user.Email, err)
+		}
+		return cookie, challenge, link
+	}
+	adaCookie, adaCeremony, adaLink := live(t, ada, adaInvite)
+	graceCookie, graceCeremony, graceLink := live(t, grace, graceInvite)
+
+	if err := s.RevokeCredentials(ctx, ada.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	if _, _, err := s.SessionByToken(ctx, adaCookie, time.Hour); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("session survived: err = %v, want ErrNotFound", err)
+	}
+	rows, err := s.PasskeyCredentials(ctx, ada.ID)
+	if err != nil {
+		t.Fatalf("read passkeys: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("passkeys left = %d, want none", len(rows))
+	}
+	if _, err := s.ConsumePasskeyChallenge(ctx, adaCeremony); !errors.Is(err, store.ErrNotFound) {
+		// A registration in flight is a passkey a minute from now.
+		t.Errorf("ceremony survived: err = %v, want ErrNotFound", err)
+	}
+	if redeemable, err := s.PasswordTokenLive(ctx, adaLink); err != nil {
+		t.Fatalf("check link: %v", err)
+	} else if redeemable {
+		t.Error("the outstanding link still redeems")
+	}
+
+	// Nobody else's, because every statement is scoped by account.
+	if _, _, err := s.SessionByToken(ctx, graceCookie, time.Hour); err != nil {
+		t.Errorf("another account's session went too: %v", err)
+	}
+	if rows, err := s.PasskeyCredentials(ctx, grace.ID); err != nil {
+		t.Fatalf("read passkeys: %v", err)
+	} else if len(rows) != 1 {
+		t.Errorf("another account has %d passkeys left, want 1", len(rows))
+	}
+	if _, err := s.ConsumePasskeyChallenge(ctx, graceCeremony); err != nil {
+		t.Errorf("another account's ceremony went too: %v", err)
+	}
+	if redeemable, err := s.PasswordTokenLive(ctx, graceLink); err != nil {
+		t.Fatalf("check link: %v", err)
+	} else if !redeemable {
+		t.Error("another account's link was spent too")
+	}
+}
+
 func TestSessionLifecycle(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()

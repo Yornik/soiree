@@ -1030,10 +1030,11 @@ shape when mail works, since no credential is written down.
 
 The routes are `POST /api/v1/auth/login`, `logout`, `password-reset` and
 `set-password`; `GET /api/v1/auth/session` for "who am I"; and
-`GET|POST /api/v1/users`, `GET|PATCH|DELETE /api/v1/users/{id}` and
-`POST /api/v1/users/{id}/invite` for administration. Every one of the
-administration routes is checked per request against the role as it stands in
-the database, not as it stood when the session was created.
+`GET|POST /api/v1/users`, `GET|PATCH|DELETE /api/v1/users/{id}`,
+`POST /api/v1/users/{id}/invite` and
+`POST /api/v1/users/{id}/revoke-credentials` for administration. Every one of
+the administration routes is checked per request against the role as it stands
+in the database, not as it stood when the session was created.
 
 The browser's half is `web/src/auth.js`, a second script beside the planner
 rather than part of it: a deployment with no database has no accounts at all,
@@ -1148,6 +1149,21 @@ no account), and `GET /api/v1/auth/passkeys` plus
 `DELETE /api/v1/auth/passkeys/{id}` for managing one's own credentials. Never
 anybody else's: there is no admin view of somebody's passkeys, because an admin
 has no use for the list and the person who does is the one holding the devices.
+
+**A credential somebody else added is taken away, not waited out.**
+Registering needs a live session and nothing else, so a minute at an
+unattended browser leaves a passkey behind, and that one outlives every other
+remedy here: a new password ends the sessions and does not touch it, each
+login with it mints a fresh session so the absolute cap never reaches it, and
+disabling the account only parks it until somebody enables the account again.
+Its owner removes it from their own account screen, where the list says which
+device is which. An admin, who has no such list, removes all of them at once
+with `POST /api/v1/users/{id}/revoke-credentials`: sessions, passkeys,
+registrations in flight and any outstanding link, in one transaction, leaving
+the password alone so the account is still its owner's to come back to. That
+route reports nothing about what it found, which is what leaves the decision
+above standing: there is still no admin view of anybody's passkeys, because
+taking them all away needs no list.
 
 **Lockout is impossible by construction.** Registering a passkey requires a
 session; a session requires a password; so an account that can be reached only

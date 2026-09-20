@@ -182,7 +182,10 @@ func (a *Auth) registerPasskeyRoutes(mux *http.ServeMux) {
 
 	// Managing one's own credentials. Never anybody else's: there is no admin
 	// view of somebody's passkeys, because an admin has no use for the list and
-	// the person who does is the one holding the devices.
+	// the person who does is the one holding the devices. An admin can still
+	// take a credential away after a takeover, without ever seeing one: see
+	// handleRevokeCredentials, which removes all of an account's at once and
+	// needs no list to do it.
 	mux.Handle("GET /api/v1/auth/passkeys", a.RequireAuth(http.HandlerFunc(a.handlePasskeyList)))
 	mux.Handle("DELETE /api/v1/auth/passkeys/{id}", a.RequireAuth(http.HandlerFunc(a.handlePasskeyDelete)))
 }

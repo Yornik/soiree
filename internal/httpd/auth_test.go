@@ -699,6 +699,106 @@ func TestDisablingAnAccountEndsItsSessions(t *testing.T) {
 	}
 }
 
+// A passkey registered from a borrowed session outlives every remedy this
+// application documents: a fresh set-password link ends the sessions and
+// leaves the credential where it is, and each login with it mints a new
+// session, so the thirty-day cap never bites either. Revoking is what takes it
+// away, and it needs no list of anybody's passkeys to do it.
+func TestRevokingCredentialsTakesAwayEveryWayIn(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	linus := f.seed(t, "linus@example.test", store.RoleEditor, goodPassword)
+
+	admin := f.login(t, "ada@example.test", goodPassword)
+	victim := f.login(t, "linus@example.test", goodPassword)
+
+	// What an intruder leaves behind. The bytes are synthetic, which does no
+	// harm here: nothing on this path looks inside them.
+	if _, err := f.store.CreatePasskeyCredential(t.Context(), store.PasskeyCredential{
+		UserID:       linus.ID,
+		CredentialID: []byte("cred-from-a-borrowed-session"),
+		PublicKey:    []byte("cose-public-key"),
+		Label:        "a phone nobody recognises",
+	}); err != nil {
+		t.Fatalf("register a passkey: %v", err)
+	}
+
+	// And a link that is still outstanding, which the same act should spend.
+	rec := f.do(t, http.MethodPost, "/api/v1/users/"+linus.ID.String()+"/invite", nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invite: status %d, body %s", rec.Code, rec.Body)
+	}
+	token := tokenFromLink(t, decodeTestBody[createUserResponse](t, rec).SetPasswordURL)
+
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+linus.ID.String()+"/revoke-credentials", nil, admin)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke: status %d, body %s", rec.Code, rec.Body)
+	}
+	// Nothing about what was found, or this route would be the admin view of
+	// somebody's passkeys that this application deliberately does not have.
+	if rec.Body.Len() != 0 {
+		t.Errorf("the answer carries a body: %s", rec.Body)
+	}
+
+	if rec := f.do(t, http.MethodGet, "/api/v1/auth/session", nil, victim); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a revoked session still works: %d", rec.Code)
+	}
+	rows, err := f.store.PasskeyCredentials(t.Context(), linus.ID)
+	if err != nil {
+		t.Fatalf("read passkeys: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("passkeys left = %d, want none", len(rows))
+	}
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/set-password",
+		map[string]string{"token": token, "password": otherPassword}, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("the outstanding link still redeems: status %d, want 400", rec.Code)
+	}
+
+	// The password is untouched: this hands an account back to its owner
+	// rather than shutting it, which is what disabling is for. f.login fails
+	// the test if it no longer works.
+	f.login(t, "linus@example.test", goodPassword)
+}
+
+// Revoking is an admin's, on somebody else's account. One's own credentials
+// are on one's own account screen, where the passkey list says which device is
+// which and the row that does not belong can go without the rest; doing it to
+// oneself here would take all of them and sign the admin out of the screen
+// they are standing on.
+func TestRevokingCredentialsIsAdminOnlyAndNotOnOneself(t *testing.T) {
+	f := newFixture(t, false)
+	ada := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	grace := f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+	f.seed(t, "linus@example.test", store.RoleViewer, goodPassword)
+
+	admin := f.login(t, "ada@example.test", goodPassword)
+	editor := f.login(t, "grace@example.test", goodPassword)
+	viewer := f.login(t, "linus@example.test", goodPassword)
+
+	path := "/api/v1/users/" + grace.ID.String() + "/revoke-credentials"
+	for name, tc := range map[string]struct {
+		cookie *http.Cookie
+		want   int
+	}{
+		"nobody": {nil, http.StatusUnauthorized},
+		"viewer": {viewer, http.StatusForbidden},
+		"editor": {editor, http.StatusForbidden},
+	} {
+		t.Run("as "+name, func(t *testing.T) {
+			if rec := f.do(t, http.MethodPost, path, nil, tc.cookie); rec.Code != tc.want {
+				t.Errorf("status = %d, want %d; body %s", rec.Code, tc.want, rec.Body)
+			}
+		})
+	}
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users/"+ada.ID.String()+"/revoke-credentials", nil, admin)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("revoking one's own: status %d, want 400; body %s", rec.Code, rec.Body)
+	}
+}
+
 func TestAnAdminCannotLockThemselvesOut(t *testing.T) {
 	f := newFixture(t, false)
 	ada := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)

@@ -259,6 +259,8 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/v1/users/{id}", admin(http.HandlerFunc(a.handleUpdateUser)))
 	mux.Handle("DELETE /api/v1/users/{id}", admin(http.HandlerFunc(a.handleDeleteUser)))
 	mux.Handle("POST /api/v1/users/{id}/invite", admin(http.HandlerFunc(a.handleInvite)))
+	mux.Handle("POST /api/v1/users/{id}/revoke-credentials",
+		admin(http.HandlerFunc(a.handleRevokeCredentials)))
 }
 
 // Sweep clears out expired sessions and spent links until ctx is done.
@@ -909,6 +911,52 @@ func inviteMessage(purpose store.TokenPurpose, link, language string) (subject, 
 	return "Your account is ready",
 		"An account has been created for you. Choose a password here:\n\n" +
 			link + "\n\nThe link works once and expires in 24 hours.\n"
+}
+
+// handleRevokeCredentials takes away every way into somebody's account: their
+// sessions, their passkeys, a registration in flight, and any set-password
+// link still outstanding. The password is left alone, so the way back is the
+// fresh link an admin sends next.
+//
+// It exists because that fresh link is not enough on its own. Registering a
+// passkey asks only for a live session, so a minute at an unattended browser
+// buys a credential of one's own, and that credential outlives every remedy
+// this surface otherwise has: setting a password does not touch it, each login
+// with it mints a new session so the absolute cap never reaches it, and
+// disabling the account only parks it until somebody enables the account
+// again. Until this route, removing one meant deleting the account.
+//
+// The answer says nothing about what was found. How many passkeys somebody had
+// is not an admin's business: there is still no admin view of anybody's
+// credentials, and taking them all away needs none.
+func (a *Auth) handleRevokeCredentials(w http.ResponseWriter, r *http.Request) {
+	actor, _ := UserFrom(r.Context())
+	id, ok := authPathID(w, r)
+	if !ok {
+		return
+	}
+	// Not on oneself. An admin's own passkeys are on their own account screen,
+	// where the list says which device is which and the one row that does not
+	// belong can go without the rest; doing it here would take all of them and
+	// sign the admin out of the screen they are standing on.
+	if id == actor.ID {
+		writeError(w, http.StatusBadRequest, "self_change",
+			"remove your own passkeys and sessions from your account screen")
+		return
+	}
+	// Read first, so an account that is not there is a 404 rather than a
+	// revocation that reports success and did nothing.
+	if _, err := a.store.User(r.Context(), id); err != nil {
+		a.userError(w, err, "read user")
+		return
+	}
+	if err := a.store.RevokeCredentials(r.Context(), id); err != nil {
+		a.log.Error("could not revoke credentials", "user", id, "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "")
+		return
+	}
+	a.log.Info("credentials revoked", "user", id, "by", actor.ID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type updateUserRequest struct {
