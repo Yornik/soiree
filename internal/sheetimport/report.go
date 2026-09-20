@@ -76,7 +76,13 @@ type Report struct {
 	Reading string
 	Decimal DecimalMode
 	DryRun  bool
-	Tables  []TableReport
+	// Currency is the code the mapping gave, possibly none. TotalsChecked is
+	// set once any stated total has been checked against the decimals that
+	// currency keeps, which is when the report owes the reader the number it
+	// used: two is an assumption when no currency was given.
+	Currency      string
+	TotalsChecked bool
+	Tables        []TableReport
 	// Outside is what the per-table accounting cannot see. Each table
 	// explains every row in its own range, so a mapping that stops halfway
 	// down the sheet still adds up, to a clean summary over half the budget.
@@ -112,6 +118,14 @@ func (r *Report) String() string {
 		b.addf("  read as: %s\n", r.Reading)
 	}
 	b.addf("  decimal separator: %s\n", r.Decimal)
+	if r.TotalsChecked {
+		exp := count(exponent(r.Currency), "decimal")
+		if cur := strings.ToUpper(strings.TrimSpace(r.Currency)); cur != "" {
+			b.addf("  stated totals checked at %s (%s)\n", exp, cur)
+		} else {
+			b.addf("  stated totals checked at %s (assumed: no currency given, pass -currency if the planner's keeps another number)\n", exp)
+		}
+	}
 	if r.DryRun {
 		b.add("  dry run: no JSON written\n")
 	}

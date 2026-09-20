@@ -35,7 +35,7 @@ func Convert(book *Book, cfg *Config) (*State, *Report, error) {
 		mode:  mode,
 		ids:   newIDGen(),
 		state: NewState(),
-		rep:   &Report{Decimal: mode, Tables: make([]TableReport, len(cfg.Tables))},
+		rep:   &Report{Decimal: mode, Currency: cfg.Currency, Tables: make([]TableReport, len(cfg.Tables))},
 	}
 	c.state.Ceiling = cfg.Ceiling
 	c.state.InflationPct = cfg.InflationPct
@@ -289,6 +289,12 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 			v, _ := c.value(tr, n, "total", total, &item.Note)
 			if qty != 0 {
 				item.Unit, item.Qty = v/qty, qty
+				// A row that folds into the one above is exempt: the page
+				// never reads a child, and its amount reaches the budget as
+				// part of the parent's.
+				if folds := child && len(rows) > 0; !folds {
+					c.checkStatedTotal(tr, n, v, qty)
+				}
 			} else {
 				item.Unit, item.Qty = v, 1
 			}
@@ -375,6 +381,29 @@ func (c *converter) budgetTable(t *Table, tr *TableReport, sh *Sheet, first, las
 	}
 	c.state.BudgetItems = append(c.state.BudgetItems, kept...)
 	return nil
+}
+
+// checkStatedTotal warns when total/qty will not come back as total.
+//
+// The planner stores the unit price, in whole minor units, and works the line
+// total out from it. 2500 over 300 invitations is 8.33 a piece and 2499.00 a
+// line; with guest-count quantities the gap is whole euros, and the imported
+// budget stops adding up to the figure at the bottom of the sheet, which is
+// the first thing anybody checks. The plan has nowhere to keep a stated
+// total, so this cannot be put right here without giving up the quantity. It
+// can be said.
+func (c *converter) checkStatedTotal(tr *TableReport, n int, total, qty float64) {
+	exp := exponent(c.cfg.Currency)
+	// Set by the check, not by the warning: the run where nothing fires is
+	// the one where a wrong number of decimals would go unnoticed.
+	c.rep.TotalsChecked = true
+	stated := roundHalfUp(total * math.Pow10(exp))
+	shown := plannerTotal(total/qty, qty, exp)
+	if shown == stated {
+		return
+	}
+	tr.warn(n, fmt.Sprintf("total %s over qty %s is not a whole unit price at %s, so the planner will show this line as %s, not %s: map the unit price instead if the sheet has one, or correct the line after the import",
+		formatNumber(total), formatNumber(qty), count(exp, "decimal"), formatMinor(shown, exp), formatMinor(stated, exp)))
 }
 
 // assemble folds dash-prefixed rows into the row above them.

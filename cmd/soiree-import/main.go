@@ -41,6 +41,7 @@ type options struct {
 	kind          string
 	columns       columnFlag
 	decimal       string
+	currency      string
 	totalKeywords string
 	skipCostless  bool
 	ceiling       float64
@@ -62,6 +63,7 @@ func run(args []string) error {
 	fs.StringVar(&o.kind, "kind", "budget", "single-table mode: budget, tasks or notes")
 	fs.Var(&o.columns, "map", "single-table mode: field=column, repeatable or comma-separated (e.g. item=B,total=E)")
 	fs.StringVar(&o.decimal, "decimal", "auto", "decimal separator: auto, dot or comma")
+	fs.StringVar(&o.currency, "currency", "", "the planner's SOIREE_CURRENCY; decides the decimals a stated total is checked at (default: 2 decimals)")
 	fs.StringVar(&o.totalKeywords, "total-keywords", "", "comma-separated words marking a summary row (default: total, subtotal, grand total, sum)")
 	fs.BoolVar(&o.skipCostless, "skip-costless", false, "drop rows with no figure instead of importing them at zero")
 	fs.Float64Var(&o.ceiling, "ceiling", 0, "budget ceiling to record in the output")
@@ -120,6 +122,7 @@ func run(args []string) error {
 func propose(book *sheetimport.Book, path, reading string, o options) error {
 	cfg, notes := sheetimport.Detect(book)
 	cfg.Decimal = o.decimal
+	cfg.Currency = o.currency
 	cfg.Ceiling = o.ceiling
 
 	errf("soiree-import: proposed mapping for %s (%s)\n", path, reading)
@@ -156,6 +159,9 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 		if o.decimal != "auto" {
 			cfg.Decimal = o.decimal
 		}
+		if o.currency != "" {
+			cfg.Currency = o.currency
+		}
 		if o.ceiling != 0 {
 			cfg.Ceiling = o.ceiling
 		}
@@ -181,9 +187,10 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 		SkipRowsWithoutAmount: o.skipCostless,
 	}
 	cfg = &sheetimport.Config{
-		Decimal: o.decimal,
-		Ceiling: o.ceiling,
-		Tables:  []sheetimport.Table{table},
+		Decimal:  o.decimal,
+		Currency: o.currency,
+		Ceiling:  o.ceiling,
+		Tables:   []sheetimport.Table{table},
 	}
 	if o.totalKeywords != "" {
 		cfg.TotalKeywords = splitList(o.totalKeywords)
@@ -331,6 +338,7 @@ single table, or write a mapping file for a sheet holding several.
 mapping file:
   {
     "decimal": "auto",                  // auto | dot | comma
+    "currency": "EUR",                  // the planner's SOIREE_CURRENCY
     "totalKeywords": ["total"],         // rows whose label matches are summaries
     "tables": [
       {
@@ -367,6 +375,13 @@ fields — budget: item, vendor, unit, qty, total, paid, note, lockBy, phase
 Map unit or total, never both. A row whose label starts with "-" becomes a
 child of the row above it and its amount is rolled into the parent, because
 the planner's budget is a flat list and counting both would double it.
+
+With total and qty mapped, the unit price is total / qty, and the planner
+keeps a unit price in whole cents: 2500 over 300 comes back as 2499.00. Such
+a line is imported as it stands and raises a warning. How many decimals a
+"cent" has follows the currency, so say which one the planner runs with
+(-currency, or "currency" in the mapping) unless it keeps two: IDR and JPY
+keep none.
 
 Summary keywords match a row's label exactly, ignoring case and trailing
 punctuation — "TOTAL" and "total :" match "total", "TOTAL COSTS" does not. So
