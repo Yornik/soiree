@@ -1,9 +1,12 @@
 package store_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -117,6 +120,66 @@ func TestSelfParentIsRefused(t *testing.T) {
 	item.ParentID = &item.ID
 	if _, err := s.UpdateBudgetItem(ctx, item, nil); err == nil {
 		t.Error("a budget item was allowed to be its own parent")
+	}
+}
+
+// TestDeletingALineInsideAParentCycle: the schema refuses only a line that is
+// its own parent, so two lines can be made each other's parent through the
+// ordinary write path. Whatever the rows say, collecting a line's subtree has
+// to finish: a walk that does not holds a connection and grows its list of ids
+// for as long as the caller waits, and the lines can never be deleted.
+func TestDeletingALineInsideAParentCycle(t *testing.T) {
+	for _, length := range []int{2, 3} {
+		t.Run(fmt.Sprintf("%d lines", length), func(t *testing.T) {
+			s := newStore(t)
+			ctx := t.Context()
+
+			items := make([]store.BudgetItem, length)
+			for i := range items {
+				item, err := s.CreateBudgetItem(ctx, store.BudgetItem{
+					Item: fmt.Sprintf("Course %d", i+1), Unit: store.ToMinor("EUR", 15),
+					Qty: 40, Position: int32(i),
+				}, nil)
+				if err != nil {
+					t.Fatalf("create line %d: %v", i, err)
+				}
+				items[i] = item
+			}
+
+			// Nothing refuses this today: every line becomes the child of the
+			// next, and the last one closes the ring.
+			for i := range items {
+				items[i].ParentID = &items[(i+1)%length].ID
+				updated, err := s.UpdateBudgetItem(ctx, items[i], nil)
+				if err != nil {
+					t.Fatalf("make line %d the child of line %d: %v", i, (i+1)%length, err)
+				}
+				items[i] = updated
+			}
+
+			// A bound on "never returns", not a timing assertion: the delete is
+			// a handful of statements against a database on this machine.
+			deleting, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := s.DeleteBudgetItem(deleting, items[0].ID, items[0].Revision); err != nil {
+				t.Fatalf("deleting a line in a cycle of %d did not finish: %v", length, err)
+			}
+
+			for i, item := range items {
+				if _, err := s.BudgetItem(ctx, item.ID); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("line %d survived the delete: %v", i, err)
+				}
+				// The cascade took it, so only this layer can say what it cost.
+				entries := history(t, s, store.EntityBudgetItems, item.ID)
+				if len(entries) == 0 {
+					t.Errorf("line %d has no history at all", i)
+					continue
+				}
+				if got := entries[0].Action; got != store.ChangeDelete {
+					t.Errorf("line %d: newest action = %q, want %q", i, got, store.ChangeDelete)
+				}
+			}
+		})
 	}
 }
 
