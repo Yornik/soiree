@@ -52,7 +52,7 @@
       "groupName": "go toolchain"
     },
     {
-      "description": "A patch update merges itself as soon as CI is green, so without a wait the only review a new dependency gets is that it compiles, and CI cannot tell a benign release from a compromised or withdrawn one. Three days is roughly how long that takes to surface. The pull request still opens immediately and can be merged by hand; what waits is the automerge.",
+      "description": "A patch update merges itself as soon as CI is green, so without a wait the only review a new dependency gets is that it compiles, and CI cannot tell a benign release from a compromised or withdrawn one. Three days is roughly how long that takes to surface. Nothing merges itself inside those three days, and with internalChecksFilter left at its default of strict nothing is opened either: the update is listed on the Dependency Dashboard under Pending Status Checks until it has aged. Set internalChecksFilter to flexible if the pull request is wanted immediately with only the automerge held back.",
       "matchManagers": [
         "gomod",
         "npm"
