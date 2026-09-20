@@ -81,7 +81,11 @@ jobs:
   # papering over it with retries.
   #
   # A failing `playwright install` is infrastructure, not test logic: re-run
-  # the job rather than treating it as a finding.
+  # the job rather than treating it as a finding. The same now goes for the
+  # database and the bucket the launcher requires here: if one does not come
+  # up the run fails, and that is a registry or runner problem to re-run
+  # rather than something to investigate in the suite. What it no longer does
+  # is carry on with a third of the specs skipping themselves.
   browser:
     name: Browser tests (Playwright)
     runs-on: ubuntu-latest
@@ -110,8 +114,23 @@ jobs:
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
+      # Seconds, no browser, and it is what guards the step below: the rule
+      # that a missing backend fails this job is itself a few lines of the
+      # launcher, and nothing in the browser suite can reach them.
+      - name: Test the API launcher
+        working-directory: e2e
+        run: node --test scripts/api-server.test.js
+
       - name: Run the browser tests
         working-directory: e2e
+        env:
+          # Without this, a database that did not come up means the specs that
+          # need one skip themselves, about a third of the suite, and the job
+          # is still green, because Playwright counts a skip as a pass: sign-in,
+          # live sync, conflicts and attachments would stop being covered with
+          # nobody told. The launcher fails the run instead. Unset on a laptop,
+          # where a machine with no Docker is meant to run the smaller suite.
+          SOIREE_E2E_REQUIRE_BACKENDS: '1'
         run: npm test
 
       # Traces are kept only for failures, so this is usually a near-empty

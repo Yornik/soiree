@@ -37,7 +37,10 @@
  *              place /api/v1 exists at all. Its tests run serially and reset
  *              the plan between them, because that state is genuinely shared.
  *              If Docker is unavailable the launcher starts this instance
- *              without a database and those tests skip themselves.
+ *              without a database and those tests skip themselves. That is for
+ *              a laptop: CI sets SOIREE_E2E_REQUIRE_BACKENDS, where the
+ *              launcher fails the run rather than let a third of the suite
+ *              disappear.
  */
 const path = require('path');
 const { defineConfig, devices } = require('@playwright/test');
@@ -208,7 +211,9 @@ module.exports = defineConfig({
     // throwaway container, waits for it, and execs the server; with no Docker
     // it starts the server without a database instead, so this entry always
     // answers /healthz and the API specs decide for themselves whether there
-    // is anything to test. See scripts/api-server.js.
+    // is anything to test. Under SOIREE_E2E_REQUIRE_BACKENDS it exits before
+    // spawning anything, and this entry fails the run rather than shrinking
+    // it. See scripts/api-server.js.
     command: `go build -o ${JSON.stringify(apiBinary)} ./cmd/soiree && exec node ${JSON.stringify(apiLauncher)} ${JSON.stringify(apiBinary)}`,
     cwd: repoRoot,
     url: `${API_URL}/healthz`,
