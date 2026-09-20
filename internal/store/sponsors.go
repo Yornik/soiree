@@ -22,9 +22,10 @@ type Sponsor struct {
 
 const sponsorColumns = `id, code, name, position, revision, updated_at, updated_by`
 
-// CreateSponsor inserts a sponsor. actor is the account making the change, or
-// nil where there is no session yet — which is every caller until the accounts
-// milestone lands.
+// CreateSponsor inserts a sponsor. actor names the account making the change
+// for a caller that has no session to put in the context, and is nil for the
+// API, whose session is already there. resolveActor settles the two, and its
+// answer is what both `updated_by` and the history entry record.
 func (s *Store) CreateSponsor(ctx context.Context, in Sponsor, actor *uuid.UUID) (Sponsor, error) {
 	who := resolveActor(ctx, actor)
 	return createAudited(ctx, s, EntitySponsors, who, func(tx pgx.Tx) (Sponsor, error) {
@@ -32,7 +33,7 @@ func (s *Store) CreateSponsor(ctx context.Context, in Sponsor, actor *uuid.UUID)
 			`INSERT INTO sponsors (id, code, name, position, updated_by)
 			 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5)
 			 RETURNING `+sponsorColumns,
-			newID(in.ID), in.Code, in.Name, in.Position, actor)
+			newID(in.ID), in.Code, in.Name, in.Position, who.ID)
 	})
 }
 
@@ -60,7 +61,7 @@ func (s *Store) UpdateSponsor(ctx context.Context, in Sponsor, actor *uuid.UUID)
 				        revision = revision + 1, updated_at = now(), updated_by = $4
 				  WHERE id = $5 AND revision = $6
 				RETURNING `+sponsorColumns,
-				in.Code, in.Name, in.Position, actor, in.ID, in.Revision)
+				in.Code, in.Name, in.Position, who.ID, in.ID, in.Revision)
 		})
 	if err == nil {
 		return out, nil

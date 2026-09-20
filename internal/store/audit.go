@@ -117,9 +117,9 @@ func WithActor(ctx context.Context, a Actor) context.Context {
 }
 
 // ActorFromContext returns who the context says is acting, or the unknown
-// actor. It never fails: accounts are a separate milestone and are not finished
-// yet, so most callers today carry no actor at all. Refusing their writes would
-// hold the whole audit trail hostage to work that has not landed.
+// actor. It never fails: a caller with no session, the bootstrap at startup or
+// a test, carries no actor at all, and refusing its write would leave the edit
+// unmade and the trail no better informed.
 func ActorFromContext(ctx context.Context) Actor {
 	if a, ok := ctx.Value(actorKey{}).(Actor); ok {
 		return a.normalise()
@@ -127,13 +127,17 @@ func ActorFromContext(ctx context.Context) Actor {
 	return Actor{Label: "unknown"}
 }
 
-// resolveActor decides who to record for one write.
+// resolveActor decides who to record for one write, in the row's `updated_by`
+// and in the change log alike.
 //
 // The context wins when it names an account, because that is the authenticated
 // session and the explicit argument is only ever the caller's own claim. Where
-// the context is silent — every caller until accounts land — the id destined
-// for `updated_by` fills the gap, so the log and the row agree about who was
-// last here instead of one of them saying "unknown".
+// the context is silent, a caller with no session to speak of, the explicit id
+// fills the gap. Both places are written from this one answer, so the log and
+// the row agree about who was last here. The column used to be bound to the
+// argument instead, and the API names its actor in the context and nowhere
+// else: every row it wrote said nobody had, and an edit put NULL over whatever
+// attribution the row still held.
 func resolveActor(ctx context.Context, updatedBy *uuid.UUID) Actor {
 	actor := ActorFromContext(ctx)
 	if actor.ID == nil && updatedBy != nil {

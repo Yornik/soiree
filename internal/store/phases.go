@@ -28,7 +28,8 @@ type Phase struct {
 const phaseColumns = `id, name, position, revision, updated_at, updated_by`
 
 // CreatePhase inserts a phase. A zero ID lets the database generate one. actor
-// is the account making the change, or nil where there is no session.
+// is the account making the change where the context names none; resolveActor
+// settles the two.
 func (s *Store) CreatePhase(ctx context.Context, in Phase, actor *uuid.UUID) (Phase, error) {
 	who := resolveActor(ctx, actor)
 	return createAudited(ctx, s, EntityPhases, who, func(tx pgx.Tx) (Phase, error) {
@@ -36,7 +37,7 @@ func (s *Store) CreatePhase(ctx context.Context, in Phase, actor *uuid.UUID) (Ph
 			`INSERT INTO phases (id, name, position, updated_by)
 			 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4)
 			 RETURNING `+phaseColumns,
-			newID(in.ID), in.Name, in.Position, actor)
+			newID(in.ID), in.Name, in.Position, who.ID)
 	})
 }
 
@@ -66,7 +67,7 @@ func (s *Store) UpdatePhase(ctx context.Context, in Phase, actor *uuid.UUID) (Ph
 				        revision = revision + 1, updated_at = now(), updated_by = $3
 				  WHERE id = $4 AND revision = $5
 				RETURNING `+phaseColumns,
-				in.Name, in.Position, actor, in.ID, in.Revision)
+				in.Name, in.Position, who.ID, in.ID, in.Revision)
 		})
 	if err == nil {
 		return out, nil

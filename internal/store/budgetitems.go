@@ -63,7 +63,7 @@ func (s *Store) CreateBudgetItem(ctx context.Context, in BudgetItem, actor *uuid
 			 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			 RETURNING `+budgetItemColumns,
 			newID(in.ID), in.PhaseID, in.ParentID, in.Item, in.Vendor, in.Unit,
-			in.Qty, in.Paid, in.LockBy, in.Note, in.Position, actor)
+			in.Qty, in.Paid, in.LockBy, in.Note, in.Position, who.ID)
 		if err != nil {
 			return BudgetItem{}, err
 		}
@@ -136,7 +136,7 @@ func (s *Store) UpdateBudgetItem(ctx context.Context, in BudgetItem, actor *uuid
 			  WHERE id = $12 AND revision = $13
 			RETURNING `+budgetItemColumns,
 			in.PhaseID, in.ParentID, in.Item, in.Vendor, in.Unit, in.Qty, in.Paid,
-			in.LockBy, in.Note, in.Position, actor, in.ID, in.Revision)
+			in.LockBy, in.Note, in.Position, who.ID, in.ID, in.Revision)
 		if err != nil {
 			return BudgetItem{}, err
 		}

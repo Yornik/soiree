@@ -1002,3 +1002,75 @@ func TestAViewerMayReadAndMayNotWrite(t *testing.T) {
 		t.Errorf("POST as a viewer -> %d, want 403", res.status)
 	}
 }
+
+// TestUpdatedByIsTheSessionAccount is the promise `updatedBy` makes: the id of
+// the account that wrote the row last.
+//
+// The session reaches the store through the context, and for a while the four
+// tables that carry the column took it from a legacy argument the API always
+// leaves nil. So every row a signed-in person wrote said nobody had, an edit
+// erased whatever attribution an older row still held, and the only test on the
+// field asked whether the key existed. The column is read back here as well as
+// the response, because the response is only the statement's RETURNING and the
+// subject export matches on what is stored.
+func TestUpdatedByIsTheSessionAccount(t *testing.T) {
+	h, a, pool := newAPIServerParts(t, "EUR")
+	st := store.New(pool)
+	asEditor := authedAs(t, h, st, a, store.RoleEditor)
+	asAdmin := authedAs(t, h, st, a, store.RoleAdmin)
+
+	accountID := func(role store.Role) string {
+		t.Helper()
+		var id uuid.UUID
+		if err := pool.QueryRow(t.Context(),
+			`SELECT id FROM users WHERE email = $1`, string(role)+"@example.test").Scan(&id); err != nil {
+			t.Fatalf("read the %s account: %v", role, err)
+		}
+		return id.String()
+	}
+	editor, admin := accountID(store.RoleEditor), accountID(store.RoleAdmin)
+
+	for _, c := range []struct{ collection, table, create, patch string }{
+		{"budget-items", "budget_items", `{"item":"Venue deposit","unit":"250.00"}`, `{"revision":1,"item":"Venue balance"}`},
+		{"sponsors", "sponsors", `{"code":"Rose","name":"Ada"}`, `{"revision":1,"name":"Grace"}`},
+		{"tasks", "tasks", `{"name":"Book the band"}`, `{"revision":1,"name":"Book the quartet"}`},
+		{"phases", "phases", `{"name":"Arrival"}`, `{"revision":1,"name":"Guests arrive"}`},
+	} {
+		stored := func(id string) string {
+			t.Helper()
+			var by *uuid.UUID
+			// The table name is one of the four literals above, never input.
+			if err := pool.QueryRow(t.Context(),
+				`SELECT updated_by FROM `+c.table+` WHERE id = $1`, id).Scan(&by); err != nil {
+				t.Fatalf("%s: read updated_by: %v", c.collection, err)
+			}
+			if by == nil {
+				return "NULL"
+			}
+			return by.String()
+		}
+
+		row := created(t, asEditor, c.collection, c.create)
+		id := str(t, row, "id")
+		if got, _ := row["updatedBy"].(string); got != editor {
+			t.Errorf("%s: POST answered updatedBy = %v, want the editor %s", c.collection, row["updatedBy"], editor)
+		}
+		if got := stored(id); got != editor {
+			t.Errorf("%s: POST stored updated_by = %s, want the editor %s", c.collection, got, editor)
+		}
+
+		// Somebody else edits it, and the row has to say so rather than keep
+		// naming the person who created it.
+		res := call(t, asAdmin, http.MethodPatch, "/api/v1/"+c.collection+"/"+id, c.patch)
+		if res.status != http.StatusOK {
+			t.Fatalf("%s: PATCH -> %d, want 200\n%s", c.collection, res.status, res.body)
+		}
+		patched := decode(t, res)
+		if got, _ := patched["updatedBy"].(string); got != admin {
+			t.Errorf("%s: PATCH answered updatedBy = %v, want the admin %s", c.collection, patched["updatedBy"], admin)
+		}
+		if got := stored(id); got != admin {
+			t.Errorf("%s: PATCH stored updated_by = %s, want the admin %s", c.collection, got, admin)
+		}
+	}
+}
