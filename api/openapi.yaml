@@ -308,7 +308,10 @@ paths:
         address with no account, and for a disabled account. The answer
         therefore tells an attacker nothing about who holds an account.
 
-        A rate limit counts the requests from your address.
+        A rate limit counts the requests from your address, and a second one
+        counts them per account. A deployment with no mail configured sends
+        nothing and issues no link, so that a link already handed over by an
+        admin stays the live one. The answer is 202 in all of these cases.
 
         Send `language` with the language the person reads the page in. No
         admin takes part in a reset, so the page is the one source of that

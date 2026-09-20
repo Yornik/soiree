@@ -204,6 +204,20 @@ func tokenFromLink(t *testing.T, link string) string {
 	return token
 }
 
+// linkFromMail pulls the set-password link out of a mail body. Every
+// translation puts it on a line of its own, which is what makes this work
+// without knowing which one was sent.
+func linkFromMail(t *testing.T, body string) string {
+	t.Helper()
+	for _, field := range strings.Fields(body) {
+		if strings.HasPrefix(field, "https://") {
+			return field
+		}
+	}
+	t.Fatalf("no link in mail body %q", body)
+	return ""
+}
+
 func TestLoginIssuesASessionCookie(t *testing.T) {
 	f := newFixture(t, false)
 	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
@@ -373,6 +387,88 @@ func TestPasswordResetIgnoresDisabledAccounts(t *testing.T) {
 	// around it makes disabling an account a suggestion.
 	if n := len(f.mail.messages()); n != 0 {
 		t.Errorf("%d mails sent to a disabled account, want 0", n)
+	}
+}
+
+func TestPasswordResetWithoutMailLeavesTheHandedLinkAlone(t *testing.T) {
+	f := newFixture(t, false) // no SMTP: the admin is handed the link
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users",
+		map[string]string{"email": "grace@example.test", "role": "editor"}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create user: status %d, body %s", rec.Code, rec.Body)
+	}
+	token := tokenFromLink(t, decodeTestBody[createUserResponse](t, rec).SetPasswordURL)
+
+	// Anyone who knows the address can send this, and without a relay the link
+	// it issues goes nowhere. Issuing one anyway would consume the invitation
+	// the admin is in the middle of passing on by hand.
+	reset := f.do(t, http.MethodPost, "/api/v1/auth/password-reset",
+		map[string]string{"email": "grace@example.test"}, nil)
+	if reset.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 regardless", reset.Code)
+	}
+
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/set-password",
+		map[string]string{"token": token, "password": otherPassword}, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("the invitation no longer works: status %d, body %s", rec.Code, rec.Body)
+	}
+	f.login(t, "grace@example.test", otherPassword)
+}
+
+func TestPasswordResetIsRateLimitedPerAccount(t *testing.T) {
+	f := newFixture(t, true)
+	f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)
+
+	for range resetAcctBurst {
+		rec := f.do(t, http.MethodPost, "/api/v1/auth/password-reset",
+			map[string]string{"email": "ada@example.test"}, nil)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", rec.Code)
+		}
+	}
+	sent := f.mail.messages()
+	if len(sent) != resetAcctBurst {
+		t.Fatalf("%d mails sent for %d requests, want one each", len(sent), resetAcctBurst)
+	}
+	token := tokenFromLink(t, linkFromMail(t, sent[len(sent)-1].body))
+
+	// Past the burst nothing happens at all: no mail through the deployment's
+	// relay, and, because issuing supersedes, the last link stays the live
+	// one. The answer is the same 202 either way, so the caller cannot tell
+	// which side of the limit they are on.
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/password-reset",
+		map[string]string{"email": "ada@example.test"}, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 past the limit too", rec.Code)
+	}
+	if n := len(f.mail.messages()); n != resetAcctBurst {
+		t.Errorf("%d mails sent, want %d: the request past the burst sent one anyway", n, resetAcctBurst)
+	}
+
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/set-password",
+		map[string]string{"token": token, "password": otherPassword}, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("the last mailed link no longer works: status %d, body %s", rec.Code, rec.Body)
+	}
+
+	// An admin re-inviting is not charged to this bucket: somebody has to be
+	// able to get a locked-out account back in.
+	f.seed(t, "linus@example.test", store.RoleAdmin, goodPassword)
+	session := f.login(t, "linus@example.test", goodPassword)
+	u, err := f.store.UserByEmail(t.Context(), "ada@example.test")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+u.ID.String()+"/invite", nil, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("re-invite: status %d, body %s", rec.Code, rec.Body)
+	}
+	if n := len(f.mail.messages()); n != resetAcctBurst+1 {
+		t.Errorf("%d mails sent, want %d: an admin re-invite was refused by the reset bucket", n, resetAcctBurst+1)
 	}
 }
 
