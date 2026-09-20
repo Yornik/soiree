@@ -12,9 +12,10 @@
  * `emulateMedia({ media: 'print' })` applies the print styles at the browser's
  * current viewport, not at a page box, so anything about the width of paper
  * is checked by rendering an actual PDF instead - see the pull request that
- * added this file. The one layout assertion below therefore sets the viewport
- * to an A4 page area first and only asks the weaker question: that the budget
- * grid is not wider than the page it is printed on.
+ * added this file. The layout assertions below therefore set the viewport to
+ * an A4 page area first, and ask only what that arrangement can answer: that
+ * the grid is no wider than the page, and that nothing in it is wider than
+ * the room it has.
  */
 const { test, expect } = require('@playwright/test');
 const { addBudgetLine, gotoTab, openPlanner } = require('./helpers');
@@ -114,4 +115,50 @@ test('the budget grid keeps its columns and stays on the sheet', async ({ page }
     };
   });
   expect(fits.table).toBeLessThanOrEqual(fits.page);
+});
+
+test('every figure and heading prints whole, inside its own column', async ({ page }) => {
+  await openPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, {
+    item: 'A very long vendor name that keeps going',
+    unit: 12345.67,
+    qty: 12,
+    paid: 999.99,
+    note: 'a remark that runs on past the width of the column it is in',
+  });
+
+  await page.setViewportSize(A4_PAGE_AREA);
+  await page.emulateMedia({ media: 'print' });
+
+  // A sheet cannot be scrolled and a field cannot be widened by hand, so
+  // anything wider than the room it has is either a figure with a digit
+  // missing or a word printed across the column next to it. Both have
+  // happened here: a money field carries a 70px minimum width that a typed
+  // selector sets, and the cost-by button carries six pixels of padding each
+  // side of a word that is already as wide as its column.
+  const spilled = await page.evaluate(() => {
+    const over = [];
+    const check = (el, what) => {
+      if (el.scrollWidth > el.clientWidth) {
+        over.push(`${what}: ${el.scrollWidth}px of content in ${el.clientWidth}px`);
+      }
+    };
+    document.querySelectorAll('#budgetTable thead th').forEach((th) => {
+      check(th, `heading "${th.textContent.trim()}"`);
+    });
+    document.querySelectorAll('#budgetBody input, #budgetBody textarea, #budgetBody .by-btn').forEach((el) => {
+      const value = (el.value || el.textContent || '').trim();
+      check(el, `field "${value}"`);
+      const cell = el.closest('td').getBoundingClientRect();
+      const box = el.getBoundingClientRect();
+      // Half a pixel of tolerance: a percentage share of a page rarely lands
+      // on a whole one.
+      if (box.right > cell.right + 0.5 || box.left < cell.left - 0.5) {
+        over.push(`field "${value}" is laid out outside its column`);
+      }
+    });
+    return over;
+  });
+  expect(spilled).toEqual([]);
 });

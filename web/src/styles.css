@@ -1653,34 +1653,43 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   input, select, textarea, .by-btn,
   .field input,
   .flag textarea {
-    /* The width every field is given so it can be aimed at only pushes it out
-       past the column it belongs to here. */
+    /* The width a field is given so it can be aimed at. This says it for the
+       fields outside the grid: the ones inside it are given theirs by a typed
+       selector, which outweighs the bare `input` here, so the grid has to say
+       it again for itself below. */
     min-width: 0;
     border-color: transparent;
     background: transparent;
   }
-  /* What is wanted is the value. The arrow, the resize corner and the date
-     picker's button are all ways of changing it, which paper is not. */
+  /* What is wanted is the value. The arrow, the resize corner, the date
+     picker's button and the number field's spinner are all ways of changing
+     it, which paper is not. The spinner is the expensive one: drawn or not,
+     it holds fifteen pixels of every money column open for a control the
+     sheet has no use for, and it is the figure that gets pushed out. */
   select { appearance: none; }
   textarea, .flag textarea { resize: none; }
   input[type="date"]::-webkit-calendar-picker-indicator { display: none; }
+  input[type="number"]::-webkit-inner-spin-button { appearance: none; margin: 0; }
 
   /* The grid, fitted to the sheet. The column widths and the table width are
      inline styles the resize handles wrote for one screen, and a sheet is not
      that screen: they are dropped for paper and the columns take a share of
-     whatever the page is instead. The shares are the desk proportions with
-     the money columns cut to what a figure needs, and the last column is the
-     one that removed a line, which is not on the sheet at all. */
+     whatever the page is instead. The shares are measured rather than
+     apportioned by eye, because nothing here can be scrolled to: a figure of
+     five digits and two decimals is 67px of type at this size, a heading has
+     to hold its longest word whole, and what those leave over goes to the
+     item and the remark, which wrap. The last column is the one that removed
+     a line, which is not on the sheet at all. */
   .table-wrap { overflow: visible; }
   table.budget { width: 100% !important; }
-  #budgetCols col:nth-child(1) { width: 21% !important; }
-  #budgetCols col:nth-child(2) { width: 8% !important; }
+  #budgetCols col:nth-child(1) { width: 17% !important; }
+  #budgetCols col:nth-child(2) { width: 13% !important; }
   #budgetCols col:nth-child(3) { width: 6% !important; }
-  #budgetCols col:nth-child(4) { width: 13% !important; }
-  #budgetCols col:nth-child(5) { width: 9% !important; }
+  #budgetCols col:nth-child(4) { width: 12% !important; }
+  #budgetCols col:nth-child(5) { width: 10% !important; }
   #budgetCols col:nth-child(6) { width: 14% !important; }
-  #budgetCols col:nth-child(7) { width: 9% !important; }
-  #budgetCols col:nth-child(8) { width: 20% !important; }
+  #budgetCols col:nth-child(7) { width: 13% !important; }
+  #budgetCols col:nth-child(8) { width: 15% !important; }
   #budgetCols col:nth-child(9) { width: 0 !important; }
   table.budget tbody tr { height: auto !important; }
   /* Type and gutters both come in a step: nine columns on a sheet have less
@@ -1689,7 +1698,19 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   table input, table textarea, table select, table .by-btn { font-size: 12px; }
   table.budget td.note-cell textarea { font-size: 11px; }
   table th, table td { padding-left: 8px; padding-right: 8px; }
-  table.budget td input, table.budget td textarea { padding-left: 0; padding-right: 0; }
+  /* The grid's own fields, said again here because a column on a sheet is
+     narrower than the 70px every field is given to be aimed at, and the
+     selector that gives them that is typed and outweighs the bare `input` in
+     the reset above: without this a figure is laid out 70px wide in a 56px
+     column and its last digit is printed over the next one. The cost-by
+     button is in the list for its padding rather than its width - six pixels
+     each side is the difference between "Unassigned" inside its column and
+     "Unassigned" across the remark beside it. */
+  table.budget td input, table.budget td textarea, table.budget td .by-btn {
+    min-width: 0;
+    padding-left: 0;
+    padding-right: 0;
+  }
   /* On screen a column heading is one line and the grid scrolls; on paper it
      has the width it has, and a heading cut in half names nothing. */
   thead th { white-space: normal; }
@@ -1699,7 +1720,13 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   table.tasks th:nth-child(2) { width: 14%; }
   table.tasks th:nth-child(3) { width: 16%; }
   table.tasks th:nth-child(4) { width: 20%; }
-  td.del-cell { width: 0; padding: 0; }
+  /* Both halves of the column that is not on the sheet: the cell that held
+     the button, and the heading that named it for a screen reader, which
+     would otherwise keep the gutter the cell has given up and start it past
+     the edge of the grid. */
+  td.del-cell,
+  table.budget thead th:nth-child(9),
+  table.tasks thead th:nth-child(5) { width: 0; padding: 0; }
   .status-select { min-width: 0; }
   table.budget thead th, table.budget td { overflow: visible; }
   /* Freezing the first column is a scrolling device, and there is no
