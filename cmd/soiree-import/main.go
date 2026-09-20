@@ -391,6 +391,9 @@ item called "Total makeup package" must not be deleted. A summary row the
 keywords miss still raises a warning when its figure equals the sum of the rows
 above it: the rows of its own section for a subtotal, every line in the table
 for the total at the bottom. It is imported all the same, so act on the warning.
+The check needs two rows to add up: a subtotal under a single line looks like
+a repeated price, is not flagged, and takes the totals below it along. List
+such a label as a keyword.
 
 flags:
 `)
