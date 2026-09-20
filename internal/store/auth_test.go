@@ -390,6 +390,73 @@ func TestDeleteSessionsAndSweep(t *testing.T) {
 	}
 }
 
+// The token sweep runs on a timer in a deployment and nowhere else, so without
+// this the statement is first executed an hour after a release, where a
+// mistake in it shows up as a log line and a table that never stops growing.
+//
+// The grace period is the part worth pinning: a redeemed row is the only
+// evidence that a link was used, so it is kept for a week after it stopped
+// working rather than deleted at the moment it does.
+func TestSweepingPasswordTokensKeepsTheEvidence(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	// Three people, because issuing a link consumes the ones already
+	// outstanding for the same account.
+	ada, err := s.CreateUser(ctx, store.User{Email: "ada@example.test", Role: store.RoleEditor})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if _, err := s.IssuePasswordToken(ctx, store.PasswordToken{
+		UserID:    ada.ID,
+		TokenHash: auth.HashToken("expired two days ago"),
+		Purpose:   store.PurposeInvite,
+		ExpiresAt: time.Now().Add(-48 * time.Hour),
+	}); err != nil {
+		t.Fatalf("issue expired token: %v", err)
+	}
+
+	_, redeemed := invite(t, s, "grace@example.test", store.RoleEditor)
+	if _, err := s.ConsumePasswordToken(ctx, redeemed, "$argon2id$stored"); err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+
+	_, outstanding := invite(t, s, "linus@example.test", store.RoleEditor)
+
+	// A window wider than the expiry is behind us takes nothing: an expired
+	// link is refused by redemption already, and the row is what an
+	// investigation after the fact has to read.
+	n, err := s.DeleteExpiredPasswordTokens(ctx, 72*time.Hour)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("swept %d tokens inside the grace period, want 0", n)
+	}
+
+	// Past the window, the expired link goes and the redeemed one stays.
+	if n, err = s.DeleteExpiredPasswordTokens(ctx, 24*time.Hour); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("swept %d tokens, want 1: the expired link and nothing else", n)
+	}
+
+	// With no window at all the redeemed row goes too, which is the only way
+	// to see from here that it survived the sweep before this one.
+	if n, err = s.DeleteExpiredPasswordTokens(ctx, 0); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("swept %d tokens, want 1: the redeemed link", n)
+	}
+
+	// An outstanding invitation is not housekeeping, whatever the window.
+	if _, err := s.ConsumePasswordToken(ctx, outstanding, "$argon2id$stored"); err != nil {
+		t.Fatalf("the sweep took a live link: %v", err)
+	}
+}
+
 func TestBootstrapAdminRunsOnce(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
