@@ -147,6 +147,8 @@ func newFullServer(t *testing.T) (http.Handler, *Auth, *store.Store) {
 // emptyBucket signs nothing and holds nothing.
 type emptyBucket struct{}
 
+func (emptyBucket) Origin() string { return "https://bucket.example.test" }
+
 func (emptyBucket) PresignPut(string, int64, string, time.Duration) objstore.Upload {
 	return objstore.Upload{URL: "https://bucket.example.test/upload", Headers: map[string]string{}}
 }

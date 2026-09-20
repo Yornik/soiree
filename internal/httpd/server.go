@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	texttemplate "text/template"
 	"time"
@@ -266,7 +265,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/", s.serveIndex)
 
-	return securityHeaders(s.cfg.AllowIndexing, contentSecurityPolicy(s.cfg))(
+	return securityHeaders(s.cfg.AllowIndexing, s.contentSecurityPolicy())(
 		s.metrics.instrument(sameOriginWrites(mux)))
 }
 
@@ -382,21 +381,33 @@ func securityHeaders(allowIndexing bool, csp string) func(http.Handler) http.Han
 //
 // connect-src is the one line the binary knows better than any proxy: the
 // browser uploads to the bucket itself, so the policy has to name that origin,
-// and it is already in this deployment's configuration. Copied into a proxy by
-// hand it is a string that drifts, and an upload it no longer matches fails in
-// the browser with nothing in any server log.
+// and the bucket that signs those uploads is asked for it here. Copied into a
+// proxy by hand it is a string that drifts, and an upload it no longer matches
+// fails in the browser with nothing in any server log. Asking the store rather
+// than reading the endpoint a second time is what keeps the policy and the
+// signature about the same origin: the store signs for the host a browser
+// actually sends, which is not always the host as it was written down.
 //
 // Two things are deliberately absent. `upgrade-insecure-requests` would break
 // the plain-HTTP deployment the comment above is about. HSTS belongs to
 // whatever terminates TLS.
-func contentSecurityPolicy(cfg config.Config) string {
-	if cfg.DisableCSP {
+func (s *Server) contentSecurityPolicy() string {
+	if s.cfg.DisableCSP {
 		return ""
 	}
 
 	connect := "connect-src 'self'"
-	if origin := bucketOrigin(cfg.Attachments.Endpoint); origin != "" {
-		connect += " " + origin
+	// No attachment surface means no route to upload through and no control
+	// on the page, so there is nothing for the policy to allow.
+	if s.files != nil {
+		// Sources are separated by spaces and directives by semicolons, so an
+		// origin carrying either would not be a source here but a directive of
+		// its own, and one not named above is one the browser would obey.
+		// Nothing that resolves has such a host, so no working deployment
+		// loses its bucket this way.
+		if origin := s.files.bucket.Origin(); origin != "" && !strings.ContainsAny(origin, " ;,") {
+			connect += " " + origin
+		}
 	}
 
 	return strings.Join([]string{
@@ -413,31 +424,6 @@ func contentSecurityPolicy(cfg config.Config) string {
 		"font-src 'self'",
 		connect,
 	}, "; ")
-}
-
-// bucketOrigin is the scheme and host of an S3 endpoint, which is what a
-// policy names. Empty for anything that is not one.
-//
-// The host is checked character by character rather than trusted. Directives
-// are separated by semicolons and sources by spaces, so an endpoint carrying
-// either would not be a source in this policy but a directive of its own,
-// and one that does not already appear above would be the one the browser
-// obeyed. objstore refuses such an endpoint too, but it is not always built:
-// a bucket configured without a database never reaches it.
-func bucketOrigin(endpoint string) string {
-	u, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return ""
-	}
-	for _, r := range u.Host {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.', r == '-', r == ':', r == '[', r == ']':
-		default:
-			return ""
-		}
-	}
-	return u.Scheme + "://" + u.Host
 }
 
 // serveRobots answers crawlers.
