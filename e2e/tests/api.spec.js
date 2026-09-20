@@ -477,12 +477,14 @@ test('a page opened while the origin is away says so, keeps asking, and sends wh
 
   // The copy this browser keeps has to be the server's, under the server's id:
   // that is what tells the next page it is looking at a shared plan and not at
-  // a planner that only ever lived here.
+  // a planner that only ever lived here. With a database behind it the value
+  // is the state and the base it was last agreed against, written together.
   const { id } = (await apiPlan(request)).budgetItems[0];
   await expect
     .poll(() => page.evaluate((key) => {
       window.dispatchEvent(new Event('pagehide'));
-      return JSON.parse(localStorage.getItem(key) || '{}').budgetItems.map((i) => i.id);
+      const saved = JSON.parse(localStorage.getItem(key) || '{}');
+      return (saved.state || saved).budgetItems.map((i) => i.id);
     }, STORAGE_KEY))
     .toEqual([id]);
   await page.goto('about:blank');
@@ -530,6 +532,59 @@ test('a page opened while the origin is away says so, keeps asking, and sends wh
   // on the same terms: the door was drawn meanwhile, and the person who was
   // signed in all along is not left looking at it.
   await expect(page.locator('.account-email')).toHaveText(ADMIN_EMAIL);
+});
+
+/*
+ * The same outage, and this time the page does not live through it.
+ *
+ * "Still trying — they are safe in this browser meanwhile" is what the status
+ * line says while an edit is waiting, and somebody who reads that has every
+ * reason to close the tab, or to reload in the hope of mending the connection.
+ * On a phone they need not do either: the operating system discards a
+ * background tab by itself. So the copy this browser keeps has to include the
+ * version the server last confirmed. Without it the next page cannot tell an
+ * unsent edit from a copy that is merely old, and the plan that arrives takes
+ * the edit with it — silently, and after a promise that it would not.
+ */
+test('an edit made while the origin is away is still there after a reload, and goes up once it is back', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  // A switch rather than route-then-unroute, for the reason the spec two above
+  // gives: a request wedged inside the interception never fails and never
+  // lands, and this page always has one in flight.
+  let away = true;
+  await page.route('**/api/v1/**', (route) => (away ? route.abort('internetdisconnected') : route.continue()));
+
+  // One figure changed and one line added: an update and a create, which are
+  // the two things the next page has to read differently from each other.
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1 });
+  await expect(page.locator('#dataMsg')).toHaveText(/not reaching the server/, { timeout: 15_000 });
+  expect((await apiPlan(request)).budgetItems.map((i) => [i.item, i.paid])).toEqual([['Venue deposit', '500.00']]);
+
+  // The tab goes while the origin is still away, and comes back to the same
+  // outage — the order a person meets it in, because the reload is what they
+  // try when the notice will not clear.
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await page.reload();
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).paid).toHaveValue('750');
+  await expect(budgetRow(page, 1).item).toHaveValue('Flowers');
+  await expect(page.locator('#dataMsg')).toHaveText(/not reaching the server/, { timeout: 15_000 });
+
+  // Back. Both changes are still the difference between this browser and the
+  // version the server last confirmed, and each goes up exactly once: the line
+  // added before the reload is created, not created twice.
+  away = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.paid]).sort(), { timeout: 20_000 })
+    .toEqual([['Flowers', '0.00'], ['Venue deposit', '750.00']]);
+  await expect(page.locator('#dataMsg')).toHaveText(/Back in touch with the server/);
 });
 
 test('the shared planner is still cached under one known key, and nothing else', async ({ page }) => {

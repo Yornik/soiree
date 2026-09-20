@@ -128,8 +128,9 @@ test.describe('a browser that asks for a language there is no translation for', 
 /*
  * The switcher: three flags above everything. A click is somebody's own
  * explicit choice, so it outranks their browser and is remembered on the
- * device — and it happens in place, because a reload discards whatever was
- * typed while signed out.
+ * device — and it happens in place, because a page with no shadow behind it,
+ * which is every page on this server, loses whatever was typed into it when it
+ * reloads.
  */
 test('a flag changes the language in place, and the device remembers it', async ({ page }) => {
   await openIn(page);

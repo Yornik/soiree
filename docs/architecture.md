@@ -203,7 +203,8 @@ never asked about twice.
   arguments, both land here and both work.
 - **API.** The server is the planner. `localStorage` stays as the cached copy
   that paints before the plan arrives, plus the handful of fields that have no
-  column behind them.
+  column behind them, plus the shadow that copy was last agreed against — see
+  below.
 
 `localStorage` is written synchronously and *first* in both modes. `pagehide`
 has no time to wait on a promise, and the whole point of a deferred write is
@@ -275,8 +276,18 @@ changed still turn into per-field `PATCH`es carrying a revision. It also makes
 the retry free: a write that fails simply does not advance the shadow, so the
 next pass computes the same difference again and nothing is lost.
 
-Four consequences worth stating, because each is easy to undo:
+Five consequences worth stating, because each is easy to undo:
 
+- **The shadow outlives the page.** It is written to `localStorage` with the
+  state, inside the one `soiree.v1` value and in the same `setItem` — never
+  under a key of its own, because two writes are two moments and a state paired
+  on the next load with a base another tab wrote differs from it in ways
+  neither of them edited. It is written again whenever it moves without
+  anybody typing: a confirmed write, a merged plan. Without it the next load
+  has no way to tell an unsent edit from a copy that is merely old, so
+  `adopt()` replaces the copy with the plan and the edit goes with it — under a
+  status line that has just said it is safe in this browser. With it, the next
+  load computes the same difference the last page was holding and sends it.
 - **A `409` is a three-way merge, not a refetch.** The shadow is the version
   *both* edits started from. A field this browser did not touch takes theirs; a
   field it did keeps ours and goes again on the next pass. The obvious
@@ -1010,8 +1021,11 @@ English. The switcher sits above both the planner and the accounts screens,
 because the first screen an invited person sees is the one for choosing a
 password and that is where being in the wrong language matters most. It
 switches in place — `app.js` re-applies its strings, re-renders, and tells
-`auth.js` on `soiree:language` to do the same — and never by reloading, because
-a reload discards whatever was typed while signed out.
+`auth.js` on `soiree:language` to do the same — and never by reloading. A page
+that has a shadow behind it survives a reload with its unsent edits; a page
+that has never reached the server has no shadow to merge against, so a reload
+throws away whatever was typed into it, and it costs the screen somebody is on
+either way.
 
 And a mail is written in a language chosen *for that mail*, by whoever causes it
 to be sent. `POST /api/v1/users` and `POST /api/v1/users/{id}/invite` take an
