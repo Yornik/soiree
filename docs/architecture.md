@@ -385,7 +385,11 @@ constraint drives the design:
    the round trip stays off the interaction path rather than being eliminated —
    which is the only option available, since the distance is real.
 4. **Compression and cache headers in the binary.** No proxy configuration is
-   required for either.
+   required for either. Assets are encoded once at startup; `GET /plan` and the
+   activity page are gzipped per request, because the plan is re-read whole by
+   every other open browser after anybody's edit and again on every reconnect.
+   Nothing else is: an error is too small to pay for the encoder's header, and
+   a compressed `/events` would be a buffered one.
 
 Measured at 1.2.0, brotli, from a running server: shell 4.5 kB, stylesheet
 11 kB, planner script 46 kB, accounts script 25 kB, font 69 kB. Both scripts

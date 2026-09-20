@@ -110,7 +110,7 @@ func (s *Server) serveActivity(w http.ResponseWriter, r *http.Request) {
 		last := entries[len(entries)-1].ID
 		page.NextBefore = &last
 	}
-	writeJSON(w, http.StatusOK, page)
+	writeJSONCompressed(w, r, http.StatusOK, page)
 }
 
 func encodeActivity(currency string, e store.ActivityEntry) activityEntryJSON {

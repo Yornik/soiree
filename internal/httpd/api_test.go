@@ -1,8 +1,11 @@
 package httpd
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -357,6 +360,115 @@ func TestPlanIsOneRoundTrip(t *testing.T) {
 	}
 	if str(t, plan.Tasks[0], "status") != "not-started" {
 		t.Errorf("task status = %q, want the column default", plan.Tasks[0]["status"])
+	}
+}
+
+// The plan is the one body this API sends over and over: every other open
+// browser re-reads the whole of it after anybody's edit and again on every
+// reconnect, to readers the origin may be 300 ms away from. It is also
+// repetitive JSON, which is what an encoder is good at.
+func TestThePlanIsGzippedForAClientThatAcceptsIt(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	// Enough rows to put the body past the size below which the encoder's own
+	// header costs more than it saves.
+	for i := range 20 {
+		created(t, h, "tasks", fmt.Sprintf(
+			`{"name":"Confirm the running order with the hall %d","owner":"Ada","position":%d}`, i, i))
+	}
+
+	plain := call(t, h, http.MethodGet, "/api/v1/plan", "")
+	if plain.status != http.StatusOK {
+		t.Fatalf("GET /api/v1/plan -> %d\n%s", plain.status, plain.body)
+	}
+	if enc := plain.header.Get("Content-Encoding"); enc != "" {
+		t.Errorf("no Accept-Encoding should mean no encoding, got %q", enc)
+	}
+	if v := plain.header.Get("Vary"); !strings.Contains(v, "Accept-Encoding") {
+		t.Errorf("Vary = %q, want Accept-Encoding: what this route answers depends on it", v)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	res := rec.Result()
+	defer func() { _ = res.Body.Close() }()
+	encoded, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read the encoded plan: %v", err)
+	}
+
+	if got := res.Header.Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip: the largest repeated read goes out raw", got)
+	}
+	if got := res.Header.Get("Content-Length"); got != strconv.Itoa(len(encoded)) {
+		t.Errorf("Content-Length = %q, want the %d bytes actually sent", got, len(encoded))
+	}
+	if len(encoded) >= len(plain.body) {
+		t.Errorf("encoded body (%d) is not smaller than the identity one (%d)", len(encoded), len(plain.body))
+	}
+	// Encoding it does not make it cacheable: it is still shared state two
+	// people are editing.
+	if cc := res.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+
+	zr, err := gzip.NewReader(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("the body is not gzip: %v", err)
+	}
+	decoded, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("decode the plan: %v", err)
+	}
+	_ = zr.Close()
+	if !bytes.Equal(decoded, plain.body) {
+		t.Errorf("the encoded plan is not the plan a client without the header gets:\n%s", decoded)
+	}
+}
+
+// Everything else this API sends is small: an error, a row echoed back, a 204
+// with no body at all. The encoder's own header is a poor trade against a few
+// hundred bytes. Nothing that does not go through writeJSONCompressed is
+// encoded at all.
+func TestOnlyABodyWorthEncodingIsEncoded(t *testing.T) {
+	large := map[string]string{"note": strings.Repeat("the hall wants the running order. ", 40)}
+	small := map[string]string{"note": "the hall wants the running order."}
+
+	for name, c := range map[string]struct {
+		payload any
+		accept  string
+		want    string
+	}{
+		"a large body for a client that accepts gzip": {large, "gzip", "gzip"},
+		"the same body for one that does not":         {large, "identity", ""},
+		"a body below the threshold":                  {small, "gzip", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil)
+			req.Header.Set("Accept-Encoding", c.accept)
+			rec := httptest.NewRecorder()
+			writeJSONCompressed(rec, req, http.StatusOK, c.payload)
+
+			if got := rec.Header().Get("Content-Encoding"); got != c.want {
+				t.Errorf("Content-Encoding = %q, want %q", got, c.want)
+			}
+			if v := rec.Header().Get("Vary"); !strings.Contains(v, "Accept-Encoding") {
+				t.Errorf("Vary = %q, want Accept-Encoding on both branches", v)
+			}
+		})
+	}
+
+	// A response nothing negotiated, which is every error and every write read
+	// back, goes out exactly as it did before.
+	rec := httptest.NewRecorder()
+	writeJSON(rec, http.StatusOK, large)
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Errorf("Content-Encoding = %q on a response that negotiated nothing", got)
+	}
+	if v := rec.Header().Get("Vary"); v != "" {
+		t.Errorf("Vary = %q on a response whose body does not depend on it", v)
 	}
 }
 

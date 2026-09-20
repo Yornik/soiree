@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -213,7 +215,7 @@ func (s *Server) servePlan(w http.ResponseWriter, r *http.Request) {
 		writeInternal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, encodePlan(s.cfg.Currency, plan))
+	writeJSONCompressed(w, r, http.StatusOK, encodePlan(s.cfg.Currency, plan))
 }
 
 func handleCreate[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
@@ -480,6 +482,29 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 // writeJSON writes an API response. Marshalling to a buffer first is what
 // allows a failure to still produce a 500 rather than a truncated 200 body.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
+	writeJSONBody(w, nil, status, payload)
+}
+
+// writeJSONCompressed is writeJSON for the two reads worth encoding: the whole
+// plan, which every other open browser re-reads after anybody's edit and again
+// on every reconnect, and the activity page. Both are tens of kilobytes of
+// repetitive JSON to readers the origin may be 300 ms away from, and both are
+// asked for far more often than anything here is written. That is the one place
+// the static path's care about bytes is worth repeating per request.
+//
+// Only those two, deliberately. A response that reflects what the caller sent
+// is how a length turns into a guess at what else is in it, and /events must
+// never go through here at all: a compressed stream is a buffered one, and the
+// point of that route is that a frame leaves the moment it exists. Neither the
+// plan nor the activity page reflects the request, carries a token, or is
+// readable by anybody who cannot already read all of it.
+func writeJSONCompressed(w http.ResponseWriter, r *http.Request, status int, payload any) {
+	writeJSONBody(w, r, status, payload)
+}
+
+// writeJSONBody is both of the above. A nil request means nothing negotiated an
+// encoding, so nothing is encoded.
+func writeJSONBody(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json; charset=utf-8")
 	// Never cached: this is shared state that two people are editing.
@@ -494,13 +519,73 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	}
 
 	body, err := json.Marshal(payload)
+	negotiated := r != nil
 	if err != nil {
 		body = []byte(`{"error":"internal","message":"could not encode the response"}`)
 		status = http.StatusInternalServerError
+		// A canned line saying this server failed. Encoding that saves
+		// nothing, and what the caller accepts no longer changes the answer.
+		negotiated = false
 	}
 	body = append(body, '\n')
+
+	if negotiated {
+		// On both branches, because what this route answers depends on the
+		// header whether or not this particular body was big enough to encode.
+		h.Set("Vary", "Accept-Encoding")
+		// The same containment test serveBody makes of the asset path. A
+		// client that lists gzip only to refuse it at q=0 gets an encoding it
+		// can still read; one that wants none of it sends `identity`.
+		if len(body) >= gzipMinBytes && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			if encoded := gzipJSON(body); encoded != nil {
+				h.Set("Content-Encoding", "gzip")
+				body = encoded
+			}
+		}
+	}
 
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
+}
+
+// gzipMinBytes is the smallest body worth encoding. Below about a kilobyte the
+// encoder's own header and trailer eat most of what it saves, and what is left
+// is nothing beside the round trip that carried the request.
+const gzipMinBytes = 1 << 10
+
+// gzipWriters keeps encoders between requests. One carries a few hundred
+// kilobytes of window, which is worth reusing on the route every open browser
+// re-reads after anybody's edit, and not worth allocating afresh each time.
+var gzipWriters = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
+
+// gzipJSON encodes a response body, or returns nil to say it could not, in
+// which case the caller sends what it had. Encoding into memory cannot fail
+// today; a body that goes out raw is still a better answer than one that does
+// not go out at all, in any future where it can.
+//
+// The default level rather than the best one: assets.go pays for the best once
+// at startup and serves the result for the life of the process, while this runs
+// on every read.
+func gzipJSON(body []byte) []byte {
+	zw := gzipWriters.Get().(*gzip.Writer)
+	defer func() {
+		// Pointed at nothing before it goes back, so a pooled encoder does not
+		// hold this response's buffer until somebody borrows it again.
+		zw.Reset(io.Discard)
+		gzipWriters.Put(zw)
+	}()
+
+	var buf bytes.Buffer
+	// JSON of this shape encodes to well under half its size, so this is one
+	// generous allocation rather than a series of doublings.
+	buf.Grow(len(body) / 2)
+	zw.Reset(&buf)
+	if _, err := zw.Write(body); err != nil {
+		return nil
+	}
+	if err := zw.Close(); err != nil {
+		return nil
+	}
+	return buf.Bytes()
 }
