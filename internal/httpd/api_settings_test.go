@@ -3,6 +3,7 @@ package httpd
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -178,6 +179,80 @@ func TestSettingsMoneyInAZeroDecimalCurrency(t *testing.T) {
 	}
 }
 
+// ratePatch is a one-knob body at a given revision, written out rather than
+// marshalled so the rate reaches the server as the digits these cases are
+// about rather than as whatever a float64 round trip makes of them.
+func ratePatch(revision int64, field, value string) string {
+	return `{"revision":` + strconv.FormatInt(revision, 10) + `,"` + field + `":` + value + `}`
+}
+
+// TestSettingsRatesAreHeldToTheirColumns: inflation_pct is numeric(5,2) and
+// fx_rate numeric(18,6), and a decimal past those is not refused by the column
+// but rounded away. The answer then carries a rate the client did not send, so
+// a client comparing what it holds with what it sent finds a difference no
+// further write can close and patches again on every pass, for as long as the
+// page is open. qty is held to its own column for that reason; these are the
+// other two figures here that are not money.
+func TestSettingsRatesAreHeldToTheirColumns(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	for _, tc := range []struct{ name, field, value string }{
+		// A plan in euros pricing a second currency in rupiah needs about this
+		// rate: seven decimals, of which the column keeps six.
+		{"a seventh decimal on the fx rate", "fxRate", "0.0000571"},
+		{"a third decimal on the inflation buffer", "inflationPct", "4.125"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// At whatever revision the row is on: a refused write leaves it
+			// where it was, so a case that lands anyway moves it for the next.
+			body := ratePatch(int64(num(t, settingsRow(t, h), "revision")), tc.field, tc.value)
+			res := call(t, h, http.MethodPatch, "/api/v1/settings", body)
+			if res.status != http.StatusBadRequest {
+				t.Fatalf("PATCH -> %d, want 400\n%s", res.status, res.body)
+			}
+			row := decode(t, res)
+			if got := str(t, row, "error"); got != errBadRequest {
+				t.Errorf("error = %q, want %q", got, errBadRequest)
+			}
+			// Naming the limit is the whole of it: a caller told only that
+			// something went wrong can do nothing but send the value again.
+			msg := str(t, row, "message")
+			if !strings.HasPrefix(msg, tc.field+" ") || !strings.Contains(msg, "decimal places") {
+				t.Errorf("message = %q, want it to name %s and the limit", msg, tc.field)
+			}
+		})
+	}
+
+	// And every figure the columns do hold still goes through unchanged, up to
+	// both bounds: a check that refuses a storable rate is a worse bug than the
+	// one it fixes.
+	revision := int64(num(t, settingsRow(t, h), "revision"))
+	for _, tc := range []struct{ field, value string }{
+		{"fxRate", "0.000057"},
+		{"fxRate", "17500.125"},
+		// A sixth decimal this far up, where the float's own steps are only
+		// just finer than the column's. Counting decimals holds it; checking
+		// the scale by multiplying, as qty does, would refuse it.
+		{"fxRate", "36856787008.043724"},
+		{"fxRate", "999999999999"},
+		{"fxRate", "-17500.125"},
+		{"inflationPct", "4.25"},
+		{"inflationPct", "999.99"},
+		{"inflationPct", "-2.5"},
+		{"inflationPct", "0"},
+	} {
+		res := call(t, h, http.MethodPatch, "/api/v1/settings", ratePatch(revision, tc.field, tc.value))
+		if res.status != http.StatusOK {
+			t.Fatalf("PATCH %s %s -> %d\n%s", tc.field, tc.value, res.status, res.body)
+		}
+		row := decode(t, res)
+		if got := strconv.FormatFloat(num(t, row, tc.field), 'f', -1, 64); got != tc.value {
+			t.Errorf("%s = %s, want the %s that was sent", tc.field, got, tc.value)
+		}
+		revision = int64(num(t, row, "revision"))
+	}
+}
+
 // TestSettingsStaleRevisionIs409 is the conflict path end to end, in the shape
 // every other collection uses: two people holding revision 1, the first write
 // lands, the second is refused and told what the row now says.
@@ -270,9 +345,13 @@ func TestSettingsBadRequestsAreRefused(t *testing.T) {
 		{"null toggle", `{"revision":1,"splitEvenly":null}`},
 		{"toggle as a number", `{"revision":1,"splitEvenly":1}`},
 		// numeric(5,2) and numeric(18,6): past those the column refuses the
-		// write, and a 500 tells the client this server is broken instead.
+		// write, and a 500 tells the client this server is broken instead. A
+		// decimal past them is worse than refused, it is rounded away, so it is
+		// refused here.
 		{"inflation past what the column holds", `{"revision":1,"inflationPct":1000}`},
 		{"fx rate past what the column holds", `{"revision":1,"fxRate":1e18}`},
+		{"inflation with a third decimal", `{"revision":1,"inflationPct":4.125}`},
+		{"fx rate with a seventh decimal", `{"revision":1,"fxRate":0.0000571}`},
 		{"empty body", ``},
 		{"not an object", `[{"revision":1}]`},
 		{"trailing content", `{"revision":1}{"revision":1}`},

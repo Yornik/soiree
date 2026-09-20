@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Yornik/soiree/internal/store"
 )
@@ -32,10 +33,14 @@ import (
 //
 // inflation_pct is numeric(5,2) and fx_rate numeric(18,6); the fx bound is the
 // whole-number part alone, which is both exactly representable as a float64
-// and eleven orders of magnitude past any real rate.
+// and eleven orders of magnitude past any real rate. The scales of the same two
+// columns are here for the same reason, and see setRate for why a decimal past
+// them is the worse half of this.
 const (
-	maxInflationPct = 999.99
-	maxFxRate       = 999999999999
+	maxInflationPct      = 999.99
+	inflationPctDecimals = 2
+	maxFxRate            = 999999999999
+	fxRateDecimals       = 6
 )
 
 // settingsBody is a partial write of the singleton.
@@ -58,16 +63,27 @@ type settingsBody struct {
 func (b settingsBody) apply(currency string, row store.Settings) (store.Settings, error) {
 	var f fieldErrs
 	setMoney(&f, "ceiling", currency, b.Ceiling, &row.Ceiling)
-	setRate(&f, "inflationPct", b.InflationPct, maxInflationPct, &row.InflationPct)
-	setRate(&f, "fxRate", b.FxRate, maxFxRate, &row.FxRate)
+	setRate(&f, "inflationPct", b.InflationPct, maxInflationPct, inflationPctDecimals, &row.InflationPct)
+	setRate(&f, "fxRate", b.FxRate, maxFxRate, fxRateDecimals, &row.FxRate)
 	setValue(&f, "splitEvenly", b.SplitEvenly, &row.SplitEvenly)
 	return row, f.err
 }
 
-// setRate applies a bounded numeric field: setValue plus the column's own
-// range, so an out-of-range rate is refused before it reaches a constraint the
-// API cannot report as anything but an internal error.
-func setRate(f *fieldErrs, field string, o optional[float64], limit float64, dst *float64) {
+// setRate applies a bounded numeric field: setValue plus the range and the
+// scale of the column behind it, so a rate the column cannot hold is refused
+// before it reaches a constraint the API cannot report as anything but an
+// internal error.
+//
+// The scale is the half a caller never sees coming. Past the range the column
+// complains; past the scale it rounds and says nothing, so the answer carries a
+// rate the client did not send, and a client comparing what it holds with what
+// it sent finds a difference no further write can close. It patches again on
+// every pass for as long as the page is open, and each of those writes bumps
+// the revision, which hands every other open page a conflict. A plan in euros
+// pricing a second currency in rupiah needs about 0.0000571, a seventh decimal,
+// so this is a rate somebody types rather than a contrived one. setQty holds
+// the one figure here that is neither money nor a rate to the same rule.
+func setRate(f *fieldErrs, field string, o optional[float64], limit float64, decimals int, dst *float64) {
 	if !o.set {
 		return
 	}
@@ -75,12 +91,26 @@ func setRate(f *fieldErrs, field string, o optional[float64], limit float64, dst
 		f.fail(field, "must not be null")
 		return
 	}
-	if v := *o.value; v < -limit || v > limit {
+	v := *o.value
+	if v < -limit || v > limit {
 		f.fail(field, fmt.Sprintf("must be between -%s and %s",
 			strconv.FormatFloat(limit, 'f', -1, 64), strconv.FormatFloat(limit, 'f', -1, 64)))
 		return
 	}
-	*dst = *o.value
+	// The shortest text that reproduces this float exactly: if that carries
+	// more decimals than the column keeps, then nothing the column can hold is
+	// equal to what was sent, whatever it rounds to.
+	//
+	// Counted rather than checked by multiplying by the scale the way setQty
+	// can, because maxFxRate times a million is past 2^53, and up there that
+	// arithmetic refuses rates the column holds perfectly well, maxFxRate
+	// itself among them.
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	if i := strings.IndexByte(s, '.'); i >= 0 && len(s)-i-1 > decimals {
+		f.fail(field, fmt.Sprintf("must have at most %d decimal places", decimals))
+		return
+	}
+	*dst = v
 }
 
 // settingsEntity is a descriptor built for exactly one of entity's fields.
