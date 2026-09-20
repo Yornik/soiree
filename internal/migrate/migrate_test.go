@@ -227,3 +227,51 @@ func advisoryLocksHeld(t *testing.T, pool *pgxpool.Pool) int {
 	}
 	return n
 }
+
+// TestApplyBoundsItsLockWait covers the lock a migration takes while the
+// previous release is still serving: an ALTER TABLE queued behind a long
+// reader blocks every query that release makes on that table, for as long as
+// the migration is willing to wait.
+func TestApplyBoundsItsLockWait(t *testing.T) {
+	pool := pgtest.Pool(t)
+	ctx := t.Context()
+
+	if _, err := Run(ctx, pool, nil); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+
+	probe := migration{
+		version:  9001,
+		name:     "lock_timeout_probe",
+		filename: "9001_lock_timeout_probe.sql",
+		sql:      "CREATE TABLE lock_timeout_probe AS SELECT current_setting('lock_timeout') AS value",
+		checksum: "probe",
+	}
+	if err := apply(ctx, conn, probe); err != nil {
+		t.Fatalf("apply probe: %v", err)
+	}
+
+	var inMigration string
+	if err := conn.QueryRow(ctx, "SELECT value FROM lock_timeout_probe").Scan(&inMigration); err != nil {
+		t.Fatalf("read probe: %v", err)
+	}
+	if inMigration != "10s" {
+		t.Errorf("lock_timeout inside the migration is %q, want %q", inMigration, "10s")
+	}
+
+	// SET LOCAL rather than SET: a timeout left on the session would also
+	// bound the pg_advisory_lock wait, which a replica legitimately sits in
+	// for the length of another replica's whole run.
+	var afterCommit string
+	if err := conn.QueryRow(ctx, "SELECT current_setting('lock_timeout')").Scan(&afterCommit); err != nil {
+		t.Fatalf("read session lock_timeout: %v", err)
+	}
+	if afterCommit != "0" {
+		t.Errorf("lock_timeout is %q on the pooled session after the migration, want %q", afterCommit, "0")
+	}
+}

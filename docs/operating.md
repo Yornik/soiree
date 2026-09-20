@@ -292,7 +292,7 @@ than being absent.
 | Any malformed `SOIREE_REMINDER_*` | A digest that silently never arrives is the same outcome as having no reminders at all, which is the thing the feature exists to prevent. |
 | Some but not all of the five `SOIREE_S3_*` variables | A bucket with no secret starts cleanly, draws the upload control, and fails every upload in somebody's hand. The error names what is set and what is missing. |
 | `SOIREE_ATTACHMENT_MAX_MB` or `SOIREE_ATTACHMENTS_TOTAL_MB` not a whole number above zero, or the first larger than the second | No file could ever be that large; it is a typo. |
-| The database is unreachable, or a migration fails | There is nothing to serve the API from. |
+| The database is unreachable, or a migration fails | There is nothing to serve the API from. A migration error reading `canceling statement due to lock timeout` means another session holds a long lock on a table it alters — an open `psql` transaction, a `pg_dump` in progress — and the migration gave up after ten seconds rather than make the release that is still serving queue behind it. `SELECT pid, state, xact_start, query FROM pg_stat_activity WHERE state <> 'idle' ORDER BY xact_start` finds it; the previous release keeps serving meanwhile. |
 | Either listener cannot bind | A pod that looks healthy while every scrape fails is the failure nobody notices until they need the graph. |
 
 ### Degrades to off

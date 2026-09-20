@@ -35,6 +35,19 @@ const advisoryLockKey int64 = 0x5010_1EE0_0001
 // to finish.
 const unlockTimeout = 5 * time.Second
 
+// lockTimeoutSQL bounds how long one statement in a migration waits for a
+// lock. The new replica migrates while the previous release is still serving,
+// so an ALTER TABLE queued behind a long reader — a pg_dump, a forgotten psql
+// transaction — does not wait alone: every query the old release makes on that
+// table queues behind the pending ACCESS EXCLUSIVE request and the site hangs
+// until something kills the new pod. A migration that cannot have its lock
+// promptly should give up and be retried by the restart instead.
+//
+// It is SET LOCAL, so it reverts with the transaction. At session level it
+// would also bound the pg_advisory_lock wait above, which a replica
+// legitimately sits in for the length of another replica's whole run.
+const lockTimeoutSQL = "SET LOCAL lock_timeout = '10s'"
+
 // ledgerDDL creates the record of what has already been applied.
 //
 // It is not itself a migration file, because it has to exist before the first
@@ -138,6 +151,10 @@ func apply(ctx context.Context, conn *pgxpool.Conn, m migration) error {
 		return fmt.Errorf("begin %s: %w", m.filename, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, lockTimeoutSQL); err != nil {
+		return fmt.Errorf("bound lock wait for %s: %w", m.filename, err)
+	}
 
 	// No arguments, so pgx sends this over the simple protocol — which is
 	// what lets one file hold several statements.
