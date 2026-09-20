@@ -430,6 +430,13 @@ Exported series:
 - `soiree_sse_subscribers` — live-sync clients currently connected to
   `/api/v1/events`. Registered on the same private registry by the hub itself,
   so a deployment with no database never declares it
+- `soiree_reminder_runs_total{outcome}` and `soiree_reminder_last_run_ok`, from
+  the deadline digest: how each run ended, and whether the last one ended in
+  something somebody has to act on. Registered by the scheduler itself, so a
+  deployment with reminders off declares neither, and "nothing is scheduled
+  here" cannot be read as "the digest went out". Every outcome exists at zero
+  from startup, because the scheduler's first act is a run and a counter first
+  seen at 1 has no `increase()` for an alert to read
 - `soiree_build_info{version,commit}` — stamped at link time, so a running pod
   can be tied back to a commit
 - Standard Go runtime and process collectors

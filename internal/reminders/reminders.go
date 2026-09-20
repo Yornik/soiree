@@ -66,6 +66,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/Yornik/soiree/internal/mailer"
 	"github.com/Yornik/soiree/internal/push"
 	"github.com/Yornik/soiree/internal/store"
@@ -98,6 +100,11 @@ type Service struct {
 	// VAPID keys. Nil rather than a flag, so that "there is no push here" is a
 	// state the type system carries rather than one every call site checks.
 	pusher *push.Sender
+
+	// metrics counts how runs end, and is nil when nothing registered it. The
+	// digest is the one thing here that nobody notices the absence of, so the
+	// way a run ended is the only signal an alert can be written against.
+	metrics *metrics
 
 	// now is the clock, injected so the window boundaries and the period key
 	// are testable without waiting a week.
@@ -172,12 +179,16 @@ func (s *Service) runLogged(ctx context.Context) {
 	runCtx, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
 
-	if err := s.RunOnce(runCtx); err != nil {
+	o, err := s.run(runCtx)
+	if err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			return // shutting down
 		}
 		s.log.Error("reminder digest failed", "err", err)
 	}
+	// Recorded here rather than inside the run, so a run abandoned half-way
+	// through a shutdown is not counted as a period that failed.
+	s.metrics.record(o)
 }
 
 // RunOnce composes and sends the digest for the current period, if this
@@ -195,28 +206,37 @@ func (s *Service) runLogged(ctx context.Context) {
 //  6. send;
 //  7. confirm.
 func (s *Service) RunOnce(ctx context.Context) error {
+	_, err := s.run(ctx)
+	return err
+}
+
+// run is RunOnce with the outcome it ended in, which is what the scheduler
+// records. Only a few of the returns below are errors; the rest are ordinary
+// ways for a period to pass without a digest, and an operator has to be able
+// to tell those apart from the ones that lost one.
+func (s *Service) run(ctx context.Context) (outcome, error) {
 	now := s.now()
 	key := periodKey(s.cfg.Schedule, dayIn(now, s.cfg.location()))
 
 	conn, err := s.store.Pool().Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire connection: %w", err)
+		return outcomeFailed, fmt.Errorf("acquire connection: %w", err)
 	}
 	defer conn.Release()
 
 	leader, err := takeLeaderLock(ctx, conn)
 	if err != nil {
-		return err
+		return outcomeFailed, err
 	}
 	if !leader {
 		s.log.Info("reminder digest skipped: another replica is sending it", "period", key)
-		return nil
+		return outcomeNotLeader, nil
 	}
 	defer releaseLeaderLock(ctx, conn, s.log)
 
 	p, err := lookupPeriod(ctx, conn, key)
 	if err != nil {
-		return err
+		return outcomeFailed, err
 	}
 	if p.found {
 		if p.sentAt == nil {
@@ -225,8 +245,9 @@ func (s *Service) RunOnce(ctx context.Context) error {
 			// deliberately loud, because this is the one case where a digest
 			// is lost and somebody should know.
 			s.log.Warn("reminder digest for this period was claimed but never confirmed sent; not retrying", "period", key)
+			return outcomeLost, nil
 		}
-		return nil
+		return outcomeAlreadySent, nil
 	}
 
 	// A new period beginning is not on its own a reason to send: a run just
@@ -234,32 +255,32 @@ func (s *Service) RunOnce(ctx context.Context) error {
 	// digests minutes apart is the duplicate this whole file exists to avoid.
 	last, err := lastClaimed(ctx, conn)
 	if err != nil {
-		return err
+		return outcomeFailed, err
 	}
 	if gap := cooloff(s.cfg.Schedule); last != nil && now.Sub(*last) < gap {
 		s.log.Info("reminder digest skipped: one went out too recently",
 			"period", key, "lastSent", last, "minimumGap", gap.String())
-		return nil
+		return outcomeCooloff, nil
 	}
 
 	items, err := s.store.BudgetItems(ctx)
 	if err != nil {
-		return fmt.Errorf("read budget items: %w", err)
+		return outcomeFailed, fmt.Errorf("read budget items: %w", err)
 	}
 	tasks, err := s.store.Tasks(ctx)
 	if err != nil {
-		return fmt.Errorf("read tasks: %w", err)
+		return outcomeFailed, fmt.Errorf("read tasks: %w", err)
 	}
 
 	digest := Compose(s.cfg, now, items, tasks)
 	if digest.Empty() {
 		s.log.Info("nothing due; no reminder sent", "period", key, "windowDays", s.cfg.WindowDays)
-		return nil
+		return outcomeNothingDue, nil
 	}
 
 	to, err := s.recipients(ctx)
 	if err != nil {
-		return err
+		return outcomeFailed, err
 	}
 	if len(to) == 0 {
 		// Every admin could have been disabled since startup. Nothing to do,
@@ -273,24 +294,24 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		// if subscriptions are opened to editors, say — this check has to move
 		// below the push.
 		s.log.Warn("deadline digest has nothing due to nobody: no active admin and no configured recipient")
-		return nil
+		return outcomeNoRecipients, nil
 	}
 
 	msg, err := Render(digest)
 	if err != nil {
-		return err
+		return outcomeFailed, err
 	}
 	msg.To = to
 
 	claimed, err := claimPeriod(ctx, conn, key, now, len(to), digest.Count())
 	if err != nil {
-		return err
+		return outcomeFailed, err
 	}
 	if !claimed {
 		// Unreachable while the advisory lock is held, and kept because the
 		// ledger — not the lock — is what this feature's correctness rests on.
 		s.log.Info("reminder digest already claimed by another sender", "period", key)
-		return nil
+		return outcomeAlreadySent, nil
 	}
 
 	// Both channels are attempted, and neither is allowed to decide the
@@ -307,7 +328,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 			// this period is never sent twice; it is reported here and visible
 			// in the ledger as a row with no sent_at.
 			s.log.Error("reminder digest delivery uncertain; not retrying this period", "period", key, "err", mailErr)
-			return mailErr
+			return outcomeUncertain, mailErr
 		}
 		// The mail definitely did not go out, so the period may be tried
 		// again — but only if nothing else went out either. Releasing the
@@ -317,26 +338,26 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		// precisely what the ledger exists to prevent.
 		if delivered == 0 {
 			if rerr := releaseClaim(ctx, conn, key); rerr != nil {
-				return errors.Join(mailErr, rerr)
+				return outcomeFailed, errors.Join(mailErr, rerr)
 			}
-			return fmt.Errorf("send digest: %w", mailErr)
+			return outcomeFailed, fmt.Errorf("send digest: %w", mailErr)
 		}
 		s.log.Error("reminder digest could not be mailed, but reached some devices; the period stays claimed and will not be retried",
 			"period", key, "devicesReached", delivered, "err", mailErr)
-		return fmt.Errorf("send digest: %w", mailErr)
+		return outcomeFailed, fmt.Errorf("send digest: %w", mailErr)
 	}
 
 	if err := confirmSent(ctx, conn, key, s.now()); err != nil {
 		// The mail is out; only the bookkeeping failed. Reporting this as a
 		// failed run would invite a retry of something that already happened.
 		s.log.Error("reminder digest was sent but could not be marked sent", "period", key, "err", err)
-		return nil
+		return outcomeUnrecorded, nil
 	}
 
 	s.log.Info("reminder digest sent",
 		"period", key, "recipients", len(to), "devicesReached", delivered,
 		"items", digest.Count(), "overdue", digest.Overdue())
-	return nil
+	return outcomeSent, nil
 }
 
 // sendMail hands the digest to the relay, within a budget of its own.
@@ -449,15 +470,20 @@ func (s *Service) pushDigest(ctx context.Context, d Digest) int {
 // which is worth telling an operator about; it never means "no SMTP", because
 // that is a normal way to run this.
 //
+// reg is where the run counters go, and may be nil for a deployment nothing
+// scrapes. They are registered only once there is a scheduler to count, so
+// "reminders are off here" and "the digest did not go out" cannot be confused
+// for one another by something reading the exposition.
+//
 // Wiring it up, once cmd/soiree has a pool:
 //
-//	stopReminders, err := reminders.Start(ctx, st, log)
+//	stopReminders, err := reminders.Start(ctx, st, log, srv.MetricsRegistry())
 //	if err != nil {
 //		log.Error("reminder configuration is invalid", "err", err)
 //		os.Exit(1)
 //	}
 //	defer stopReminders()
-func Start(ctx context.Context, st *store.Store, log *slog.Logger) (func(), error) {
+func Start(ctx context.Context, st *store.Store, log *slog.Logger, reg prometheus.Registerer) (func(), error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
@@ -519,6 +545,9 @@ func Start(ctx context.Context, st *store.Store, log *slog.Logger) (func(), erro
 	svc := New(st, sender, cfg, log)
 	if vapid.Configured() {
 		svc = svc.WithPush(push.New(vapid))
+	}
+	if reg != nil {
+		svc = svc.WithMetrics(reg)
 	}
 	return svc.Start(ctx), nil
 }

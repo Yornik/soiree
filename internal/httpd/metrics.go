@@ -73,6 +73,18 @@ func (m *Metrics) Handler() http.Handler {
 	})
 }
 
+// MetricsRegistry is where a feature outside this package declares series of
+// its own: the deadline digest's run counters, in internal/reminders.
+//
+// The Registerer half rather than the registry itself, because a feature adds
+// to the exposition and has no business gathering or serving it. Handing it
+// out at all is what lets a collector be registered only when the thing it
+// measures is actually running, the way the live sync hub registers its gauge
+// only where there is a database.
+func (s *Server) MetricsRegistry() prometheus.Registerer {
+	return s.metrics.registry
+}
+
 // statusRecorder captures the status code for metrics and logging.
 type statusRecorder struct {
 	http.ResponseWriter

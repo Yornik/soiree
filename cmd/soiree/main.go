@@ -243,8 +243,11 @@ func main() {
 	// no-op when SMTP is unconfigured, so this costs nothing in a deployment
 	// that does not want it. It holds a Postgres advisory lock while sending,
 	// which is what stops three replicas mailing the same digest three times.
+	// It counts its runs on the metrics registry, because the one job whose
+	// value is that it arrives without anyone checking is also the one whose
+	// failure nobody is looking for.
 	if st != nil {
-		stopReminders, err := reminders.Start(ctx, st, log)
+		stopReminders, err := reminders.Start(ctx, st, log, srv.MetricsRegistry())
 		if err != nil {
 			// Bad reminder configuration is a startup error rather than a
 			// warning: a digest that silently never sends is the same failure

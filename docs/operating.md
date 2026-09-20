@@ -549,7 +549,7 @@ safe because the period ledger makes a second run within the same period a
 no-op.
 
 So the quickest test is a restart with something due inside the window. Every
-outcome is a log line:
+outcome is a log line, and a sample on the counter below:
 
 | `msg` | Means |
 |---|---|
@@ -578,6 +578,29 @@ SELECT period_key, claimed_at, sent_at, recipients, item_count
 ```
 
 A row with `sent_at` null is a claimed-but-unconfirmed period.
+
+Every outcome is also a sample on `soiree_reminder_runs_total{outcome}`, which
+is what an alert can be written against. `sent`, `nothing_due`,
+`already_sent`, `cooloff` and `not_leader` are the runs nobody has to act on.
+The five that somebody does are `no_recipients`, `unrecorded` (it went out, and
+the ledger write afterwards failed), `uncertain` (the relay never acknowledged
+it), `lost` (a period claimed by an earlier run that never confirmed it) and
+`failed`. `soiree_reminder_last_run_ok` is 1 after one of the first five and 0
+after one of the second. Both series are declared by the scheduler, so a
+deployment with reminders off exports neither, and all ten outcomes exist at
+zero from startup so that a failure on the very first run still reads as an
+increase.
+
+Alert on `soiree_reminder_last_run_ok == 0` for ten minutes. The delay is for
+the pod that has only just started and whose first run is still in flight,
+which is bounded at two minutes. To respond, read the outcome off the log line
+and the period off the ledger: `failed` may have released the claim, in which
+case the next run or a restart sends it, while `uncertain` and `lost` keep it
+on purpose and the period is gone.
+
+Do not alert on the time since the last digest went out. A plan with nothing
+due legitimately goes weeks without one, so a quiet fortnight and a dead relay
+look the same.
 
 ### Passkeys
 
