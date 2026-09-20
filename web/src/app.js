@@ -888,7 +888,7 @@
       // The base travels with the state or not at all: with no database there
       // is no base, and a bare state is also what every save before this one
       // looks like, which Store.read has to go on accepting.
-      var value = shadow ? { state: s, shadow: shadow, idMap: idMap } : s;
+      var value = shadow ? { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys } : s;
       try { localStorage.setItem(this.key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
     },
     clear: function () {
@@ -902,18 +902,21 @@
   // between "this is a cached copy of the server's plan" and "this is the only
   // copy in existence", and adopt() has to know which it is looking at.
   var hadSavedCopy = false;
-  // The merge base the last page left behind, and the ids it had adopted by
-  // then. Both are installed further down, where the shadow they belong to is
-  // declared; what matters here is that they are taken out of the same value
-  // as the state, so the two cannot be from different moments.
+  // The merge base the last page left behind, the ids it had adopted by then,
+  // and the names it had given the creates it had not sent. All three are
+  // installed further down, where the shadow they belong to is declared; what
+  // matters here is that they are taken out of the same value as the state, so
+  // they cannot be from different moments.
   var savedBase = null;
   var savedIdMap = null;
+  var savedCreateKeys = null;
   try {
     var saved = Store.read();
     hadSavedCopy = saved !== null;
     if (saved && saved.state && saved.shadow) {
       savedBase = saved.shadow;
       savedIdMap = saved.idMap;
+      savedCreateKeys = saved.createKeys;
       saved = saved.state;
     }
     state = saved || (CONFIG.demoData ? demoState() : emptyState());
@@ -977,6 +980,7 @@
   var dirty = false;       // something was edited before the plan arrived
   var shadow = null;       // rows as the server last confirmed them (restored below)
   var idMap = {};          // this browser's optimistic ids -> the server's uuids
+  var createKeys = {};     // and the uuid each unsent create names itself by
   var blocked = {};        // writes the server refused, parked until they change
 
   // Backoff for a write that got no answer. Doubling from a second, capped,
@@ -1221,7 +1225,8 @@
   }
 
   // A server id is a uuid; one minted here is a letter and seven characters of
-  // base 36 (see uid), until adoptServerId() renames it on the 201.
+  // base 36 (see uid), until adoptServerId() renames it when the create is
+  // answered.
   var SERVER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   // The stand-in shadow adopt() merges against. The revisions are never read:
@@ -1262,6 +1267,7 @@
   // plan does writes the base back out rather than dropping it.
   shadow = baseFromStored(savedBase);
   if (shadow && savedIdMap) idMap = savedIdMap;
+  if (shadow && savedCreateKeys) createKeys = savedCreateKeys;
 
   // The server's answer to a write is the row as it now stands, so it is also
   // the new agreed version. Stored as its own object: a shadow that shared
@@ -1387,20 +1393,75 @@
 
   /* ---------- Writes ---------- */
 
+  /* A create names the row it is creating, with a uuid of this browser's own.
+   *
+   * Nothing here can tell an answer that never arrived from a request that
+   * never went, so a POST whose answer is lost on the way back is sent again.
+   * Unnamed, the second one is a second budget line to the server, and the
+   * same cost is then in every total twice with nothing saying so. Named, the
+   * repeat is recognised and answered with the row already stored.
+   *
+   * Not the row's own id, which stays the one uid() minted. The shape of an id
+   * is read in two places as "the server has this row": the stand-in shadow a
+   * dirty reload merges against, and the gate on attaching a file to a line. A
+   * uuid on a row that has never been sent would make that reload read it as a
+   * row somebody else deleted and drop it, which turns a duplicate anybody can
+   * see into work nobody can get back.
+   */
+  function createKeyFor(id) {
+    if (createKeys[id]) return createKeys[id];
+    createKeys[id] = uuidV4();
+    // Kept before the request goes rather than after its answer, because the
+    // answer is the thing that may not come: the retry that needs this name
+    // may be on the other side of a reload.
+    Store.keep();
+    return createKeys[id];
+  }
+
+  // A version 4 uuid. getRandomValues rather than crypto.randomUUID(), which
+  // exists only in a secure context and this page is served over plain http on
+  // a LAN as well; Math.random for a browser with neither, since a name only
+  // has to be unlikely to meet another row in one plan.
+  function uuidV4() {
+    var bytes = new Uint8Array(16);
+    if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (var i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    var out = '';
+    for (var j = 0; j < 16; j++) {
+      out += (bytes[j] + 0x100).toString(16).slice(1);
+      if (j === 3 || j === 5 || j === 7 || j === 9) out += '-';
+    }
+    return out;
+  }
+
   function sendCreate(op) {
     var c = op.coll;
     var row = liveRow(c, op.id);
     // Added and removed again inside one debounce window: it never existed on
     // the server, so there is nothing to create and nothing to delete either.
-    if (!row) return Promise.resolve(true);
+    if (!row) {
+      delete createKeys[op.id];
+      return Promise.resolve(true);
+    }
 
     var body = {};
     c.fields.forEach(function (f) { body[f.name] = f.wire(row); });
     body.position = nextPosition(c);
+    body.id = createKeyFor(op.id);
 
     return api('POST', '/' + c.route, body).then(function (res) {
-      if (res.status === 201 && res.body && res.body.id) {
+      // 200 is this same create answered a second time: the first attempt
+      // committed and its answer was lost, so what comes back is the row as
+      // stored rather than a second one. Anything typed since is a difference
+      // from it, and goes up as the next pass's patch.
+      if ((res.status === 201 || res.status === 200) && res.body && res.body.id) {
         adoptServerId(c, op.id, res.body.id);
+        delete createKeys[op.id];
         shadowPut(c, res.body);
         return true;
       }
@@ -1558,10 +1619,11 @@
 
   /* ---------- Optimistic ids ----------
    * The page makes an id the moment a row appears, because the row has to be
-   * addressable before any round trip could have answered. The server makes a
-   * uuid on POST. Reconciling the two is a rename, everywhere the old one was
-   * referred to — otherwise a budget line keeps pointing at a sponsor id that
-   * only ever existed in this browser.
+   * addressable before any round trip could have answered. The uuid the row is
+   * stored under is the one the create named (see createKeyFor), and the page
+   * learns it from the answer. Reconciling the two is a rename, everywhere the
+   * old one was referred to — otherwise a budget line keeps pointing at a
+   * sponsor id that only ever existed in this browser.
    */
   function adoptServerId(coll, localId, serverId) {
     if (!serverId || localId === serverId) return;
@@ -1934,6 +1996,7 @@
     hadSavedCopy = false;
     blocked = {};
     idMap = {};
+    createKeys = {};
     pendingRefresh = {};
     loaded = JSON.parse(JSON.stringify(state));
     Sync.queued = false;

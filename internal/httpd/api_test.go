@@ -902,6 +902,156 @@ func TestTotalsAgreeWithTheLineItems(t *testing.T) {
 	}
 }
 
+// TestACreateThatNamesItsIdCanBeSentTwice is the answer that never arrived.
+//
+// A POST that commits and whose answer is lost on the way back is sent again
+// by the browser, which has no way to know the row is already stored. Every
+// send is a create, so the second one used to add a second budget line: a cost
+// counted twice in every total, in a tool whose whole point is the total, and
+// nothing anywhere saying so. A create that names its own id is recognisable
+// when it goes again, and the duplicate key is the proof that this is the
+// same create rather than a second line somebody typed.
+func TestACreateThatNamesItsIdCanBeSentTwice(t *testing.T) {
+	h, pool := newAPIServer(t)
+
+	id := uuid.New().String()
+	body := `{"id":"` + id + `","item":"Venue deposit","unit":"2500.00","qty":1}`
+
+	first := call(t, h, http.MethodPost, "/api/v1/budget-items", body)
+	if first.status != http.StatusCreated {
+		t.Fatalf("POST -> %d, want 201\n%s", first.status, first.body)
+	}
+	if got := str(t, decode(t, first), "id"); got != id {
+		t.Errorf("id = %q, want the one the create named, %q", got, id)
+	}
+
+	// The same request again, which is exactly what the browser sends when the
+	// answer above is lost. 200 rather than 201, because nothing was stored.
+	second := call(t, h, http.MethodPost, "/api/v1/budget-items", body)
+	if second.status != http.StatusOK {
+		t.Fatalf("the same create again -> %d, want 200\n%s", second.status, second.body)
+	}
+	row := decode(t, second)
+	if got := str(t, row, "id"); got != id {
+		t.Errorf("id = %q, want %q", got, id)
+	}
+	if got := num(t, row, "revision"); got != 1 {
+		t.Errorf("revision = %v, want the stored row's 1", got)
+	}
+
+	plan := decode(t, call(t, h, http.MethodGet, "/api/v1/plan", ""))
+	items, _ := plan["budgetItems"].([]any)
+	if len(items) != 1 {
+		t.Errorf("the plan holds %d budget lines, want the one line that was created", len(items))
+	}
+
+	// And it happened once. A second entry would put the line in the history
+	// twice, which is where anybody arguing about the money looks.
+	var creates int
+	if err := pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM change_log
+		  WHERE entity = 'budget_items' AND entity_id = $1 AND action = 'create'`,
+		id).Scan(&creates); err != nil {
+		t.Fatalf("read the history: %v", err)
+	}
+	if creates != 1 {
+		t.Errorf("the history holds %d creates for the line, want 1", creates)
+	}
+}
+
+// TestARepeatedCreateAnswersWithTheRowAsStored: the retry carries the row as
+// it looks now, which is not always what committed the first time, because
+// somebody kept typing while the answer was not arriving. The answer is the stored row,
+// so the browser takes that as the version both sides agree on and sends the
+// difference as an ordinary patch afterwards. Merging here instead would be a
+// write nobody asked for, made from a body whose revision means nothing.
+func TestARepeatedCreateAnswersWithTheRowAsStored(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	id := uuid.New().String()
+	first := call(t, h, http.MethodPost, "/api/v1/tasks",
+		`{"id":"`+id+`","name":"Book the band","owner":"Ada"}`)
+	if first.status != http.StatusCreated {
+		t.Fatalf("POST -> %d, want 201\n%s", first.status, first.body)
+	}
+
+	second := call(t, h, http.MethodPost, "/api/v1/tasks",
+		`{"id":"`+id+`","name":"Book the band and the lights","owner":"Ada"}`)
+	if second.status != http.StatusOK {
+		t.Fatalf("the create again -> %d, want 200\n%s", second.status, second.body)
+	}
+	if got := str(t, decode(t, second), "name"); got != "Book the band" {
+		t.Errorf("name = %q, want the stored row's %q", got, "Book the band")
+	}
+}
+
+// TestAUniqueViolationThatIsNotTheIdIsStillAConflict draws the line around the
+// answer above. A duplicate primary key is a create this server has already
+// done; every other duplicate key is a different row colliding with one that
+// is there, and telling the caller it succeeded would hand them a row that is
+// not the one they sent.
+func TestAUniqueViolationThatIsNotTheIdIsStillAConflict(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	item := created(t, h, "budget-items", `{"item":"Cake","unit":"100.00","qty":1}`)
+	line := str(t, item, "id")
+	created(t, h, "programme-entries",
+		`{"title":"Cutting the cake","position":0,"budgetItemId":"`+line+`"}`)
+
+	// A second entry against the same budget line, under an id of its own.
+	// What it violates is programme_entries' unique index on budget_item_id,
+	// not the table's primary key.
+	res := call(t, h, http.MethodPost, "/api/v1/programme-entries",
+		`{"id":"`+uuid.New().String()+`","title":"Cutting the cake again","position":1,"budgetItemId":"`+line+`"}`)
+	if res.status != http.StatusConflict {
+		t.Fatalf("a second entry on the same line -> %d, want 409\n%s", res.status, res.body)
+	}
+	if got := str(t, decode(t, res), "error"); got != errConflict {
+		t.Errorf("error = %q, want %q", got, errConflict)
+	}
+}
+
+// TestACreateWithAnIdThatIsNotAUuidIsRefused: a client that meant to name its
+// row and misspelt the id would otherwise be given a server-minted one and
+// silently lose the protection it was asking for, and its next retry would be
+// the duplicate this whole path exists to prevent.
+func TestACreateWithAnIdThatIsNotAUuidIsRefused(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	res := call(t, h, http.MethodPost, "/api/v1/tasks", `{"id":"task-7","name":"Book the band"}`)
+	if res.status != http.StatusBadRequest {
+		t.Fatalf("POST with a malformed id -> %d, want 400\n%s", res.status, res.body)
+	}
+	if got := str(t, decode(t, res), "error"); got != errBadRequest {
+		t.Errorf("error = %q, want %q", got, errBadRequest)
+	}
+}
+
+// TestAPatchStillIgnoresTheIdInItsBody: only a create reads it. A patch names
+// the row in the path, and a client echoing a whole row back must not be able
+// to move it somewhere else by editing one field of what it sends.
+func TestAPatchStillIgnoresTheIdInItsBody(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	note := created(t, h, "notes", `{"text":"Check the parking.","position":0}`)
+	id := str(t, note, "id")
+	elsewhere := uuid.New().String()
+
+	res := call(t, h, http.MethodPatch, "/api/v1/notes/"+id,
+		`{"id":"`+elsewhere+`","revision":1,"text":"Check the parking twice."}`)
+	if res.status != http.StatusOK {
+		t.Fatalf("PATCH -> %d, want 200\n%s", res.status, res.body)
+	}
+	if got := str(t, decode(t, res), "id"); got != id {
+		t.Errorf("id = %q, want the row in the path, %q", got, id)
+	}
+
+	plan := call(t, h, http.MethodGet, "/api/v1/plan", "")
+	if strings.Contains(string(plan.body), elsewhere) {
+		t.Errorf("the patch moved the note to the id in its body:\n%s", plan.body)
+	}
+}
+
 // TestStaleRevisionIs409 is the conflict path end to end: two people holding
 // revision 1, the first write lands, the second is refused and told what the
 // row now says rather than overwriting it.

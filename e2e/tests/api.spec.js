@@ -736,6 +736,64 @@ test('a write that cannot get out is retried and said out loud, not dropped', as
 });
 
 /*
+ * The outage that is not one: the request arrives, the row commits, and only
+ * the answer is lost on the way back. Every abort above stages the opposite,
+ * where the server never hears the request at all, and the difference between
+ * the two is the whole of this bug. Nothing in the browser can tell an answer
+ * that never came from a request that never went, so the create goes again,
+ * and a create the server has already done used to become a second budget
+ * line: the same cost in every total twice, with nothing anywhere saying so.
+ *
+ * Staged by playing the create upstream by hand and then cutting the browser's
+ * own attempt off, because route.abort() alone kills the request before the
+ * server sees it.
+ */
+test('a create whose answer is lost does not become a second line', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  let swallowed = 0;
+  let committed = 0;
+  await page.route('**/api/v1/budget-items', async (route) => {
+    if (swallowed > 0 || route.request().method() !== 'POST') return route.continue();
+    swallowed += 1;
+    const upstream = await request.post(`${API_URL}/api/v1/budget-items`, {
+      headers: await apiAuth(request),
+      data: JSON.parse(route.request().postData() || '{}'),
+    });
+    committed = upstream.status();
+    return route.abort('internetdisconnected');
+  });
+
+  // Registered before the line is added, and it is the *retry* it catches: the
+  // first attempt is cut off and never has a response at all.
+  const answered = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && r.url().endsWith('/api/v1/budget-items'),
+    { timeout: 30_000 },
+  );
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await expect.poll(() => committed, { message: 'the first create should have committed' }).toBe(201);
+  expect(
+    (await answered).status(),
+    'a create this server has already done is the row it stored, not a second one',
+  ).toBe(200);
+
+  // One line on the server, and the money that was typed on it: the second
+  // answer is the row as stored, and whatever was typed while the first answer
+  // was not arriving goes up as the ordinary patch that follows.
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.unit]), { timeout: 20_000 })
+    .toEqual([['Venue deposit', '2500.00']]);
+
+  // And one line on the screen, at the cost of one line. That is where the
+  // duplicate did its damage: the next plan read pulls the first copy in as
+  // somebody else's new row, and the evening's committed figure reads 5,000
+  // for a venue that costs 2,500.
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
+  await expectFigures(page, { committed: 2500, paid: 0, outstanding: 2500, forecast: 2500 });
+});
+
+/*
  * The same outage, met from the other end: the origin is already away when the
  * page opens. That is the ordinary start for an installed planner, because the
  * service worker paints the shell with no network at all, and it is also a pod
