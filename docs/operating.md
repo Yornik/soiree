@@ -679,6 +679,42 @@ the log, under different names:
   allowance of ten a minute for an address. A reverse-proxy rule that counts
   401-403 on the login routes never sees it: it answers 204, always.
 
+## Upgrading and rolling back
+
+Upgrading is deploying the newer tag. The new process applies the migrations it
+carries before it listens, so for the length of a rollout the release before it
+is serving against the new schema. That works because every migration so far
+only adds: new tables, and in `0009_phase_revision.sql` new columns with
+defaults. Nothing in CI enforces that, so the rule that keeps it true lives in
+CONTRIBUTING, under "Migrations are append-only".
+
+Rolling back is deploying the older tag, and the schema does not come back with
+it. The older binary applies nothing, ignores the `schema_migrations` rows it
+has no file for, and warns at every start with `database schema is ahead of
+this binary` (above, under "Reading the startup log", with the fields that say
+which release ran and when). Then it serves. What the newer release added is
+dormant rather than lost, and writes made while rolled back are recorded
+without whatever that release would have added to them.
+
+Deletion is the exception. An attachment row cascades from the budget item or
+task it hangs off, so deleting one of those while rolled back takes its files
+with it, and the sweeper takes their objects out of the bucket within the
+hour. Rolling forward does not bring those bytes back.
+
+Two rules on top of that:
+
+- Never go below v1.0.0. Those images mount `/api/v1` with no authorisation at
+  all, which [SECURITY.md](../SECURITY.md) states as plainly as it can.
+- Rolling the image back does not undo what a release *did*. For that, restore
+  the database to before that migration's `applied_at` in `schema_migrations`,
+  which is the `earliestAppliedAt` the warning above prints, and read the next
+  section first.
+
+A start that refuses with `migration NNNN was modified after it was applied`
+means this image and this database disagree about the history. Deploy a
+published tag rather than something built locally from a branch, and never edit
+a `schema_migrations` row to quiet the message.
+
 ## Backup and restore
 
 The container holds nothing. State is in PostgreSQL — and, if attachments are
@@ -702,6 +738,35 @@ database is safe. And `SOIREE_BOOTSTRAP_ADMIN` will not recreate an admin that
 exists in the restored data, which means a restore of a database whose only
 admin was disabled leaves no way in — re-enable the account in SQL, or restore
 to a point where one was active.
+
+A restore rewinds the accounts along with the plan, which is the part to settle
+before anybody is let back in. Sessions are ordinary rows, so a sign-out, a
+disabled account, a demotion or a password change made after the restore point
+is undone, and the cookie each of those invalidated works again for whatever it
+has left of its week idle and its thirty days in all. Run `DELETE FROM
+sessions;`, which costs everybody one sign-in, and re-apply by hand every
+disable, demotion and password reset made since. Set-password links redeemed
+since then are usable again until their 24 hours run out, which is also the way
+back in for somebody whose new password the restore has just discarded.
+
+Three smaller ones:
+
+- **An upload in flight at the restore point.** Its row is `uploading`,
+  invisible in the plan, and the sweeper runs at startup as well as hourly, so
+  the row and its object are gone within seconds of the process coming up. To
+  keep such a file, confirm the object is in the bucket at the size the row
+  claims and run `UPDATE attachments SET status = 'ready' WHERE id = '…';`
+  before soiree starts, not after.
+- **A passkey registered after the restore point.** The device still offers it,
+  the restored database has no record of it, and the answer is the same 401 as
+  a wrong password. Sign in with a password and register it again; the device
+  normally overwrites the old entry. No restore can refuse a passkey over its
+  signature counter: a rewind only ever moves the stored count backwards, and
+  the check refuses the opposite.
+- **The deadline digest.** If this period's `reminders_sent` row is one of the
+  things the restore lost, the digest can go out a second time. Push
+  subscriptions need no attention: each browser re-posts what it holds on its
+  next visit.
 
 The restore drill itself has not been done. A backup that has never been
 restored is not a backup, and that item is still open on the roadmap.

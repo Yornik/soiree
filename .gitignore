@@ -8,3 +8,7 @@ soiree-*.json
 # Editor / OS
 .DS_Store
 *.swp
+
+# Agent worktrees. Each is a full checkout, so a `git add -A` at the root would
+# commit one as an embedded repository.
+.claude/worktrees/
