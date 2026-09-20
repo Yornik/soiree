@@ -1,7 +1,10 @@
 package migrate
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -226,6 +229,46 @@ func advisoryLocksHeld(t *testing.T, pool *pgxpool.Pool) int {
 		t.Fatalf("count advisory locks: %v", err)
 	}
 	return n
+}
+
+// TestRunWarnsWhenTheSchemaIsAheadOfTheBinary covers a rollback: a newer
+// release migrated the database, and this older binary then started against
+// it. It has to serve — rolling back is the emergency tool — but without a
+// word it is indistinguishable from an ordinary restart.
+func TestRunWarnsWhenTheSchemaIsAheadOfTheBinary(t *testing.T) {
+	pool := pgtest.Pool(t)
+	ctx := t.Context()
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	if _, err := Run(ctx, pool, log); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("a database this binary migrated itself warned: %s", buf.String())
+	}
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO schema_migrations (version, name, checksum)
+		 VALUES (9999, 'from_a_newer_release', 'whatever')`,
+	); err != nil {
+		t.Fatalf("insert ledger row: %v", err)
+	}
+
+	if _, err := Run(ctx, pool, log); err != nil {
+		t.Fatalf("a schema ahead of the binary must not refuse to start: %v", err)
+	}
+
+	logged := buf.String()
+	for _, want := range []string{
+		"database schema is ahead of this binary",
+		"9999", "from_a_newer_release", "binaryHighest",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("startup log does not mention %q: %s", want, logged)
+		}
+	}
 }
 
 // TestApplyBoundsItsLockWait covers the lock a migration takes while the

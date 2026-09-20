@@ -59,6 +59,7 @@ And these say something is off:
 | `SMTP is not configured; the deadline digest goes out as a notification only` | Reminders are on with push as the only channel |
 | `Web Push is half-configured, so notifications are off` | One or two of the three VAPID variables are set |
 | `passkeys unavailable, leaving them off` | Logged with `err`; password login is untouched |
+| `database schema is ahead of this binary` | A newer release migrated this database and this process is a rollback. It serves, but writes made here skip whatever that release added; `unknownVersions`, `unknownNames` and `earliestAppliedAt` say which release and when. Roll forward, or restore to before `earliestAppliedAt` |
 
 `api` on the listening line is the single quickest check that the browser will
 get a shared planner rather than a local one. `migrationsApplied` is the number
