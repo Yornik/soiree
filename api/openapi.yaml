@@ -17,12 +17,16 @@ openapi: 3.1.0
 
 info:
   title: soiree
-  version: 1.0.0
+  # release-please rewrites this line at each release, so it names the newest
+  # one rather than the first. `GET /version` names the release that a
+  # deployment is running.
+  version: 1.2.1 # x-release-please-version
   summary: The HTTP API of the soiree event planner.
   description: |
     soiree holds one **plan**. A plan is the settings, the phases, the
-    sponsors, the budget items, the programme, the tasks and the notes for a
-    single event. Every person who signs in reads the same plan.
+    sponsors, the budget items, the programme, the tasks, the notes and the
+    attachments for a single event. Every person who signs in reads the same
+    plan.
 
     ## The term list
 
@@ -664,6 +668,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+        '500':
+          $ref: '#/components/responses/LinkFailed'
 
   /users/{id}:
     parameters:
@@ -819,6 +825,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
+        '500':
+          $ref: '#/components/responses/LinkFailed'
 
   ############################################################################
   # The plan
@@ -1010,6 +1018,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/StaleRevision'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
 
   ############################################################################
   # Collections
@@ -1032,6 +1042,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
   /phases/{id}:
     parameters:
@@ -1058,6 +1069,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/StaleRevision' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
     delete:
       tags: [budget]
       operationId: deletePhase
@@ -1082,7 +1094,8 @@ paths:
       description: |
         A sponsor pays for budget items. An editor or an admin calls this.
 
-        `code` is the short label the table shows. It is unique.
+        `code` is the short label the table shows. Two sponsors can hold the
+        same label. The server does not refuse it.
       requestBody:
         required: true
         content:
@@ -1094,11 +1107,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '409':
-          description: The `code` belongs to another sponsor (`conflict`).
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ApiError' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
   /sponsors/{id}:
     parameters:
@@ -1125,6 +1134,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/StaleRevision' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
     delete:
       tags: [budget]
       operationId: deleteSponsor
@@ -1164,6 +1174,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
   /budget-items/{id}:
     parameters:
@@ -1194,6 +1205,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/StaleRevision' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
     delete:
       tags: [budget]
       operationId: deleteBudgetItem
@@ -1219,7 +1231,8 @@ paths:
       description: |
         The programme is the run of the day. An editor or an admin calls this.
 
-        Point `budgetItemId` at a budget item to tie the entry to a cost.
+        Point `budgetItemId` at a budget item to tie the entry to a cost. One
+        budget item belongs to at most one entry.
       requestBody:
         required: true
         content:
@@ -1231,6 +1244,8 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/BudgetItemTaken' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
   /programme-entries/{id}:
     parameters:
@@ -1256,7 +1271,8 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/StaleRevision' }
+        '409': { $ref: '#/components/responses/ProgrammeEntryConflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
     delete:
       tags: [schedule]
       operationId: deleteProgrammeEntry
@@ -1295,6 +1311,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
   /tasks/{id}:
     parameters:
@@ -1321,6 +1338,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/StaleRevision' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
     delete:
       tags: [schedule]
       operationId: deleteTask
@@ -1352,6 +1370,7 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
 
   /notes/{id}:
     parameters:
@@ -1378,6 +1397,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/StaleRevision' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
     delete:
       tags: [notes]
       operationId: deleteNote
@@ -1500,9 +1520,10 @@ paths:
               schema: { $ref: '#/components/schemas/ApiError' }
         '413':
           description: |
-            The file is larger than one file can be on this deployment. The
-            code is `payload_too_large`. The page configuration holds the limit
-            (`attachments.maxBytes`).
+            The file is larger than one file can be on this deployment, or
+            the request body is larger than 64 KiB. The code is
+            `payload_too_large` in both cases. The page configuration holds
+            the file limit (`attachments.maxBytes`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApiError' }
@@ -1739,8 +1760,11 @@ components:
         a **500**: a figure past what its column holds, a NUL byte in a text
         field. It is the value that has to change, and only you can change it.
 
-        On the plan, the collections, the settings and the push paths, the
-        code is `bad_request`.
+        On the plan, the collections and the settings, the code is
+        `bad_request`.
+
+        On the push paths, the code is `invalid_json` when the body does not
+        parse, and `bad_request` when a value fails a rule.
 
         On the accounts paths the code names the fault: `invalid_json`,
         `invalid_email`, `invalid_role`, `invalid_status`, `invalid_language`,
@@ -1819,6 +1843,55 @@ components:
         Read `current`. It holds the row as it now stands, with its new
         revision. Reconcile against it, and write again with that revision. A
         call to `GET /plan` is unnecessary.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    PayloadTooLarge:
+      description: |
+        The request body is larger than 64 KiB. The code is
+        `payload_too_large`.
+
+        The limit is on the whole body. The largest body this API expects is
+        a note of a few paragraphs.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    BudgetItemTaken:
+      description: |
+        The `budgetItemId` belongs to another entry of the programme. The
+        code is `conflict`.
+
+        One budget item belongs to at most one entry. Clear the budget item
+        on the other entry first.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    ProgrammeEntryConflict:
+      description: |
+        Somebody wrote first, or the `budgetItemId` belongs to another entry.
+        Read `error` to tell the two apart.
+
+        The code is `stale_revision` when somebody wrote first. Read
+        `current`, reconcile against it, and write again with the revision it
+        carries.
+
+        The code is `conflict` when the budget item belongs to another entry
+        of the programme. One budget item belongs to at most one entry.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+    LinkFailed:
+      description: |
+        The account exists. The server did not make the set-password link.
+        The code is `link_failed`.
+
+        Call `POST /users/{id}/invite` to make a link. Do not create the
+        account again: the account is there, and a second `POST /users` gets
+        **409** `email_taken`.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ApiError' }
@@ -1954,6 +2027,14 @@ components:
       format: int32
       description: |
         The order of this row among its siblings. A lower number comes first.
+
+        The server allocates nothing. A create that omits `position` gets 0,
+        and 0 comes first. Read the collection, and send one more than the
+        highest `position` in it to put the new row last.
+
+        Two rows that hold the same position come back in the order of their
+        ids. That order is stable, and it says nothing about which row was
+        made first.
 
     ########################################################################
     # Activity
@@ -2147,8 +2228,18 @@ components:
     ApiError:
       type: object
       description: |
-        The body of every answer outside the 2xx range. One shape, so a client
-        never guesses.
+        The body of every answer that an operation in this document gives
+        outside the 2xx range. One shape, so a client never guesses.
+
+        This document does not list **500** on each operation. An operation
+        that reads or writes the database can answer it, with the code
+        `internal` and no detail. The cause is in the log of the server.
+
+        Two answers come from the router rather than from an operation, and
+        both are `text/plain`. With a session, a path under `/api/v1` that no
+        route serves gets **404**, and a method that a route does not have
+        gets **405** with an `Allow` header. Read `Content-Type` before you
+        parse a refusal.
       required: [error]
       properties:
         error:
@@ -2186,6 +2277,7 @@ components:
             - email_taken
             - account_disabled
             - no_password
+            - link_failed
             - too_many_passkeys
             - passkey_exists
         message:
@@ -2372,8 +2464,8 @@ components:
         code:
           type: string
           description: |
-            The short label the table shows. It is unique across the
-            sponsors.
+            The short label the table shows. Two sponsors can hold the same
+            label.
         name: { type: string }
         position: { $ref: '#/components/schemas/Position' }
         revision: { $ref: '#/components/schemas/Revision' }
@@ -2401,7 +2493,7 @@ components:
           description: Accepted and dropped. The session names the account.
         code:
           type: string
-          description: The short label. It is unique. A clash gets 409.
+          description: The short label. Two sponsors can hold the same label.
         name: { type: string }
         position: { $ref: '#/components/schemas/Position' }
 
@@ -2534,6 +2626,9 @@ components:
           description: |
             The budget item this entry costs. It is `null` for an entry with
             no cost.
+
+            One budget item belongs to at most one entry. A write that names
+            a budget item another entry holds gets **409**.
         revision: { $ref: '#/components/schemas/Revision' }
         updatedAt: { type: string, format: date-time }
 
@@ -2755,8 +2850,11 @@ components:
           description: |
             The address of the push service. It identifies the subscription.
         expirationTime:
-          type: [string, 'null']
-          description: The browser sets this. It is `null` in most cases.
+          type: [number, 'null']
+          description: |
+            The browser sets this. It is a count of milliseconds since the
+            epoch, and it is `null` in most cases. The server accepts it and
+            ignores it.
         keys:
           type: object
           required: [p256dh, auth]

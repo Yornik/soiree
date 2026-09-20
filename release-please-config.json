@@ -8,6 +8,10 @@
         {
           "type": "generic",
           "path": "docs/verifying-releases.md"
+        },
+        {
+          "type": "generic",
+          "path": "api/openapi.yaml"
         }
       ]
     }
