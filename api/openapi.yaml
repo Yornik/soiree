@@ -1432,6 +1432,31 @@ paths:
             The `id` of an entry. The page holds entries older than this one.
             Omit it for the newest page.
           schema: { type: integer, format: int64, minimum: 1 }
+        - name: entity
+          in: query
+          required: false
+          description: |
+            One table. The page holds the entries about that table alone, and
+            pages with `before` in the same way as the whole feed does.
+
+            A name outside this list is a `400`. It is not an empty page: an
+            empty page reads as "nothing happened here", which is an answer,
+            and a name the log never records has no answer to give.
+          schema:
+            type: string
+            enum: [attachments, budget_items, notes, phases, programme_entries, settings, sponsors, tasks, users]
+        - name: entityId
+          in: query
+          required: false
+          description: |
+            The `id` of one row of `entity`: that row's history, and nothing
+            else. Send `entity` with it. The log is read by the pair, so an id
+            on its own is a `400`.
+
+            `settings` is one row with no id of its own, and is therefore asked
+            for by naming the entity alone. `entityId` beside `entity=settings`
+            is a `400`.
+          schema: { type: string, format: uuid }
       responses:
         '200':
           description: One page of entries.
