@@ -34,7 +34,7 @@ Logs are JSON on stdout via `log/slog`, one object per line, so a healthy start
 looks like this:
 
 ```json
-{"time":"…","level":"INFO","msg":"database ready","migrationsApplied":11}
+{"time":"…","level":"INFO","msg":"database ready","migrationsApplied":12}
 {"time":"…","level":"INFO","msg":"accounts enabled","mail":true,"passkeys":true,
  "baseURL":"https://soiree.example.test"}
 ```
@@ -57,14 +57,18 @@ And these say something is off:
 | `no DATABASE_URL set, serving the frontend only and leaving the API unmounted` | No API, no accounts, no live sync, no reminders |
 | `deadline reminders are off (SOIREE_REMINDER_ENABLED is not true)` | The scheduler never starts |
 | `SMTP is not configured; the deadline digest goes out as a notification only` | Reminders are on with push as the only channel |
-| `Web Push is half-configured, so notifications are off` | One or two of the three VAPID variables are set |
+| `Web Push is half-configured, so notifications are off` | One or two of the three VAPID variables are set. Logged by the reminder scheduler, so it appears only with reminders on and mail configured |
 | `passkeys unavailable, leaving them off` | Logged with `err`; password login is untouched |
 | `database schema is ahead of this binary` | A newer release migrated this database and this process is a rollback. It serves, but writes made here skip whatever that release added; `unknownVersions`, `unknownNames` and `earliestAppliedAt` say which release and when. Roll forward, or restore to before `earliestAppliedAt` |
 
 `api` on the listening line is the single quickest check that the browser will
 get a shared planner rather than a local one. `migrationsApplied` is the number
-applied *by this process*, so it is 11 on a fresh database and 0 on a restart
-against one that is already current.
+applied *by this process*, so on a fresh database it is one per `.sql` file in
+`migrations/`, twelve of them today, and 0 on a restart against one that is
+already current. `recipients` counts `SOIREE_REMINDER_TO` and nothing else: the
+active admins who also receive the digest are resolved at each send, so
+`recipients=0` is the ordinary reading on a deployment where the admins *are*
+the recipients.
 
 ## Getting into a fresh instance
 
@@ -273,8 +277,13 @@ that has not seen it cannot subscribe at all.
 
 A half-configured set is a warning at startup and nothing more, never a refusal
 to boot. That is on purpose — but it also means an operator who set one variable
-and stopped has a deployment that looks configured and sends nothing, so the
-warning is worth grepping for after a change.
+and stopped has a deployment that looks configured and sends nothing. The
+warning comes from the reminder scheduler rather than from the configuration,
+so it is printed only when reminders are on and mail is configured; with
+reminders on and no relay, `deadline reminders are on but neither mail nor push
+is configured` names the same three variables instead. With reminders off
+nothing reports a partial set at all, so there the three are worth reading back
+by hand after a change.
 
 ## What degrades, and what refuses to start
 
@@ -396,9 +405,26 @@ gone. A bucket that is unreachable for a day loses nothing but time.
 curl -s https://soiree.example.test/api/v1/plan | head -c 200
 ```
 
+That carries no session, so a healthy deployment answers `401` with
+`{"error":"unauthenticated"}`, which is itself the check: the API is mounted
+and guarded, so the DSN reached the process. A `404` means it did not, and the
+routes were never registered. A `503` with `{"error":"internal"}` is the third
+answer, and the only one that is a fault rather than a deployment shape: a
+database was configured and authentication was not, which the API refuses to
+serve unguarded.
+
+The plan itself needs a session, so reuse the cookie jar from the login shown
+earlier:
+
+```bash
+curl -s -b cookies.txt https://soiree.example.test/api/v1/plan | head -c 200
+```
+
 A JSON object with `settings`, `phases`, `sponsors`, `budgetItems`,
-`programme`, `tasks` and `notes` means the browser will get a shared planner. A
-`404` means no DSN reached the process. Watch
+`programme`, `tasks`, `notes` and `attachments` means the browser will get a
+shared planner. A `503` with `{"error":"unavailable"}` and a `Retry-After` means
+the database did not answer the session lookup; the page waits that out and asks
+again rather than signing everybody out. Watch
 `soiree_http_requests_total{route="api-plan"}` climb as people open the page.
 
 Responses under `/api/v1` always carry `Cache-Control: no-store`. If something
@@ -419,11 +445,13 @@ arrived; nginx's `proxy_pass` replaces it unless told
 ### Live sync
 
 ```bash
-curl -N -H 'Accept: text/event-stream' https://soiree.example.test/api/v1/events
+curl -N -b cookies.txt -H 'Accept: text/event-stream' \
+  https://soiree.example.test/api/v1/events
 ```
 
-A working stream answers immediately with a retry interval and a `resync`, then
-a `: ping` comment every twenty seconds:
+The stream is under the same guard, so without the cookie jar this is a `401`
+and nothing is opened. With it, a working stream answers immediately with a
+retry interval and a `resync`, then a `: ping` comment every twenty seconds:
 
 ```
 retry: 3000
