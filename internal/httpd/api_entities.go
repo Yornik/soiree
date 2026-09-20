@@ -127,9 +127,9 @@ func (b budgetItemBody) apply(currency string, row store.BudgetItem) (store.Budg
 // since ParseMajor; this is that rule for the one figure here that is not
 // money.
 //
-// It stays separate from setRate rather than growing it a scale argument: the
-// two settings rates round the same way, and whether that should also become a
-// refusal is a question about settings, not about this column.
+// It stays separate from setRate, which refuses the two settings rates the same
+// way: those count the decimals of the value instead, because fx_rate's bound
+// times its scale is outside the range this multiplication is exact in.
 func setQty(f *fieldErrs, field string, o optional[float64], dst *float64) {
 	if !o.set {
 		return

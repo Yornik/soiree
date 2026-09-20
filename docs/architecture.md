@@ -926,10 +926,11 @@ violation is a `400` saying the request referred to something that is not there,
 and a unique violation is a `409`. A data exception, SQLSTATE class `22`, is a
 `400` too: a figure past what its column holds, or a NUL byte in a text field.
 By class rather than by code, because a list of codes is what lets the next
-column added bring the `500` back. `qty` is bounded and scale-checked before it
-gets that far, so the limit is named rather than merely refused: `numeric(12,3)`
-rounds a fourth decimal away silently, and a client that then compares what it
-sent with what it holds rewrites the row on every pass. A `500` never carries
+column added bring the `500` back. `qty` and the two settings rates are bounded
+and scale-checked before they get that far, so the limit is named rather than
+merely refused: `numeric(12,3)` rounds a fourth decimal away silently, as
+`numeric(18,6)` does a seventh, and a client that then compares what it sent
+with what it holds rewrites the row on every pass. A `500` never carries
 the error — that goes to the log, because it contains SQL and column names —
 but it always goes *somewhere*, since a 500 whose cause was dropped cannot be
 operated on.
