@@ -42,6 +42,7 @@ type options struct {
 	kind          string
 	columns       columnFlag
 	decimal       string
+	dateOrder     string
 	currency      string
 	totalKeywords string
 	skipCostless  bool
@@ -65,6 +66,7 @@ func run(args []string) error {
 	fs.StringVar(&o.kind, "kind", "budget", "single-table mode: budget, tasks or notes")
 	fs.Var(&o.columns, "map", "single-table mode: field=column, repeatable or comma-separated (e.g. item=B,total=E)")
 	fs.StringVar(&o.decimal, "decimal", "auto", "decimal separator: auto, dot or comma; with dot or comma a figure written the other way round is refused, not reread")
+	fs.StringVar(&o.dateOrder, "date-order", "auto", "how to read 03/04/2027: auto, dmy (day first) or mdy (month first); auto follows the rest of the column and reads day-first where the column cannot say")
 	fs.StringVar(&o.currency, "currency", "", "the planner's SOIREE_CURRENCY; decides the decimals a stated total is checked at (default: 2 decimals)")
 	fs.StringVar(&o.totalKeywords, "total-keywords", "", "comma-separated words marking a summary row (default: total, subtotal, grand total, sum)")
 	fs.BoolVar(&o.skipCostless, "skip-costless", false, "drop rows with no figure instead of importing them at zero")
@@ -125,6 +127,7 @@ func run(args []string) error {
 func propose(book *sheetimport.Book, path, reading string, o options) error {
 	cfg, notes := sheetimport.Detect(book)
 	cfg.Decimal = o.decimal
+	cfg.DateOrder = o.dateOrder
 	cfg.Currency = o.currency
 	cfg.Ceiling = o.ceiling
 
@@ -162,6 +165,9 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 		if o.decimal != "auto" {
 			cfg.Decimal = o.decimal
 		}
+		if o.dateOrder != "auto" {
+			cfg.DateOrder = o.dateOrder
+		}
 		if o.currency != "" {
 			cfg.Currency = o.currency
 		}
@@ -191,10 +197,11 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 		SkipHidden:            o.skipHidden,
 	}
 	cfg = &sheetimport.Config{
-		Decimal:  o.decimal,
-		Currency: o.currency,
-		Ceiling:  o.ceiling,
-		Tables:   []sheetimport.Table{table},
+		Decimal:   o.decimal,
+		DateOrder: o.dateOrder,
+		Currency:  o.currency,
+		Ceiling:   o.ceiling,
+		Tables:    []sheetimport.Table{table},
 	}
 	if o.totalKeywords != "" {
 		cfg.TotalKeywords = splitList(o.totalKeywords)

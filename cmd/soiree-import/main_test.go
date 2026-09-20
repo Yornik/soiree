@@ -205,6 +205,40 @@ func TestRunRejectsMixedMappingSources(t *testing.T) {
 	}
 }
 
+// The order a sheet writes its dates in is the operator's to state, so the
+// flag has to reach the converter.
+func TestRunPassesTheDateOrderThrough(t *testing.T) {
+	csv := writeFixture(t, "tasks.csv", "Task,Due\nBook the hall,03/04/2027\n")
+	out := filepath.Join(t.TempDir(), "plan.json")
+
+	var err error
+	quiet(t, func() {
+		err = run([]string{
+			"-header", "1", "-kind", "tasks", "-map", "name=A,due=B",
+			"-date-order", "mdy", "-o", out, csv,
+		})
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	body, rerr := os.ReadFile(out)
+	if rerr != nil {
+		t.Fatalf("no JSON written: %v", rerr)
+	}
+	var state struct {
+		Tasks []struct {
+			Due string `json:"due"`
+		} `json:"tasks"`
+	}
+	if jerr := json.Unmarshal(body, &state); jerr != nil {
+		t.Fatalf("output is not JSON: %v", jerr)
+	}
+	if len(state.Tasks) != 1 || state.Tasks[0].Due != "2027-03-04" {
+		t.Errorf("due = %+v; want 2027-03-04, the month first as asked", state.Tasks)
+	}
+}
+
 // The report is built in memory before a byte of it is written, because half
 // a report is worse than none. The JSON deserves the same: -o truncated the
 // previous import before the encoder had agreed to produce anything.

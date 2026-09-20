@@ -88,6 +88,7 @@ type Report struct {
 	Source  string
 	Reading string
 	Decimal DecimalMode
+	Dates   DateOrder
 	DryRun  bool
 	// Currency is the code the mapping gave, possibly none. TotalsChecked is
 	// set once any stated total has been checked against the decimals that
@@ -131,6 +132,7 @@ func (r *Report) String() string {
 		b.addf("  read as: %s\n", r.Reading)
 	}
 	b.addf("  decimal separator: %s\n", r.Decimal)
+	b.addf("  date order: %s\n", r.Dates)
 	if r.TotalsChecked {
 		exp := count(exponent(r.Currency), "decimal")
 		if cur := strings.ToUpper(strings.TrimSpace(r.Currency)); cur != "" {
@@ -173,7 +175,8 @@ func (r *Report) String() string {
 				count(t.AssumedGrouping, "figure"))
 		}
 		if t.AssumedDayFirst > 0 {
-			b.addf("  read %s as day-first\n", count(t.AssumedDayFirst, "ambiguous date"))
+			b.addf("  read %s as day-first (override with -date-order mdy)\n",
+				count(t.AssumedDayFirst, "ambiguous date"))
 		}
 		writeIssues(&b, "assumptions", t.Assumptions)
 		for _, n := range t.Notes {

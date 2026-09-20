@@ -167,15 +167,90 @@ var dateLayouts = []string{
 	"Jan 2, 2006",
 }
 
+// DateOrder decides how a date whose two leading numbers are both 12 or under
+// is read.
+//
+// 03/04/2027 is the fourth of March in one country and the third of April in
+// another, and nothing in the cell says which. DateAuto settles it from the
+// rest of the column where the column can settle it (see dateEvidence) and
+// reads day-first where it cannot, disclosing the rows it had to assume; the
+// other two settle it for the whole file.
+type DateOrder int
+
+const (
+	DateAuto DateOrder = iota
+	DateDayFirst
+	DateMonthFirst
+)
+
+// ParseDateOrder maps the CLI/mapping spelling onto an order.
+func ParseDateOrder(s string) (DateOrder, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "auto":
+		return DateAuto, nil
+	case "dmy", "day-first":
+		return DateDayFirst, nil
+	case "mdy", "month-first":
+		return DateMonthFirst, nil
+	}
+	return DateAuto, fmt.Errorf("unknown date order %q (want auto, dmy or mdy)", s)
+}
+
+func (o DateOrder) String() string {
+	switch o {
+	case DateDayFirst:
+		return "dmy"
+	case DateMonthFirst:
+		return "mdy"
+	default:
+		return "auto"
+	}
+}
+
+// dateNumbers splits a numeric date into its three parts, in the spellings
+// people actually type. ok is false for anything that is not three numbers.
+func dateNumbers(s string) (parts []string, n []int, ok bool) {
+	parts = strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == '-' || r == '.' || r == ' ' })
+	if len(parts) != 3 {
+		return nil, nil, false
+	}
+	n = make([]int, 3)
+	for i, p := range parts {
+		v, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, nil, false
+		}
+		n[i] = v
+	}
+	return parts, n, true
+}
+
+// dateEvidence reports the order a value can only be read in: 03/25/2027 is
+// month-first and 25/03/2027 is day-first. One such row settles the whole
+// column for the rows that cannot settle themselves, which is the difference
+// between a column read one way and a column read cell by cell. decisive is
+// false for a value that reads either way, or that is no numeric date at all.
+func dateEvidence(raw string) (order DateOrder, decisive bool) {
+	parts, n, ok := dateNumbers(strings.TrimSpace(raw))
+	if !ok || len(parts[0]) == 4 {
+		return DateAuto, false
+	}
+	switch {
+	case n[0] <= 12 && n[1] > 12 && n[1] <= 31:
+		return DateMonthFirst, true
+	case n[1] <= 12 && n[0] > 12 && n[0] <= 31:
+		return DateDayFirst, true
+	}
+	return DateAuto, false
+}
+
 // parseDate returns an ISO date, which is the only form the UI's date input
 // accepts.
 //
-// dayFirst reports that the value was genuinely ambiguous (both parts ≤ 12)
-// and was read day-first. 03/04/2027 is the fourth of March in one country
-// and the third of April in another; there is nothing in the file to settle
-// it, so the choice is made once, applied everywhere, and counted in the
-// report.
-func parseDate(raw string) (iso string, dayFirst bool, err error) {
+// ambiguous reports that both leading numbers are 12 or under, so the value
+// by itself cannot say which one is the month. order settles those, and the
+// caller discloses every row where nothing but the default settled it.
+func parseDate(raw string, order DateOrder) (iso string, ambiguous bool, err error) {
 	s := strings.TrimSpace(raw)
 	if s == "" || isDashLike(s) {
 		return "", false, ErrNoValue
@@ -186,17 +261,9 @@ func parseDate(raw string) (iso string, dayFirst bool, err error) {
 		}
 	}
 
-	parts := strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == '-' || r == '.' || r == ' ' })
-	if len(parts) != 3 {
+	parts, n, ok := dateNumbers(s)
+	if !ok {
 		return "", false, fmt.Errorf("%q is not a date", raw)
-	}
-	n := make([]int, 3)
-	for i, p := range parts {
-		v, cerr := strconv.Atoi(p)
-		if cerr != nil {
-			return "", false, fmt.Errorf("%q is not a date", raw)
-		}
-		n[i] = v
 	}
 
 	var y, m, d int
@@ -204,11 +271,14 @@ func parseDate(raw string) (iso string, dayFirst bool, err error) {
 	case len(parts[0]) == 4:
 		y, m, d = n[0], n[1], n[2]
 	case n[1] > 12 && n[0] <= 12:
-		// Only one reading survives: month first.
+		// Only one reading survives: month first, whatever the order says.
 		y, m, d = n[2], n[0], n[1]
+	case order == DateMonthFirst && n[0] <= 12 && n[1] <= 12:
+		y, m, d = n[2], n[0], n[1]
+		ambiguous = true
 	default:
 		y, m, d = n[2], n[1], n[0]
-		dayFirst = n[0] <= 12 && n[1] <= 12
+		ambiguous = n[0] <= 12 && n[1] <= 12
 	}
 	if y < 100 {
 		y += 2000
@@ -220,5 +290,5 @@ func parseDate(raw string) (iso string, dayFirst bool, err error) {
 	if t.Day() != d || int(t.Month()) != m {
 		return "", false, fmt.Errorf("%q is not a real date", raw)
 	}
-	return t.Format("2006-01-02"), dayFirst, nil
+	return t.Format("2006-01-02"), ambiguous, nil
 }
