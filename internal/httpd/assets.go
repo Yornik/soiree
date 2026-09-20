@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 
@@ -53,11 +54,18 @@ func (a *Assets) Lookup(url string) (*Asset, bool) {
 }
 
 // Names returns every served asset URL, for the service worker precache list.
+//
+// Sorted, because the list goes into the worker verbatim and a map hands its
+// keys out in a different order every time: unsorted, the same build serves a
+// different worker on every start, and two replicas of it serve two. A browser
+// byte-compares the worker, so that alone makes every returning client install
+// it again and re-run its precache for a restart that changed nothing.
 func (a *Assets) Names() []string {
 	out := make([]string, 0, len(a.byURL))
 	for u := range a.byURL {
 		out = append(out, u)
 	}
+	sort.Strings(out)
 	return out
 }
 

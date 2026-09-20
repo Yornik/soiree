@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"image/png"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -575,6 +577,37 @@ func TestTheServiceWorkerIsServedAsWritten(t *testing.T) {
 		if strings.Contains(string(served), entity) {
 			t.Errorf("the served worker contains %q: it was escaped as HTML", entity)
 		}
+	}
+}
+
+// Two starts of the same build have to serve the same worker. The precache
+// list is written from a map, and a map hands its keys out in a different
+// order every time, so the file and its ETag changed on every restart with
+// nothing deployed: a browser byte-compares the worker, so each returning
+// client installed a "new" one and re-ran its precache, and the revalidation
+// of /sw.js never came back 304 across a restart.
+func TestTheServiceWorkerIsTheSameOnEveryStart(t *testing.T) {
+	cfg := config.Config{EventName: "A Celebration"}
+	first, second := newServer(t, cfg), newServer(t, cfg)
+
+	if first.sw.ETag != second.sw.ETag {
+		t.Errorf("two builds of one input gave workers %s and %s", first.sw.ETag, second.sw.ETag)
+	}
+	if !bytes.Equal(first.sw.Raw, second.sw.Raw) {
+		t.Error("two builds of one input gave different worker bytes")
+	}
+	if first.index.ETag != second.index.ETag {
+		t.Errorf("two builds of one input gave shells %s and %s", first.index.ETag, second.index.ETag)
+	}
+
+	// With ten assets in the map, two builds could agree by luck once in
+	// 10! tries. What rules that out is the order being a defined one.
+	urls := regexp.MustCompile(`/assets/[A-Za-z0-9._-]+`).FindAllString(string(first.sw.Raw), -1)
+	if len(urls) == 0 {
+		t.Fatal("the worker precaches nothing")
+	}
+	if !sort.StringsAreSorted(urls) {
+		t.Errorf("the precache list is in no defined order: %v", urls)
 	}
 }
 
