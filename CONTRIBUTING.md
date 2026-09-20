@@ -147,15 +147,21 @@ costs a DNS lookup, a TCP connection and a TLS handshake before first paint —
 about a second on a 300 ms link, which is more than the entire rest of the
 page. First paint is currently about 4.6 kB.
 
-The deployed setup also applies a strict Content-Security-Policy at the
-ingress, which is why the page carries no inline script that executes and no inline
-`style=` attribute anywhere. Configuration reaches the browser as a
+The binary sends a strict Content-Security-Policy of its own, which is why the
+page carries no inline script that executes and no inline `style=` attribute
+anywhere. Configuration reaches the browser as a
 `<script type="application/json">` data block — data, not executable script, so
-`script-src 'self'` permits it.
+`script-src 'self'` permits it. A deployment whose proxy would rather send the
+policy sets `SOIREE_CSP=off`.
 
-Nothing in CI enforces this; it is enforced in review. If you need something a
-third party provides, vendor it into `web/src` or do without it. The right
-place to argue the point is an issue, not a pull request.
+Both halves are checked in CI, though neither check is exhaustive:
+`TestNoExternalOrigins` reads the shell, the worker and the stylesheet for an
+absolute URL, and every browser test now runs under the policy, so a resource
+it blocks fails whichever spec needs it, and `e2e/tests/csp.spec.js` fails on
+any violation the flows it drives report. Review is still what catches the
+rest. If you need something a third party provides, vendor it into `web/src` or
+do without it. The right place to argue the point is an issue, not a pull
+request.
 
 ### Migrations are append-only
 

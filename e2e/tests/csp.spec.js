@@ -18,7 +18,9 @@ const { API_URL, S3_URL } = require('../servers');
 
 // The policy a deployment with no bucket gets. Written out rather than read
 // from the response, so that a directive quietly going missing is a failure
-// and not a tautology.
+// and not a tautology. The same string is `wantCSP` in
+// internal/httpd/server_test.go: a directive that changes has to change there
+// too, and in the builder both of them are written against.
 const POLICY = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; "
   + "form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; "
   + "img-src 'self' data:; font-src 'self'; connect-src 'self'";

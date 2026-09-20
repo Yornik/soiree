@@ -157,10 +157,11 @@ func main() {
 		}
 		files = httpd.NewAttachments(st, bucket, cfg.Attachments.MaxBytes, cfg.Attachments.TotalBytes, log)
 		srv = srv.WithAttachments(files)
-		// Browsers talk to the bucket directly. The origin is logged because a
-		// deployment behind a Content-Security-Policy has to allow it in
-		// connect-src, and an upload blocked by CSP fails in the browser with
-		// nothing in this log to explain it.
+		// Browsers talk to the bucket directly, so this origin is what the
+		// server's own Content-Security-Policy names in connect-src. It is
+		// logged for the operator whose proxy sends a policy as well, which
+		// then has to name it too: an upload a policy blocks fails in the
+		// browser with nothing in this log to explain it.
 		log.Info("attachments enabled",
 			"browsers_connect_to", bucket.Origin(),
 			"max_file_mb", cfg.Attachments.MaxBytes>>20,

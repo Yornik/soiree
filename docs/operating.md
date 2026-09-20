@@ -329,8 +329,9 @@ reached by address gets password login and nothing else.
 ## Attachments: setting up the bucket
 
 The browser uploads to the bucket and downloads from it directly. soiree only
-signs the addresses. Four things follow: the first two are yours to do, and
-the third if a proxy in front of soiree sends a policy of its own.
+signs the addresses. Four things follow: the first two and the last are yours
+to do, and the third only if a proxy in front of soiree sends a policy of its
+own.
 
 **1. A private bucket, and preferably a key of its own.** Nothing in the bucket
 is ever public; every read goes through an address that lives for a minute.
@@ -366,13 +367,13 @@ appears in soiree's log, because the request never reaches soiree.
 
 **3. Only if a proxy sets a Content-Security-Policy of its own: allow the
 bucket in its `connect-src` too, or drop it.** soiree's policy already names
-the bucket, because it builds `connect-src` from `SOIREE_S3_ENDPOINT` and the
-two therefore cannot drift apart. A second policy can still undo that. Where
-both headers reach the browser it takes the intersection, and a proxy that
-replaces the header rather than adding to it leaves only its own policy in
-force. Either way a proxy saying `connect-src 'self'` blocks the upload
-exactly as a missing CORS rule does, and as silently. The startup log names
-the origin soiree allows:
+the bucket: it asks the bucket that signs the uploads where it is, so the
+policy and the address a browser is handed cannot come to name different
+origins. A second policy can still undo that: where both headers reach the
+browser it takes the intersection, and a proxy that replaces the header rather
+than adding to it leaves only its own policy in force. Either way a proxy
+saying `connect-src 'self'` blocks the upload exactly as a missing CORS rule
+does, and as silently. The startup log names the origin soiree allows:
 
 ```
 attachments enabled  browsers_connect_to=https://nbg1.your-objectstorage.com max_file_mb=25 total_mb=2048

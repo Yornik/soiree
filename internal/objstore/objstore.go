@@ -112,9 +112,11 @@ func canonicalHost(u *url.URL) string {
 	return u.Host
 }
 
-// Origin is the scheme and host browsers will connect to. A deployment with a
-// Content-Security-Policy has to allow it in connect-src, so the server logs it
-// at startup rather than leaving the operator to derive it.
+// Origin is the scheme and host browsers will connect to. The server's own
+// Content-Security-Policy names it in connect-src, and asks for it here rather
+// than reading the endpoint again, so that the policy and the signature cannot
+// come to disagree. It is logged at startup too, for the operator whose proxy
+// sends a policy of its own and has to allow the same origin in it.
 func (s *Store) Origin() string { return s.scheme + "://" + s.host }
 
 // Upload is everything a browser needs to send one file.
