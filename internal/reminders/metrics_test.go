@@ -133,6 +133,25 @@ func TestAPeriodWithNothingDueIsACleanRun(t *testing.T) {
 	}
 }
 
+// Nobody to send to is counted and is still a clean run: no later run resolves
+// it and no restart clears it, so in the gauge it would be a 0 that stays until
+// somebody edits the configuration.
+func TestADigestWithNobodyToSendItToIsCountedButStillClean(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.To = nil
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
+
+	svc, reg := f.watched(t, &fakeSender{})
+	svc.runLogged(t.Context())
+
+	if got := runs(t, reg)["no_recipients"]; got != 1 {
+		t.Errorf(`runs{outcome="no_recipients"} = %v with nobody to send to, want 1`, got)
+	}
+	if got := lastRunOK(t, reg); got != 1 {
+		t.Errorf("last_run_ok = %v with nobody to send to, want 1: that is the counter's business, not the gauge's", got)
+	}
+}
+
 // The failure this series exists for: a relay that refuses the digest loses
 // the period unless somebody acts, and until now the only trace was a log line
 // nobody is paged for.
