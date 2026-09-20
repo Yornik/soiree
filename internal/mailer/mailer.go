@@ -9,10 +9,12 @@
 // Two decisions are worth knowing about before reading further.
 //
 // Delivery failures are split into retryable and ambiguous. Everything up to
-// and including RCPT is retryable: the server never saw the message. From the
-// moment the body is closed off with the terminating dot, a failure could mean
-// either "not delivered" or "delivered and the acknowledgement was lost", and
-// a caller that retries on that turns one digest into two. Callers keeping a
+// and including RCPT is retryable: the server never saw the message. So is a
+// refusal answered to the terminating dot, because the server read the whole
+// message and said it took none of it. What is ambiguous is the absence of a
+// verdict once the dot has gone out: the failure could mean either "not
+// delivered" or "delivered and the acknowledgement was lost", and a caller
+// that retries on that turns one digest into two. Callers keeping a
 // sent-ledger need to know which they are holding, so Send says.
 //
 // Nothing here fetches anything. There is no tracking pixel, no remote image,

@@ -22,6 +22,10 @@ type fakeSMTP struct {
 	// dropAtDot closes the connection instead of answering the terminating
 	// dot, which is the one failure mode a caller must never retry.
 	dropAtDot bool
+	// rejectAtDot is a reply line answered to the terminating dot instead of
+	// the acceptance — what a relay says when it has read the message and
+	// decided against it.
+	rejectAtDot string
 	// offerStartTLS advertises an extension this fake cannot actually perform;
 	// used only to check that a client with credentials insists on it.
 	offerStartTLS bool
@@ -121,6 +125,12 @@ func (f *fakeSMTP) serve(conn net.Conn) {
 				// caller cannot tell delivered from not delivered.
 				return
 			}
+			if f.rejectAtDot != "" {
+				if !say("%s", f.rejectAtDot) {
+					return
+				}
+				continue
+			}
 			if !say("250 2.0.0 accepted") {
 				return
 			}
@@ -184,6 +194,40 @@ func TestSendAtTheDotIsAmbiguous(t *testing.T) {
 	}
 	if !Ambiguous(err) {
 		t.Errorf("error %v reported as safe to retry; it is not", err)
+	}
+}
+
+// A server that answers the terminating dot with a refusal has stated that it
+// took nothing, whatever the reason: spam scoring and rate limits are applied
+// exactly there, because that is the first moment the message exists. Nothing
+// was delivered, so a retry cannot deliver it twice, and a caller keeping a
+// ledger may try again rather than burn the period.
+func TestSendRefusedAtTheDotIsNotAmbiguous(t *testing.T) {
+	for _, reply := range []struct{ code, reason string }{
+		{"554", "5.7.1 message rejected as spam"},
+		{"451", "4.7.1 greylisted, try again later"},
+	} {
+		t.Run(reply.code, func(t *testing.T) {
+			f := &fakeSMTP{t: t, rejectAtDot: reply.code + " " + reply.reason}
+			host, port := f.start()
+
+			err := f.sender(host, port).Send(t.Context(), Message{
+				To: []string{"ada@example.test"}, Subject: "x", Text: "y",
+			})
+			if err == nil {
+				t.Fatal("expected the refusal to be reported")
+			}
+			if Ambiguous(err) {
+				t.Errorf("an explicit refusal was reported as an uncertain delivery: %v", err)
+			}
+			// The two halves separately: whether textproto quotes the reason
+			// when it renders a reply has changed between Go versions, and
+			// what matters is that the operator reads the relay's own words
+			// rather than how they are punctuated.
+			if !strings.Contains(err.Error(), reply.code) || !strings.Contains(err.Error(), reply.reason) {
+				t.Errorf("error = %v, want it to carry the server's reply", err)
+			}
+		})
 	}
 }
 
