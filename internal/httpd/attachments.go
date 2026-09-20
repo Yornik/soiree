@@ -247,7 +247,7 @@ func (a *Attachments) handleBegin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, status, code, message)
 			return
 		}
-		writeInternal(w, err)
+		writeInternal(w, r, err)
 		return
 	}
 
@@ -271,7 +271,7 @@ func (a *Attachments) handleComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := a.store.Attachment(r.Context(), id)
 	if err != nil {
-		a.writeError(w, err)
+		a.writeError(w, r, err)
 		return
 	}
 	if row.Status == store.AttachmentReady {
@@ -306,7 +306,7 @@ func (a *Attachments) handleComplete(w http.ResponseWriter, r *http.Request) {
 
 	row, err = a.store.CompleteAttachment(r.Context(), id)
 	if err != nil {
-		a.writeError(w, err)
+		a.writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, encodeAttachment(row))
@@ -324,7 +324,7 @@ func (a *Attachments) handleContent(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := a.store.Attachment(r.Context(), id)
 	if err != nil {
-		a.writeError(w, err)
+		a.writeError(w, r, err)
 		return
 	}
 	if row.Status != store.AttachmentReady {
@@ -352,7 +352,7 @@ func (a *Attachments) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := a.store.DeleteAttachment(r.Context(), id)
 	if err != nil {
-		a.writeError(w, err)
+		a.writeError(w, r, err)
 		return
 	}
 	a.removeObject(r.Context(), store.ObjectKey(row.ID))
@@ -381,12 +381,12 @@ func (a *Attachments) removeObject(ctx context.Context, key string) {
 	}
 }
 
-func (a *Attachments) writeError(w http.ResponseWriter, err error) {
+func (a *Attachments) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, errNotFound, "no such row")
 		return
 	}
-	writeInternal(w, err)
+	writeInternal(w, r, err)
 }
 
 // Sweep takes back abandoned uploads and removes queued objects, once at start

@@ -113,7 +113,7 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		P256dh:   p256dh,
 		Auth:     auth,
 	}); err != nil {
-		writeInternal(w, err)
+		writeInternal(w, r, err)
 		return
 	}
 
@@ -148,7 +148,7 @@ func (s *Server) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	// Scoped to the caller. An endpoint is an unguessable URL rather than a
 	// secret, and "unguessable" is not an authorisation model.
 	if _, err := s.store.DeletePushSubscription(r.Context(), user.ID, endpoint); err != nil {
-		writeInternal(w, err)
+		writeInternal(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

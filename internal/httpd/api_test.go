@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -469,6 +471,107 @@ func TestOnlyABodyWorthEncodingIsEncoded(t *testing.T) {
 	}
 	if v := rec.Header().Get("Vary"); v != "" {
 		t.Errorf("Vary = %q on a response whose body does not depend on it", v)
+	}
+}
+
+// failingPlan mounts a handler where servePlan sits, behind the same
+// StripPrefix, so that what it sees of the request is what a real handler sees:
+// a path with the prefix already taken off it.
+func failingPlan(err error) http.Handler {
+	api := http.NewServeMux()
+	api.HandleFunc("GET /plan", func(w http.ResponseWriter, r *http.Request) {
+		writeInternal(w, r, err)
+	})
+	mux := http.NewServeMux()
+	mux.Handle(apiPrefix, http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), api))
+	return mux
+}
+
+// A 500 that says only what the database said cannot be operated on: there is
+// no access log here to join "api request failed" against, and the metrics
+// carry no id a line could be matched to. The route comes from the matched
+// pattern rather than the path, because a handler under StripPrefix sees
+// "/plan" and an operator needs to know which route that was.
+func TestAFailureNamesTheRequestThatFailed(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	rec := httptest.NewRecorder()
+	failingPlan(errors.New(`relation "budget_items" does not exist`)).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	line := logged.String()
+	for _, want := range []string{`"level":"ERROR"`, `"method":"GET"`, `"pattern":"GET /plan"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the failure reached the log without %s:\n%s", want, line)
+		}
+	}
+}
+
+// A phone that locks its screen mid-read cancels the query it was waiting on.
+// Nothing here failed and nobody is left to be told anything. Logged as an
+// error and counted as a 500, though, it is indistinguishable from this server
+// breaking, on the one number an alert reads and in the one place an operator
+// looks. 499 is where it goes instead.
+func TestAClientThatWentAwayIsNotAServerFailure(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil).WithContext(ctx)
+
+	m := NewMetrics("test", "none")
+	rec := httptest.NewRecorder()
+	// What LoadPlan comes back with when the caller hung up during it.
+	m.instrument(failingPlan(fmt.Errorf("load the plan: %w", context.Canceled))).ServeHTTP(rec, req)
+
+	if rec.Code != statusClientClosedRequest {
+		t.Errorf("status = %d, want %d for a caller that is no longer there", rec.Code, statusClientClosedRequest)
+	}
+	if body := rec.Body.String(); body != "" {
+		t.Errorf("body = %q, want none: there is nobody on the other end to read it", body)
+	}
+	if line := logged.String(); strings.Contains(line, `"level":"ERROR"`) {
+		t.Errorf("an abandoned request was logged as a failure of this server:\n%s", line)
+	}
+
+	scrape := httptest.NewRecorder()
+	m.Handler().ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	want := `soiree_http_requests_total{method="GET",route="api-plan",status="499"} 1`
+	if !strings.Contains(scrape.Body.String(), want) {
+		t.Errorf("no %s in the exposition, so a client walking away still reads as a 5xx", want)
+	}
+}
+
+// A genuine database failure that happens to coincide with a disconnect is
+// still this server's to answer for, which is why the cancelled context alone
+// does not decide it.
+func TestAFailureDuringADisconnectIsStillAFailure(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil).WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	failingPlan(errors.New("connection refused")).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500: the database, not the client, is what failed", rec.Code)
+	}
+	if line := logged.String(); !strings.Contains(line, `"level":"ERROR"`) {
+		t.Errorf("the failure did not reach the log as an error:\n%s", line)
 	}
 }
 

@@ -147,7 +147,7 @@ func patchSettings(st *store.Store, currency string) http.HandlerFunc {
 
 		current, err := st.Settings(r.Context())
 		if err != nil {
-			writeStoreError(w, e, err)
+			writeStoreError(w, r, e, err)
 			return
 		}
 		row, err := decodeBody[settingsBody, store.Settings](body, currency, current)
@@ -161,7 +161,7 @@ func patchSettings(st *store.Store, currency string) http.HandlerFunc {
 
 		out, err := st.UpdateSettings(r.Context(), row)
 		if err != nil {
-			writeStoreError(w, e, err)
+			writeStoreError(w, r, e, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, e.encode(out))

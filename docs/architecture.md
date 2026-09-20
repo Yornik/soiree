@@ -468,6 +468,13 @@ in `api-other`.
 Logs are JSON on stdout via `log/slog`, which is what the cluster's log
 pipeline expects.
 
+A `500` names the request it failed: the method, the matched route pattern and
+the account id. There is no access log here to join a bare "api request failed"
+against, and the metrics carry no id to match a line to. A caller that hung up
+mid-read is answered `499` instead: nobody receives it, and it is what keeps a
+phone that locked its screen out of the 5xx rate it would otherwise be counted
+in.
+
 A handler panic is recovered where the request is counted, so it arrives as one
 ERROR line carrying the route and the stack, and as a `status="500"` sample.
 Left to net/http it would be neither: its own "panic serving" line goes through

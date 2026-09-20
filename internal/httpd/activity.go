@@ -98,7 +98,7 @@ func (s *Server) serveActivity(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := s.store.Activity(r.Context(), before, limit)
 	if err != nil {
-		writeInternal(w, err)
+		writeInternal(w, r, err)
 		return
 	}
 

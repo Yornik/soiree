@@ -233,8 +233,9 @@ the planner keeps working with no connection.
 **Everything is prepared at startup.** Assets are hashed, pre-compressed with
 both gzip and brotli, and held in memory. No request compresses an asset or
 touches a disk; the two API reads big enough to be worth it, the plan and the
-activity page, are gzipped as they go out. Hashed URLs are served `immutable` with a one-year lifetime;
-only the HTML shell is revalidated, which is what makes a deploy land.
+activity page, are gzipped as they go out. Hashed URLs are served `immutable`
+with a one-year lifetime; only the HTML shell is revalidated, which is what
+makes a deploy land.
 
 Measured transfer at 1.0.0, brotli:
 

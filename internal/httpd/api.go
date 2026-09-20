@@ -3,6 +3,7 @@ package httpd
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -212,7 +213,7 @@ func register[T any](mux *http.ServeMux, e entity[T]) {
 func (s *Server) servePlan(w http.ResponseWriter, r *http.Request) {
 	plan, err := s.store.LoadPlan(r.Context())
 	if err != nil {
-		writeInternal(w, err)
+		writeInternal(w, r, err)
 		return
 	}
 	writeJSONCompressed(w, r, http.StatusOK, encodePlan(s.cfg.Currency, plan))
@@ -230,7 +231,7 @@ func handleCreate[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 	}
 	out, err := e.create(r.Context(), row)
 	if err != nil {
-		writeStoreError(w, e, err)
+		writeStoreError(w, r, e, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, e.encode(out))
@@ -260,7 +261,7 @@ func handlePatch[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 
 	current, err := e.load(r.Context(), id)
 	if err != nil {
-		writeStoreError(w, e, err)
+		writeStoreError(w, r, e, err)
 		return
 	}
 	row, err := e.decode(current, body)
@@ -272,7 +273,7 @@ func handlePatch[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 
 	out, err := e.update(r.Context(), row)
 	if err != nil {
-		writeStoreError(w, e, err)
+		writeStoreError(w, r, e, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, e.encode(out))
@@ -304,7 +305,7 @@ func handleDelete[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 	}
 
 	if err := e.remove(r.Context(), id, revision); err != nil {
-		writeStoreError(w, e, err)
+		writeStoreError(w, r, e, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -406,14 +407,14 @@ func decodeBody[B bodyFor[T], T any](body []byte, currency string, base T) (T, e
 // The order matters: a refused write re-reads the row, and that re-read can
 // itself come back not-found when somebody deleted rather than edited. Those
 // are different answers for the client — one is reconcilable, the other is not.
-func writeStoreError[T any](w http.ResponseWriter, e entity[T], err error) {
+func writeStoreError[T any](w http.ResponseWriter, r *http.Request, e entity[T], err error) {
 	var stale *store.StaleRevisionError
 	if errors.As(err, &stale) {
 		current, ok := stale.Current.(T)
 		if !ok {
 			// Only reachable if the store starts carrying a different type in
 			// the conflict than the one it was asked to write.
-			writeInternal(w, fmt.Errorf("conflict carried a %T, want the row type", stale.Current))
+			writeInternal(w, r, fmt.Errorf("conflict carried a %T, want the row type", stale.Current))
 			return
 		}
 		writeJSON(w, http.StatusConflict, apiError{Error: errStaleRevision, Current: e.encode(current)})
@@ -427,7 +428,7 @@ func writeStoreError[T any](w http.ResponseWriter, e entity[T], err error) {
 		writeError(w, status, code, message)
 		return
 	}
-	writeInternal(w, err)
+	writeInternal(w, r, err)
 }
 
 // constraintError classifies the database's own rejections.
@@ -463,6 +464,13 @@ func constraintError(err error) (status int, code, message string, ok bool) {
 	}
 }
 
+// statusClientClosedRequest is nginx's 499: not a standard status, and not one
+// any client receives, because the connection it would go on is already gone.
+// It exists so that a phone which locked its screen mid-read is not counted as
+// this server failing, which is what a 500 on the same request tells every
+// alert that reads the 5xx rate.
+const statusClientClosedRequest = 499
+
 // writeInternal reports a failure that is this server's fault.
 //
 // The error goes to the log and not to the client: it carries SQL and column
@@ -470,9 +478,40 @@ func constraintError(err error) (status int, code, message string, ok bool) {
 // though — a 500 whose cause was dropped on the floor cannot be operated on.
 // main installs the process logger as the default, so this is the same JSON
 // stream as every other line.
-func writeInternal(w http.ResponseWriter, err error) {
-	slog.Error("api request failed", "err", err)
+//
+// The request goes in the line for the same reason the error does. There is no
+// access log here, and the metrics carry no id, so "api request failed" on its
+// own is a fault with nothing to join it to. The matched pattern rather than
+// the path, because the API is mounted behind StripPrefix and a handler
+// therefore sees "/plan" where the operator is looking for "/api/v1/plan". A
+// pattern also keeps a row id as "{id}", which is what the route label in
+// metrics.go is careful about too. The actor is the account id, never the
+// address, for the reason withActor gives.
+func writeInternal(w http.ResponseWriter, r *http.Request, err error) {
+	// A caller that hung up cancelled the query itself, so nothing here
+	// failed and nobody is left to read an answer. Both halves of the test
+	// matter: a database that genuinely failed while somebody happened to
+	// close the tab is still worth an error. Deliberately narrow: pgx can
+	// also surface a cancellation as a closed connection or as SQLSTATE
+	// 57014, and those stay what they are today rather than becoming a
+	// silence that hides a real fault.
+	if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+		slog.Debug("api request abandoned", "method", r.Method, "pattern", r.Pattern)
+		w.WriteHeader(statusClientClosedRequest)
+		return
+	}
+	slog.Error("api request failed", "err", err,
+		"method", r.Method, "pattern", r.Pattern, "actor", actorID(r))
 	writeError(w, http.StatusInternalServerError, errInternal, "something went wrong")
+}
+
+// actorID names whoever was signed in, and null where nobody was, which is the
+// honest answer for the few routes that can fail before anybody is known.
+func actorID(r *http.Request) any {
+	if u, ok := UserFrom(r.Context()); ok {
+		return u.ID
+	}
+	return nil
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
