@@ -31,7 +31,7 @@
  */
 const { test, expect } = require('@playwright/test');
 
-const { AUTH_URL } = require('../servers');
+const { ALT_PORT, AUTH_URL } = require('../servers');
 const { API_URL, adoptSession, apiSignIn } = require('./helpers');
 
 // Set in playwright.config.js, which is also where the server is told about
@@ -594,4 +594,54 @@ test('somebody invited in Dutch is met in Dutch, from the link onwards', async (
   } finally {
     await theirs.close();
   }
+});
+
+// The Go suite proves the server refuses a write that says `same-site`. This
+// proves the half it has to take on trust: that a real browser says so, and
+// that SameSite=Lax really does hand the session to the form. The sibling is
+// this host on another port, which is a different origin and the same site,
+// because a cookie has never known what a port is. On a real deployment it is
+// the wiki on the next subdomain along.
+test('a form on a sibling origin borrows the session and is refused anyway', async ({ page }) => {
+  const cookie = await apiSignIn(page.request, API_URL);
+  await adoptSession(page, cookie, AUTH_URL);
+
+  // Fulfilled rather than served, so the page has the sibling's origin without
+  // that server having to carry a lure. A form cannot send application/json,
+  // and does not need to: with enctype=text/plain the body is `name=value`,
+  // and a name that is most of a JSON object makes the whole body one. No
+  // route here reads the Content-Type.
+  const sibling = `http://localhost:${ALT_PORT}`;
+  const forged = `mallory-${stamp()}@example.test`;
+  await page.route(`${sibling}/lure`, (route) => route.fulfill({
+    contentType: 'text/html',
+    body: `<!doctype html><title>A sibling</title>
+      <form method="post" enctype="text/plain" action="${AUTH_URL}/api/v1/users">
+        <input name='{"email":"${forged}","role":"admin","x":"' value='"}'>
+        <button id="go">Go</button>
+      </form>`,
+  }));
+  await page.goto(`${sibling}/lure`);
+
+  const [sent] = await Promise.all([
+    page.waitForRequest((r) => r.method() === 'POST' && r.url() === `${AUTH_URL}/api/v1/users`),
+    page.click('#go'),
+  ]);
+  const headers = await sent.allHeaders();
+  const answer = await sent.response();
+
+  // The premise, or the refusal below proves nothing: the session went along,
+  // from a page that is not this origin. Sec-Fetch-Site is not asserted
+  // because it cannot be seen from here. Chromium adds it to a navigation
+  // below the layer Playwright reports headers from; on the wire this request
+  // says `same-site`.
+  expect(headers.cookie || '', 'SameSite=Lax let the session through').toContain('soiree_session=');
+  expect(headers.origin).toBe(sibling);
+
+  expect(answer.status()).toBe(403);
+  expect((await answer.json()).error).toBe('cross_origin');
+
+  const people = await page.request.get(`${AUTH_URL}/api/v1/users`, { headers: { Cookie: cookie } });
+  expect(people.status()).toBe(200);
+  expect(JSON.stringify(await people.json())).not.toContain(forged);
 });

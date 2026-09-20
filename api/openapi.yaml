@@ -107,6 +107,21 @@ info:
     unknown field. They name each refusal with its own code, such as
     `invalid_email`.
 
+    ## A write comes from this origin
+
+    A browser states where a request came from, in `Sec-Fetch-Site` or in
+    `Origin`. The server reads that statement on every request that is not a
+    GET, a HEAD or an OPTIONS. It refuses a request from another origin with
+    **403** and the code `cross_origin`. A sibling subdomain is another
+    origin. Another port on the same host is another origin.
+
+    The session cookie is SameSite=Lax. That stops a form on another site. It
+    does not stop a form on the same site, such as a second application on a
+    sibling subdomain. This check does.
+
+    A client that is not a browser sends neither header, and the server does
+    not refuse it. `curl` and a script need no change.
+
     ## The API is absent without a database
 
     A deployment with no `DATABASE_URL` serves the frontend alone. Every path
@@ -1735,6 +1750,11 @@ components:
 
         The code is `read_only` when a viewer tries to write, and `forbidden`
         when a role is below the one a route needs.
+
+        The code is `cross_origin` when a browser sent the write from another
+        origin. The role is not the cause, and every write can get this
+        answer, including the writes that need no session. See "A write comes
+        from this origin" above.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ApiError' }
@@ -2128,6 +2148,7 @@ components:
             - unauthenticated
             - read_only
             - forbidden
+            - cross_origin
             - rate_limited
             - revision_required
             - self_change
