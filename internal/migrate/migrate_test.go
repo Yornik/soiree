@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -268,6 +269,61 @@ func TestRunWarnsWhenTheSchemaIsAheadOfTheBinary(t *testing.T) {
 		if !strings.Contains(logged, want) {
 			t.Errorf("startup log does not mention %q: %s", want, logged)
 		}
+	}
+}
+
+// TestWarnIfSchemaAheadTellsTheTwoAnomaliesApart needs no database, because
+// the gap it checks cannot be built out of the embedded files: every version
+// up to the highest has one. A ledger row with no file below that line means a
+// file went missing, which is not a rollback, and saying it is sends the
+// operator looking for a release that was never deployed.
+func TestWarnIfSchemaAheadTellsTheTwoAnomaliesApart(t *testing.T) {
+	row := func(name string) appliedMigration {
+		return appliedMigration{name: name, checksum: "whatever", appliedAt: time.Unix(0, 0).UTC()}
+	}
+	files := func(versions ...int64) []migration {
+		out := make([]migration, 0, len(versions))
+		for _, v := range versions {
+			out = append(out, migration{version: v, name: "file"})
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name    string
+		pending []migration
+		applied map[int64]appliedMigration
+		warns   bool
+	}{
+		{
+			name:    "a version beyond the last file the binary carries",
+			pending: files(1, 2, 3),
+			applied: map[int64]appliedMigration{1: row("one"), 2: row("two"), 3: row("three"), 4: row("four")},
+			warns:   true,
+		},
+		{
+			name:    "a gap below the last file the binary carries",
+			pending: files(1, 3),
+			applied: map[int64]appliedMigration{1: row("one"), 2: row("two"), 3: row("three")},
+			warns:   false,
+		},
+		{
+			name:    "the ledger the binary expects",
+			pending: files(1, 2, 3),
+			applied: map[int64]appliedMigration{1: row("one"), 2: row("two"), 3: row("three")},
+			warns:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+			warnIfSchemaAhead(log, tc.pending, tc.applied)
+
+			if warned := strings.Contains(buf.String(), "ahead of this binary"); warned != tc.warns {
+				t.Errorf("warned = %t, want %t: %s", warned, tc.warns, buf.String())
+			}
+		})
 	}
 }
 

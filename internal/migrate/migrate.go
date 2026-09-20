@@ -157,18 +157,21 @@ func Run(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) ([]int64, er
 // every migration so far has been additive, so the older binary does serve.
 // Taking the tool away would be worse than the silence it replaces.
 func warnIfSchemaAhead(log *slog.Logger, pending []migration, applied map[int64]appliedMigration) {
-	embedded := make(map[int64]struct{}, len(pending))
 	var highest int64
 	for _, m := range pending {
-		embedded[m.version] = struct{}{}
 		if m.version > highest {
 			highest = m.version
 		}
 	}
 
+	// Above the highest file this binary carries, rather than merely absent
+	// from the set. A ledger row below that line with no file behind it means
+	// a migration went missing from the tree, which is a different fault with
+	// a different remedy; calling it a rollback would send the operator
+	// looking for a release nobody deployed.
 	var unknown []int64
 	for version := range applied {
-		if _, ok := embedded[version]; !ok {
+		if version > highest {
 			unknown = append(unknown, version)
 		}
 	}
