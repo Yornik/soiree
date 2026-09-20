@@ -142,12 +142,14 @@ to a line of code.
 
 The image is a single static Go binary built with `-trimpath` and
 `CGO_ENABLED=0`, so the same source built with the same toolchain produces the
-same binary. The toolchain is not frozen: the `Dockerfile` names
-`golang:1.27-alpine` and Renovate moves that tag on, so a build of the same
-commit months later may legitimately differ. CI checks what it can rather than
+same binary. The toolchain is fixed: the `Dockerfile` pins the builder image by
+digest as well as by tag, so a build of the same commit months later compiles
+with the Go release that produced the signed binary. That digest is recorded as
+the base image in the `mode=max` provenance too, so it can be read off a
+release rather than out of the repository. CI checks what it can rather than
 claiming it: the `Reproducible build` job builds twice on two independent
-BuildKit instances with caching disabled, within one run and therefore on one
-toolchain, and fails if the binaries differ byte for byte.
+BuildKit instances with caching disabled, and fails if the binaries differ byte
+for byte.
 
 What that does **not** assert is a reproducible *image digest*. BuildKit stamps
 the build time into the image config, so two builds of identical source yield

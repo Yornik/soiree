@@ -1,6 +1,14 @@
 # The frontend is embedded into the binary and processed at startup, so there
 # is no asset build stage — the Go compiler is the only build dependency.
-FROM golang:1.27-alpine AS build
+#
+# Pinned by digest as well as by tag, for the reason every action in the
+# workflows is: a tag names a line of releases rather than one of them, and it
+# moves. go1.27.0 and go1.27.1 compile this source to different bytes, so
+# without the digest the binary somebody rebuilds from a tag months from now is
+# not the binary that was signed. Renovate moves the tag, the digest and
+# GO_VERSION in one pull request, and a test in cmd/soiree fails if the
+# Dockerfile and ci.yaml ever name different toolchains.
+FROM golang:1.27.1-alpine@sha256:4cb7ac979db5fcc41cae44b2227ba5ab8a51e8807f40d9ba4dee20a0ad960b5b AS build
 
 WORKDIR /src
 

@@ -13,7 +13,7 @@ permissions:
 # Keep in step with the Dockerfile, or the tested toolchain differs from the
 # shipped one. Renovate tracks both (see customManagers in renovate.json).
 env:
-  GO_VERSION: '1.27'
+  GO_VERSION: '1.27.1'
   IMAGE: ghcr.io/yornik/soiree
 
 # Every action is pinned to a commit digest, not a tag: a tag is mutable and
@@ -35,7 +35,15 @@ jobs:
       - run: go vet ./...
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          # Pinned for the reason stated beside the redocly pin below, which
+          # weighs more here than anywhere else in the file: there is no
+          # configuration for golangci-lint in the repository, so its default
+          # linter set is what runs, and a release that adds a linter to that
+          # set fails main with nothing of ours having changed. Every automerge
+          # rule in renovate.json waits for green checks, so the dependency
+          # updates would stop along with it. The trailing comment names the
+          # package, which is what the customManager in renovate.json reads.
+          version: v2.13.2 # golangci/golangci-lint
 
   test:
     name: Test (go test)
@@ -146,7 +154,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       # Reports only vulnerabilities actually reachable from this code, so a
       # finding here is real rather than a CVE in an unused code path.
-      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      #
+      # Pinned like the rest: the advisory database is fetched when the scanner
+      # runs, so a fixed version still reports today's vulnerabilities, and the
+      # scanner itself is then one more thing that changes only in a commit.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   build:
     name: Build image (validate)

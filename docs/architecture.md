@@ -1546,16 +1546,20 @@ Mostly in place.
 Done: reproducible static build with `-trimpath`, version and commit stamped at
 link time, `scratch` base with no shell or package manager, unprivileged UID,
 `govulncheck` on every PR, SBOM and `mode=max` provenance attached to released
-images, Renovate on every dependency including a custom manager keeping the CI
-toolchain in step with the Dockerfile.
+images, Renovate on every dependency including custom managers for the tool
+versions the workflows pin inline and for the CI toolchain, which it keeps in
+step with the Dockerfile.
 
 Also done: **releases are signed** with cosign, keyless via the GitHub OIDC
 identity, so a signature proves which workflow in which repository built the
 image. **Every action is pinned to a commit digest** with the readable version
 kept in a trailing comment, since a moving tag is a supply-chain hole. **The
 SBOM is published as a release asset**, not only as an image attestation, so it
-can be read without pulling the image. A CI job builds the binary twice on
-independent builders with the cache off and fails if the bytes differ.
+can be read without pulling the image. **The builder image is pinned the same
+way**, by digest as well as by tag, so the toolchain that compiled a release is
+the one that tag's `Dockerfile` names rather than whichever Go patch shipped
+last. A CI job builds the binary twice on independent builders with the cache
+off and fails if the bytes differ.
 
 Both release workflows then re-run the exact verification command
 [docs/verifying-releases.md](verifying-releases.md) gives third parties, against

@@ -31,9 +31,33 @@
       ],
       "matchUpdateTypes": [
         "minor",
-        "patch"
+        "patch",
+        "digest",
+        "pinDigest"
       ],
       "automerge": true
+    },
+    {
+      "description": "The builder image is pinned by digest as well as by tag, for the reason the actions are. Scoped to the Dockerfile so the throwaway database in compose.yaml, which nothing ships, is left as a readable tag.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "pinDigests": true
+    },
+    {
+      "description": "The builder image and the GO_VERSION the jobs test with are one toolchain, and a test fails if the two files name different ones, so they have to move in a single pull request. Both resolve to depName 'golang': the image through the dockerfile manager, GO_VERSION through the customManager below.",
+      "matchDepNames": [
+        "golang"
+      ],
+      "groupName": "go toolchain"
+    },
+    {
+      "description": "A patch update merges itself as soon as CI is green, so without a wait the only review a new dependency gets is that it compiles, and CI cannot tell a benign release from a compromised or withdrawn one. Three days is roughly how long that takes to surface. The pull request still opens immediately and can be merged by hand; what waits is the automerge.",
+      "matchManagers": [
+        "gomod",
+        "npm"
+      ],
+      "minimumReleaseAge": "3 days"
     }
   ],
   "customManagers": [
@@ -49,6 +73,42 @@
       "depNameTemplate": "golang",
       "datasourceTemplate": "docker",
       "versioningTemplate": "docker"
+    },
+    {
+      "description": "The CI tools that are installed by version rather than by action digest. Pinning them is what the workflow file asks for; without a manager each pin then rots, which is the same problem wearing the other face.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "@redocly/cli@(?<currentValue>[0-9][^\\s]*)"
+      ],
+      "depNameTemplate": "@redocly/cli",
+      "datasourceTemplate": "npm"
+    },
+    {
+      "description": "golangci-lint, whose version is an input to the action rather than part of its digest. The trailing comment on that line names the package and is what this matches on.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "version: (?<currentValue>v[0-9][^\\s]*) # golangci/golangci-lint"
+      ],
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "description": "govulncheck, which CI runs straight from its module path.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "golang\\.org/x/vuln/cmd/govulncheck@(?<currentValue>v[0-9][^\\s]*)"
+      ],
+      "depNameTemplate": "golang.org/x/vuln",
+      "datasourceTemplate": "go"
     }
   ],
   "semanticCommits": "enabled",
