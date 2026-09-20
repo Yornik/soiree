@@ -99,6 +99,67 @@ func TestTheActivityFeedSpeaksTheAPIsLanguage(t *testing.T) {
 	}
 }
 
+// A `date` column scans into a time.Time, so the log records the instant Go
+// marshals it as. The feed has to undo that on the way out: lockBy and due are
+// calendar days in every other response, and a client west of UTC that reads
+// "2030-05-01T00:00:00Z" as an instant shows the 30th of April.
+func TestTheActivityFeedSpeaksDatesAsDays(t *testing.T) {
+	f := newPushFixture(t)
+	f.seed(t, "admin@example.test", store.RoleAdmin, activityPassword)
+	admin := f.login(t, "admin@example.test", activityPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/budget-items",
+		map[string]any{"item": "Venue", "unit": "2500.00", "qty": 1, "lockBy": "2030-05-01"}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create the line: %d %s", rec.Code, rec.Body)
+	}
+	line := decodeRec[budgetItemJSON](t, rec)
+	rec = f.do(t, http.MethodPatch, "/api/v1/budget-items/"+line.ID.String(),
+		map[string]any{"lockBy": "2030-06-01", "revision": line.Revision}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch the line: %d %s", rec.Code, rec.Body)
+	}
+	rec = f.do(t, http.MethodPost, "/api/v1/tasks",
+		map[string]any{"name": "Book the hall", "due": "2030-04-01"}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create the task: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = f.do(t, http.MethodGet, "/api/v1/activity", nil, admin)
+	page := decodeRec[activityPageJSON](t, rec)
+
+	changed := func(entity, action, field string) (activityChangeJSON, bool) {
+		for _, e := range page.Entries {
+			if e.Entity != entity || e.Action != action {
+				continue
+			}
+			for _, c := range e.Changes {
+				if c.Field == field {
+					return c, true
+				}
+			}
+		}
+		return activityChangeJSON{}, false
+	}
+
+	edit, ok := changed(store.EntityBudgetItems, "update", "lockBy")
+	if !ok {
+		t.Fatalf("no lockBy among the changes: %s", rec.Body)
+	}
+	if string(edit.Old) != `"2030-05-01"` || string(edit.New) != `"2030-06-01"` {
+		t.Errorf("lockBy moved from %s to %s, want the days the client sent", edit.Old, edit.New)
+	}
+	due, ok := changed(store.EntityTasks, "create", "due")
+	if !ok {
+		t.Fatalf("no due among the changes: %s", rec.Body)
+	}
+	// The row did not exist before a create, and "no date yet" stays null
+	// rather than becoming a day nobody chose.
+	if string(due.Old) != "null" || string(due.New) != `"2030-04-01"` {
+		t.Errorf("due went from %s to %s, want null -> the day the client sent", due.Old, due.New)
+	}
+}
+
 func TestTheActivityFeedPages(t *testing.T) {
 	f := newPushFixture(t)
 	f.seed(t, "admin@example.test", store.RoleAdmin, activityPassword)

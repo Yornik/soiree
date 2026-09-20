@@ -347,6 +347,14 @@ func TestWhatBeginRefuses(t *testing.T) {
 		}
 	}
 
+	// A body with a brace too many, which f.do cannot send because it marshals
+	// what it is given. Trailing content is a client that built its body
+	// wrongly, and a file attached on the strength of one is worse than a 400.
+	mangled := `{"budgetItemId":"` + f.line.ID.String() + `","name":"a.pdf","size":10,"contentType":"application/pdf"}}`
+	if rec := f.send(http.MethodPost, "/api/v1/attachments", "application/json", mangled, nil, f.editor); rec.Code != http.StatusBadRequest {
+		t.Errorf("a brace too many: %d %s, want 400", rec.Code, rec.Body)
+	}
+
 	// The total: 1000 fits in 1500, a second 1000 does not — though the first
 	// was never uploaded, let alone confirmed.
 	body := ok()
