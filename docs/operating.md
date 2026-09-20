@@ -301,6 +301,7 @@ than being absent.
 | `SOIREE_SMTP_HOST` set without `SOIREE_BASE_URL` | A mail whose link is relative is a mail that cannot be clicked. |
 | `SOIREE_BOOTSTRAP_PASSWORD` without `SOIREE_BOOTSTRAP_ADMIN`, or shorter than 12 characters | There is no account for it to belong to, or the app would refuse the same password from a form. |
 | Malformed `SOIREE_EVENT_DATE`, `SOIREE_CURRENCY`, `SOIREE_BASE_URL`, `SOIREE_BUDGET_CEILING`, `SOIREE_ALLOW_INDEXING`, `SOIREE_DEMO_DATA` or `SOIREE_TRUST_PROXY_HEADERS` | A value nobody can parse is a typo, and every one of these fails quietly at runtime instead. `SOIREE_PASSKEYS_ENABLED` is the deliberate exception: a value it cannot parse reads as off, because off loses nothing and refusing to start would turn a declined convenience into an outage. |
+| `SOIREE_CSP` set to anything but `on` or `off` | The Content-Security-Policy the binary sends is what enforces "no inline script, no inline style" in the browser. Read as off, a typo would drop that defence and nothing would say so until something took advantage of it. `off` is for a deployment whose proxy sends a policy instead. |
 | Any malformed `SOIREE_REMINDER_*` | A digest that silently never arrives is the same outcome as having no reminders at all, which is the thing the feature exists to prevent. |
 | All three `SOIREE_VAPID_*` variables set, but the two keys are not halves of one P-256 pair | The public half is published into a page anyone can fetch, so a transposed pair puts the signing key there — and nothing reports it afterwards: a browser refuses to subscribe against it, so no notification is ever sent and nothing ever fails. A pair that is merely wrong fails at the first weekly digest instead, once the permission prompt has been spent. |
 | Some but not all of the five `SOIREE_S3_*` variables | A bucket with no secret starts cleanly, draws the upload control, and fails every upload in somebody's hand. The error names what is set and what is missing. |
@@ -328,7 +329,8 @@ reached by address gets password login and nothing else.
 ## Attachments: setting up the bucket
 
 The browser uploads to the bucket and downloads from it directly. soiree only
-signs the addresses. Four things follow, and the first three are yours to do.
+signs the addresses. Four things follow: the first two are yours to do, and
+the third if a proxy in front of soiree sends a policy of its own.
 
 **1. A private bucket, and preferably a key of its own.** Nothing in the bucket
 is ever public; every read goes through an address that lives for a minute.
@@ -362,10 +364,15 @@ aws s3api put-bucket-cors --endpoint-url "$SOIREE_S3_ENDPOINT" \
 Without it every upload fails in the browser with a network error, and nothing
 appears in soiree's log, because the request never reaches soiree.
 
-**3. If a proxy sets a Content-Security-Policy, allow the bucket in
-`connect-src`.** soiree sends no CSP of its own. One that says
-`connect-src 'self'` blocks the upload exactly as a missing CORS rule does, and
-as silently. The startup log names the origin to allow:
+**3. Only if a proxy sets a Content-Security-Policy of its own: allow the
+bucket in its `connect-src` too, or drop it.** soiree's policy already names
+the bucket, because it builds `connect-src` from `SOIREE_S3_ENDPOINT` and the
+two therefore cannot drift apart. A second policy can still undo that. Where
+both headers reach the browser it takes the intersection, and a proxy that
+replaces the header rather than adding to it leaves only its own policy in
+force. Either way a proxy saying `connect-src 'self'` blocks the upload
+exactly as a missing CORS rule does, and as silently. The startup log names
+the origin soiree allows:
 
 ```
 attachments enabled  browsers_connect_to=https://nbg1.your-objectstorage.com max_file_mb=25 total_mb=2048

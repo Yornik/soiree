@@ -68,6 +68,12 @@ type Config struct {
 	// consequence of never having thought about it.
 	AllowIndexing bool
 
+	// DisableCSP stops the binary sending its own Content-Security-Policy,
+	// for a deployment whose proxy sends one instead. Negative so that the
+	// zero value sends the policy: a Config built by anything other than Load
+	// should get the safe answer without having to know this field exists.
+	DisableCSP bool
+
 	// BaseURL is the origin this deployment is reached at, e.g.
 	// https://soiree.example.test. Set-password links are built from it and
 	// never from the request's Host header: a Host header is attacker-supplied,
@@ -362,6 +368,20 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("SOIREE_ALLOW_INDEXING must be a boolean, got %q", v)
 		}
 		c.AllowIndexing = b
+	}
+
+	// Spelled on/off rather than as a boolean because there is nothing to be
+	// true about: the question is whether this binary or the proxy in front of
+	// it owns the policy. An unparseable value is a typo, and a typo here
+	// silently drops a defence, so it refuses to start.
+	if v := strings.TrimSpace(os.Getenv("SOIREE_CSP")); v != "" {
+		switch strings.ToLower(v) {
+		case "on":
+		case "off":
+			c.DisableCSP = true
+		default:
+			return Config{}, fmt.Errorf("SOIREE_CSP must be \"on\" or \"off\", got %q", v)
+		}
 	}
 
 	if v := strings.TrimSpace(os.Getenv("SOIREE_DEMO_DATA")); v != "" {

@@ -117,11 +117,15 @@ by which that image is published:
 
 Out of scope, because these are known and documented rather than undiscovered:
 
-- **Missing TLS, HSTS and CSP on a bare `docker run`.** The binary sets
-  `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options`; TLS, HSTS
-  and a strict Content-Security-Policy are applied at the ingress in the
-  deployed setup. A report that an instance you started with `docker run -p
-  8080:8080` speaks plain HTTP is describing the deployment, not the software.
+- **Missing TLS and HSTS on a bare `docker run`.** The binary sets
+  `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` and a strict
+  `Content-Security-Policy`. That last one describes the page, which is the
+  binary's own business, and `SOIREE_CSP=off` hands it back to a proxy that
+  would rather send its own. TLS and HSTS are promises about the
+  connection, which this binary does not terminate, and are applied at the
+  ingress in the deployed setup. A report that an instance you started with
+  `docker run -p 8080:8080` speaks plain HTTP is describing the deployment, not
+  the software.
 - **The browser-only mode.** Started without `DATABASE_URL`, the binary
   registers neither the API nor the auth routes: the planner runs on its own
   with its state in `localStorage`, there is no account to sign in to, and

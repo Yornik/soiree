@@ -402,18 +402,87 @@ func TestMetricsRouteLabelIsBounded(t *testing.T) {
 	}
 }
 
+// wantCSP is the policy a deployment with no bucket gets, spelled out rather
+// than built from the same helper the server uses: a policy asserted against
+// its own generator asserts nothing, and this is the one header whose exact
+// text decides whether the page runs.
+const wantCSP = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; " +
+	"form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; " +
+	"img-src 'self' data:; font-src 'self'; connect-src 'self'"
+
 func TestSecurityHeaders(t *testing.T) {
 	h := newTestServer(t, config.Config{EventName: "X"})
 	res := get(t, h, "/", nil)
 	_ = res.Body.Close()
 	for k, want := range map[string]string{
-		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":        "DENY",
-		"Referrer-Policy":        "no-referrer",
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+		"Referrer-Policy":         "no-referrer",
+		"Content-Security-Policy": wantCSP,
 	} {
 		if got := res.Header.Get(k); got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)
 		}
+	}
+}
+
+// The bucket is another origin and the browser uploads to it directly, so a
+// policy that did not name it would refuse every upload, in the browser, with
+// nothing in this server's log to explain it. The endpoint is
+// configuration, so the binary derives the origin rather than asking the
+// operator to copy it anywhere.
+func TestContentSecurityPolicyNamesTheBucket(t *testing.T) {
+	h := newTestServer(t, config.Config{
+		EventName:   "X",
+		Attachments: config.AttachmentsConfig{Endpoint: "https://s3.example.test"},
+	})
+	res := get(t, h, "/", nil)
+	_ = res.Body.Close()
+
+	want := wantCSP + " https://s3.example.test"
+	if got := res.Header.Get("Content-Security-Policy"); got != want {
+		t.Errorf("Content-Security-Policy = %q, want %q", got, want)
+	}
+}
+
+// An endpoint that is not an origin is left out rather than pasted in. The
+// policy is a header built from configuration, and a value carrying a space or
+// a semicolon would arrive at the browser as a directive of its own: one the
+// policy does not name above, which is to say the one that would be obeyed.
+func TestContentSecurityPolicyTakesOnlyAnOrigin(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://s3.example.test; style-src-attr 'unsafe-inline'",
+		"https://s3.example.test 'unsafe-inline'",
+		"javascript:alert(1)",
+		"s3.example.test",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			h := newTestServer(t, config.Config{
+				EventName:   "X",
+				Attachments: config.AttachmentsConfig{Endpoint: endpoint},
+			})
+			res := get(t, h, "/", nil)
+			_ = res.Body.Close()
+
+			if got := res.Header.Get("Content-Security-Policy"); got != wantCSP {
+				t.Errorf("Content-Security-Policy = %q, want the policy with no bucket in it", got)
+			}
+		})
+	}
+}
+
+// SOIREE_CSP=off is for a deployment whose proxy sends a policy of its own.
+func TestContentSecurityPolicyCanBeTurnedOff(t *testing.T) {
+	h := newTestServer(t, config.Config{EventName: "X", DisableCSP: true})
+	res := get(t, h, "/", nil)
+	_ = res.Body.Close()
+
+	if got := res.Header.Get("Content-Security-Policy"); got != "" {
+		t.Errorf("Content-Security-Policy = %q, want none", got)
+	}
+	// The rest of the headers are not part of the bargain.
+	if got := res.Header.Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", got)
 	}
 }
 
