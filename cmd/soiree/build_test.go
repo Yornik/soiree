@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,15 @@ var sha256Digest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // setup-go would have to be given to match it.
 var leadingVersion = regexp.MustCompile(`^\d+(\.\d+)*`)
 
+// toolchainAsk matches the two lines in go.mod that can send a build looking
+// for a newer Go than the one it was started with: the `go` directive and an
+// explicit `toolchain` line.
+var toolchainAsk = regexp.MustCompile(`(?m)^(?:go|toolchain go)\s*(\d\S*)$`)
+
+// leadingDigits matches the number at the front of a version component, so a
+// prerelease such as `1.28rc1` still compares as 1.28.
+var leadingDigits = regexp.MustCompile(`^\d+`)
+
 // floatingTool matches the two forms a tool version takes in these workflows:
 // `@latest` after a module path, and `latest` as an action input. Neither
 // matches `ubuntu-latest` or the `:latest` image tag, which are names rather
@@ -57,7 +67,7 @@ func repoFile(t *testing.T, name string) string {
 // bytes from the same source. GO_VERSION had the same shape, so "CI tests the
 // same toolchain the image ships" held only as far as the minor.
 //
-// Both are claims about two files agreeing, and until now nothing read either.
+// Each is a claim about files agreeing, and until now nothing read them.
 func TestTheBuilderIsPinnedAndCITestsThatSameToolchain(t *testing.T) {
 	m := builderStage.FindStringSubmatch(repoFile(t, "Dockerfile"))
 	if m == nil {
@@ -75,13 +85,73 @@ func TestTheBuilderIsPinnedAndCITestsThatSameToolchain(t *testing.T) {
 		t.Errorf("the builder image is tagged %q, which names a line of Go releases rather than one of them", tag)
 	}
 
+	pinnedGo := leadingVersion.FindString(tag)
+
 	v := goVersionEnv.FindStringSubmatch(repoFile(t, ".github/workflows/ci.yaml"))
 	if v == nil {
 		t.Fatal("ci.yaml declares no GO_VERSION, so nothing says which toolchain the jobs test with")
 	}
-	if want := leadingVersion.FindString(tag); v[1] != want {
-		t.Errorf("CI tests with Go %q and the image ships Go %q; ci.yaml asks for those to be the same", v[1], want)
+	if v[1] != pinnedGo {
+		t.Errorf("CI tests with Go %q and the image ships Go %q; ci.yaml asks for those to be the same", v[1], pinnedGo)
 	}
+
+	// The digest fixes which Go the image carries, not which Go compiles.
+	// GOTOOLCHAIN is left at its default everywhere, so a go.mod asking for
+	// more than the image carries sends the build off to download another
+	// toolchain, and the pin decides nothing. No job would notice, since they
+	// would all download the same one. Nor is the ask something a person here
+	// chooses: a2fe2b0, an automerged dependency bump, moved the `go`
+	// directive from 1.25.0 to 1.26.0 on its own.
+	asks := toolchainAsk.FindAllStringSubmatch(repoFile(t, "go.mod"), -1)
+	if asks == nil {
+		t.Fatal("go.mod names no Go version, so nothing says which toolchain this module asks for")
+	}
+	for _, ask := range asks {
+		if compareGoVersions(ask[1], pinnedGo) > 0 {
+			t.Errorf("go.mod asks for Go %q and the pinned builder carries Go %q, so a build would fetch a toolchain no digest names", ask[1], pinnedGo)
+		}
+	}
+}
+
+// compareGoVersions orders two Go versions by their numbers rather than their
+// text, which a plain string comparison gets wrong the moment a component
+// reaches two digits: 1.9 reads as the later release and is the earlier one.
+func compareGoVersions(a, b string) int {
+	x, y := goVersionNumbers(a), goVersionNumbers(b)
+	for i := 0; i < len(x) || i < len(y); i++ {
+		var l, r int
+		if i < len(x) {
+			l = x[i]
+		}
+		if i < len(y) {
+			r = y[i]
+		}
+		switch {
+		case l < r:
+			return -1
+		case l > r:
+			return 1
+		}
+	}
+	return 0
+}
+
+// goVersionNumbers reads a version as the numbers a person compares, so that a
+// two-part `go 1.26` and a three-part 1.26.0 come out equal.
+func goVersionNumbers(v string) []int {
+	var out []int
+	for _, part := range strings.Split(v, ".") {
+		digits := leadingDigits.FindString(part)
+		if digits == "" {
+			break
+		}
+		n, err := strconv.Atoi(digits)
+		if err != nil {
+			break
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // The rule is stated in ci.yaml beside the redocly pin: "Pinned rather than
