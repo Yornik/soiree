@@ -3,6 +3,7 @@ package sheetimport
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -61,6 +62,13 @@ func (t *TableReport) warn(row int, what string) {
 	t.Warnings = append(t.Warnings, RowIssue{Row: row, Text: what})
 }
 
+// SheetGap is the rows of one sheet that hold something and that no table
+// reads: not in any row range, not a header row.
+type SheetGap struct {
+	Sheet string
+	Rows  []int
+}
+
 // Report is the whole run, written to stderr. Nothing in the importer is
 // allowed to discard a row without adding to it.
 type Report struct {
@@ -69,6 +77,12 @@ type Report struct {
 	Decimal DecimalMode
 	DryRun  bool
 	Tables  []TableReport
+	// Outside is what the per-table accounting cannot see. Each table
+	// explains every row in its own range, so a mapping that stops halfway
+	// down the sheet still adds up, to a clean summary over half the budget.
+	// A title or a signature block sits out here legitimately, which is why
+	// these are listed and counted but are not warnings.
+	Outside []SheetGap
 }
 
 // Totals sums the per-table counts.
@@ -139,9 +153,63 @@ func (r *Report) String() string {
 		}
 	}
 
+	outside := 0
+	for i, gap := range r.Outside {
+		if i == 0 {
+			b.add("\n")
+		}
+		verb := "hold data and belong"
+		if len(gap.Rows) == 1 {
+			verb = "holds data and belongs"
+		}
+		b.addf("sheet %q: %s %s to no table\n", gap.Sheet, rowList(gap.Rows), verb)
+		outside += len(gap.Rows)
+	}
+
 	imported, skipped, warnings := r.Totals()
-	b.addf("\nsummary: %d imported, %d skipped, %s\n", imported, skipped, count(warnings, "warning"))
+	b.addf("\nsummary: %d imported, %d skipped, %s", imported, skipped, count(warnings, "warning"))
+	if outside > 0 {
+		// On the summary line because that is the line people read, and
+		// "0 warnings" on its own is an all-clear.
+		b.addf(", %s outside every table", count(outside, "row"))
+	}
+	b.add("\n")
 	return b.String()
+}
+
+// rowSpan writes "row 5" or "rows 5-8".
+func rowSpan(first, last int) string {
+	if first == last {
+		return fmt.Sprintf("row %d", first)
+	}
+	return fmt.Sprintf("rows %d-%d", first, last)
+}
+
+// rowList writes ascending row numbers as "row 1" or "rows 1, 5-8, 12", with
+// the same cap as every other listing in the report.
+func rowList(rows []int) string {
+	var spans []string
+	for i := 0; i < len(rows); {
+		j := i
+		for j+1 < len(rows) && rows[j+1] == rows[j]+1 {
+			j++
+		}
+		if len(spans) == maxListedRows {
+			spans = append(spans, fmt.Sprintf("… and %d more", len(rows)-i))
+			break
+		}
+		if i == j {
+			spans = append(spans, strconv.Itoa(rows[i]))
+		} else {
+			spans = append(spans, fmt.Sprintf("%d-%d", rows[i], rows[j]))
+		}
+		i = j + 1
+	}
+	noun := "rows"
+	if len(rows) == 1 {
+		noun = "row"
+	}
+	return noun + " " + strings.Join(spans, ", ")
 }
 
 // lines accumulates the report text.

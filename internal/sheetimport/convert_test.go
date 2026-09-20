@@ -428,6 +428,47 @@ func TestConvertReportsFiguresItWillNotGuess(t *testing.T) {
 	}
 }
 
+func TestConvertReportsRowsOutsideEveryTable(t *testing.T) {
+	// The mapping is the one -detect proposes for this sheet, which stops at
+	// the section heading in row 5. Every row inside it is accounted for, and
+	// that is the trap: "3 imported, 0 skipped, 0 warnings" over a sheet with
+	// seven rows of data in it.
+	book, _, err := ReadCSV(strings.NewReader(headingCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg, _ := Detect(book)
+	_, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	// Rows 5-8 and only those: the header in row 1 is read, not left out.
+	out := report.String()
+	for _, want := range []string{
+		`sheet "csv": rows 5-8 hold data and belong to no table`,
+		"0 warnings, 4 rows outside every table",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestReportIsQuietAboutASheetReadInFull(t *testing.T) {
+	book, _, err := ReadCSV(strings.NewReader(sectionsCSV), 0)
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	_, report, err := Convert(book, sectionsConfig())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if out := report.String(); strings.Contains(out, "no table") || strings.Contains(out, "outside every") {
+		t.Errorf("every row is inside the table, so there is nothing to say:\n%s", out)
+	}
+}
+
 func TestConvertRefusesUnmatchedParent(t *testing.T) {
 	// Attaching a quote to the wrong line would be invisible in the output,
 	// so a parent that cannot be found exactly is a hard failure.

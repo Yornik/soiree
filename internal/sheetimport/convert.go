@@ -52,6 +52,7 @@ func Convert(book *Book, cfg *Config) (*State, *Report, error) {
 			}
 		}
 	}
+	c.reportOutside()
 	return c.state, c.rep, nil
 }
 
@@ -65,6 +66,9 @@ type converter struct {
 	// cols is the current table's column index -> field, resolved once per
 	// table rather than per row.
 	cols map[int]string
+	// read is, per sheet some table touches, the rows that a table answers
+	// for: its row range and its header row.
+	read map[*Sheet]map[int]bool
 }
 
 // builtRow is a row that survived the skip checks, still carrying where it
@@ -84,6 +88,7 @@ func (c *converter) table(idx int) error {
 		return fmt.Errorf("table %s: %w", t.label(idx), err)
 	}
 	first, last := rowRange(t, sh)
+	c.claim(sh, t.HeaderRow, first, last)
 
 	c.cols = t.mappedColumns()
 	tr.Name, tr.Sheet, tr.Kind = t.Name, sh.Name, t.kind()
@@ -102,6 +107,49 @@ func (c *converter) table(idx int) error {
 		c.noteTable(t, tr, sh, first, last)
 	}
 	return nil
+}
+
+// claim records the rows a table answers for.
+func (c *converter) claim(sh *Sheet, header, first, last int) {
+	if c.read == nil {
+		c.read = map[*Sheet]map[int]bool{}
+	}
+	rows := c.read[sh]
+	if rows == nil {
+		rows = map[int]bool{}
+		c.read[sh] = rows
+	}
+	rows[header] = true
+	for n := first; n <= last; n++ {
+		rows[n] = true
+	}
+}
+
+// reportOutside lists, for every sheet a table reads from, the rows that hold
+// something and that no table answers for.
+//
+// "Never drop a row quietly" is kept table by table, and that is not enough
+// on its own: a mapping whose range ends at a section heading accounts for
+// every row it scanned and says nothing of the rows beneath. A sheet no table
+// names at all is left alone, because leaving a whole sheet out is something
+// the operator did on purpose.
+func (c *converter) reportOutside() {
+	for i := range c.book.Sheets {
+		sh := &c.book.Sheets[i]
+		read, touched := c.read[sh]
+		if !touched {
+			continue
+		}
+		var rows []int
+		for n := 1; n <= len(sh.Rows); n++ {
+			if !read[n] && !sh.RowEmpty(n) {
+				rows = append(rows, n)
+			}
+		}
+		if len(rows) > 0 {
+			c.rep.Outside = append(c.rep.Outside, SheetGap{Sheet: sh.Name, Rows: rows})
+		}
+	}
 }
 
 // rowRange resolves the 1-based, inclusive data range.
