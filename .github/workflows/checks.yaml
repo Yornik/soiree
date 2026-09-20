@@ -65,7 +65,25 @@ jobs:
       # slow under -race is a separate question, and not the first guess:
       # a fresh database and its migrations cost 0.23 s a test, measured,
       # which is a twentieth of the total.
-      - run: go test -race -cover -timeout 25m ./...
+      - run: go test -race -cover -coverprofile=cover.out -timeout 25m ./...
+
+      # The percentages used to reach the log and nowhere else, so a drop
+      # between two runs was something nobody could see. The total goes in the
+      # run summary and the profile is kept, so two runs can be compared
+      # function by function. Deliberately no floor: a threshold on a number
+      # that legitimately untestable wiring moves fails on the day somebody
+      # adds such wiring, and a deleted test is caught in review like the other
+      # house rules.
+      - name: Record the coverage total
+        run: |
+          set -euo pipefail
+          go tool cover -func=cover.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: cover.out
+          retention-days: 7
 
   # The Go tests prove the right bytes are served. They cannot prove the page
   # works, and soiree is mostly frontend — so this drives the real binary in a
