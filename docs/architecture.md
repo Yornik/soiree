@@ -1243,7 +1243,11 @@ Three properties everything is arranged around:
   a cap of 256 concurrent streams — far above any real session, and there so
   that a number exists at all. Reaching it is a `503` with `Retry-After`, not a
   `429`: the limit is about this instance's capacity, not the caller's
-  behaviour.
+  behaviour. One account may hold 16 of those, which is several tabs, a phone
+  and a laptop and still nowhere near it. Reaching *that* one is a `429`,
+  because a caller's own share running out is about the caller — and without a
+  second number one account can hold every slot, which is a state disabling
+  that account would not clear.
 - **Degrading.** With no `DATABASE_URL` the route is never mounted. With a
   database that goes away, the listener retries with jittered backoff from
   200 ms to 30 s and tells every client to refetch once it is back. It never
@@ -1280,6 +1284,18 @@ which is what actually reclaims a stuck connection. Shutdown is registered
 explicitly too, since `http.Server.Shutdown` waits for connections to go idle
 and a stream blocked on its request context never does — without that, one
 connected browser turns every `SIGTERM` into a hung shutdown.
+
+A stream is authorised once, when it is opened, and then lives for hours. So
+every fifteenth heartbeat — about five minutes — it reads its own session
+again, and ends when that lookup comes back empty: revoked by a sign-out, past
+its idle window, past its absolute lifetime, or belonging to an account
+somebody has disabled, which are the same four reasons every other route
+refuses the same cookie. Any other error leaves the stream open, because a
+database that is not answering says nothing about the session — the distinction
+`Authenticate` draws for the same lookup. Revocation therefore reaches an open
+stream within about five minutes rather than whenever its socket happens to
+drop. It is not instantaneous: an admin disabling an account waits that long
+for the feed to stop and for the slots it holds to come back.
 
 #### The rule a client must implement
 

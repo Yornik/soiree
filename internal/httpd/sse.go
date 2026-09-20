@@ -11,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/Yornik/soiree/internal/auth"
 	"github.com/Yornik/soiree/internal/store"
 )
 
@@ -78,6 +80,32 @@ const (
 	// them. Far above any real planning session.
 	sseMaxSubscribers = 256
 
+	// sseMaxPerUser caps what one account may hold of that. The cap above is
+	// about this process; this one is about no single caller being able to
+	// take the whole of it and leave everybody else without live sync. Sixteen
+	// because several tabs, a phone and a laptop are an ordinary evening and
+	// still nowhere near it.
+	sseMaxPerUser = 16
+
+	// sseSessionChecks is how many heartbeats pass between two reads of the
+	// caller's session.
+	//
+	// A stream is authorised once, when it is opened, and is then meant to
+	// stay open for the evening. Everything that ends a session — a sign-out,
+	// an admin disabling the account, the idle window, the absolute lifetime —
+	// reaches every other route on the next request and would otherwise reach
+	// an open stream only when its socket happened to drop. Fifteen beats is
+	// about five minutes, which is one indexed SELECT per client per five
+	// minutes.
+	sseSessionChecks = 15
+
+	// sseSessionCheckTimeout bounds that read. The request context has no
+	// deadline — that is what a stream is — so a database that has stopped
+	// answering would block this goroutine, and a goroutine blocked here is a
+	// client that has stopped draining its buffer and is dropped as a slow
+	// reader. A database fault must not disconnect anybody.
+	sseSessionCheckTimeout = 5 * time.Second
+
 	// Reconnect backoff for the LISTEN connection. It starts short because a
 	// failover takes seconds and the cost of retrying is one connection
 	// attempt, and it stops at half a minute because past that the database is
@@ -89,11 +117,13 @@ const (
 	listenCloseTimeout = 2 * time.Second
 )
 
-// errTooManySubscribers reports the cap being reached. Its own error rather
-// than a bare bool so the handler's two failure modes stay distinguishable.
+// The refusals, each its own error rather than a bare bool so the handler can
+// tell them apart — they do not mean the same thing to a caller and are not
+// answered with the same status.
 var (
-	errTooManySubscribers = errors.New("too many live-sync subscribers")
-	errHubClosed          = errors.New("live sync is shutting down")
+	errTooManySubscribers    = errors.New("too many live-sync subscribers")
+	errTooManyStreamsForUser = errors.New("too many live-sync streams for this account")
+	errHubClosed             = errors.New("live sync is shutting down")
 )
 
 // Frames, pre-encoded because they never vary.
@@ -135,7 +165,12 @@ type changeListener interface {
 // up on you" is a signal the handler selects on alongside the client going
 // away — which is what lets the fan-out abandon a slow reader without ever
 // blocking on it.
+//
+// user is the account that opened it, which is the whole of what the hub knows
+// about who is listening — enough to count what one caller holds, and nothing
+// that would be worth reading out of this map.
 type subscriber struct {
+	user    uuid.UUID
 	frames  chan []byte
 	dropped chan struct{}
 }
@@ -153,6 +188,7 @@ type changeHub struct {
 	// stream survive a deadline without waiting twenty seconds for a heartbeat.
 	buffer     int
 	maxClients int
+	maxPerUser int
 	heartbeat  time.Duration
 
 	mu      sync.Mutex
@@ -180,6 +216,7 @@ func newChangeHub(st *store.Store, m *Metrics, log *slog.Logger) *changeHub {
 		gauge:      subscriberGauge(m),
 		buffer:     sseBuffer,
 		maxClients: sseMaxSubscribers,
+		maxPerUser: sseMaxPerUser,
 		heartbeat:  sseHeartbeat,
 		subs:       map[*subscriber]struct{}{},
 		stopped:    make(chan struct{}),
@@ -202,16 +239,25 @@ func subscriberGauge(m *Metrics) prometheus.Gauge {
 	return g
 }
 
-// subscribe registers a stream, starting the listener if this is the first one.
-func (h *changeHub) subscribe() (*subscriber, error) {
+// subscribe registers a stream for one account, starting the listener if this
+// is the first one.
+func (h *changeHub) subscribe(user uuid.UUID) (*subscriber, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if h.closed {
 		return nil, errHubClosed
 	}
+	// The whole instance first, because a full instance is full whoever is
+	// asking. Then one account's share of it: without that, a single caller
+	// holds every slot and everybody else's live sync is off until the process
+	// restarts — which is also the state an admin cannot clear by disabling
+	// the account, since disabling frees nothing the account is holding.
 	if len(h.subs) >= h.maxClients {
 		return nil, errTooManySubscribers
+	}
+	if h.streamsForLocked(user) >= h.maxPerUser {
+		return nil, errTooManyStreamsForUser
 	}
 	if !h.started {
 		h.started = true
@@ -224,12 +270,27 @@ func (h *changeHub) subscribe() (*subscriber, error) {
 	}
 
 	sub := &subscriber{
+		user:    user,
 		frames:  make(chan []byte, h.buffer),
 		dropped: make(chan struct{}),
 	}
 	h.subs[sub] = struct{}{}
 	h.gauge.Set(float64(len(h.subs)))
 	return sub, nil
+}
+
+// streamsForLocked counts what one account is already holding. A scan rather
+// than a second map kept alongside: the map it would have to agree with is
+// emptied from three different paths, and at most maxClients entries are ever
+// walked.
+func (h *changeHub) streamsForLocked(user uuid.UUID) int {
+	n := 0
+	for sub := range h.subs {
+		if sub.user == user {
+			n++
+		}
+	}
+	return n
 }
 
 // release deregisters a stream whose handler is returning.
@@ -426,13 +487,35 @@ func withJitter(d time.Duration) time.Duration {
 // Mounted only when a store is configured, like everything else under /api/v1,
 // so a binary started with no DATABASE_URL does not have this path at all.
 func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
-	sub, err := s.live.subscribe()
+	// The guard in front of this handler decides once that the caller may
+	// read, and this response then outlives that decision by hours. Two things
+	// below need to know whose stream it is: the per-account cap, and the
+	// re-read that ends a stream whose session has gone. A caller with no
+	// session cookie cannot get past that guard, so the second half of this is
+	// the reading that fails closed rather than a case anybody meets.
+	user, ok := UserFrom(r.Context())
+	token, signedIn := sessionToken(r)
+	if !ok || !signedIn {
+		refuseUnidentified(w, r)
+		return
+	}
+	tokenHash := auth.HashToken(token)
+
+	sub, err := s.live.subscribe(user.ID)
 	if err != nil {
-		// A 503 rather than a 429: the cap is about this instance's capacity,
-		// not about this caller's behaviour, and Retry-After tells a browser
-		// that a moment later is worth trying.
+		// Two refusals that do not mean the same thing. The instance being
+		// full is about this instance's capacity rather than this caller's
+		// behaviour, so it stays a 503; one account asking for more than its
+		// share *is* the caller's behaviour, so that one is a 429. Retry-After
+		// on both, because a moment later is worth trying either way — an
+		// EventSource cannot read a status, so it is the page's own reopen
+		// logic that acts on this.
+		status, code := http.StatusServiceUnavailable, "unavailable"
+		if errors.Is(err, errTooManyStreamsForUser) {
+			status, code = http.StatusTooManyRequests, "too_many_streams"
+		}
 		w.Header().Set("Retry-After", "5")
-		writeError(w, http.StatusServiceUnavailable, "unavailable", err.Error())
+		writeError(w, status, code, err.Error())
 		return
 	}
 	defer s.live.release(sub)
@@ -479,6 +562,12 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 	beat := time.NewTicker(s.live.heartbeat)
 	defer beat.Stop()
 
+	// Beats since the session was last looked at. The re-read rides the
+	// heartbeat this stream already has rather than a timer of its own, so
+	// there is one thing to slow down in a test and one thing to reason about
+	// here.
+	beats := 0
+
 	ctx := r.Context()
 	for {
 		// The hub giving up on this subscriber wins over frames still sitting
@@ -505,7 +594,54 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 			if !writeFrame(rc, w, heartbeatFrame) {
 				return
 			}
+			// After the frame, never before it: the beat is what holds the
+			// connection open through a proxy, and a database taking its time
+			// must not delay it.
+			beats++
+			if beats >= sseSessionChecks {
+				beats = 0
+				if sessionEnded(ctx, s.store, tokenHash, s.live.log) {
+					s.live.log.Info("live sync ended a stream whose session is gone", "user", user.ID)
+					return
+				}
+			}
 		}
+	}
+}
+
+// sessionReader is the part of store.Store a stream re-reads itself against.
+// An interface for the same reason changeListener is one: what this has to get
+// right is which answer ends a stream, and that is worth stating without a
+// database in the room.
+type sessionReader interface {
+	SessionByToken(ctx context.Context, tokenHash []byte, maxLifetime time.Duration) (store.Session, store.User, error)
+}
+
+// sessionEnded reports whether the session a stream was opened with is gone.
+//
+// Only ErrNotFound says so. SessionByToken collapses revoked, past its idle
+// window, past its absolute lifetime and "the account is no longer active"
+// into that one answer, which is exactly the set of reasons every other route
+// refuses the same cookie — so a stream ending on it is this handler agreeing
+// with the rest of the application rather than deciding anything of its own.
+//
+// Any other error is the database not answering, which says nothing about the
+// session. The stream stays open: a failover of a few seconds must not
+// disconnect a party, and that is the same distinction the accounts middleware
+// draws for the same lookup.
+func sessionEnded(ctx context.Context, sessions sessionReader, tokenHash []byte, log *slog.Logger) bool {
+	ctx, cancel := context.WithTimeout(ctx, sseSessionCheckTimeout)
+	defer cancel()
+
+	_, _, err := sessions.SessionByToken(ctx, tokenHash, sessionMaxLifetime)
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, store.ErrNotFound):
+		return true
+	default:
+		log.Error("live sync could not re-read a session", "err", err)
+		return false
 	}
 }
 
