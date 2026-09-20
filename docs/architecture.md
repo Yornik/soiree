@@ -1412,7 +1412,11 @@ previous digest rather than stacking on it by reusing the `tag`, and brings an
 open planner to the front rather than opening a second one — without navigating
 it, when it is already the planner: every screen is a fragment of one page, the
 digest opens `/`, and navigating from a fragment to `/` is a reload that takes
-somebody's half-typed form with it. The payload's four
+somebody's half-typed form with it. The replacement alerts again rather than
+landing in silence: reusing a tag replaces the notification on screen with no
+sound and nothing on the lock screen unless `renotify` says otherwise, and the
+phone still holding last week's digest is exactly the one this week's is for.
+The payload's four
 fields (`title`, `body`, `url`, `tag`) are a contract between the server and
 that handler: adding a field is safe, renaming one is not.
 
