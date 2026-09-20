@@ -387,7 +387,13 @@ func decodeBody[B bodyFor[T], T any](body []byte, currency string, base T) (T, e
 	}
 	// Trailing content means the body was not the single JSON object it claims
 	// to be, which is worth a complaint rather than a silent partial read.
-	if dec.More() {
+	//
+	// Read the next token rather than asking More(), which answers about the
+	// array or object being read: it says nothing follows a stray `}` or `]`,
+	// so a body a client concatenated wrongly passed a check named for
+	// refusing exactly that. Only a clean body ends in io.EOF; a second object
+	// ends in its `{`, and anything else in a syntax error.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return zero, errors.New("the request body must be a single JSON object")
 	}
 	return b.apply(currency, base)

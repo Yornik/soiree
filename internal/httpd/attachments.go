@@ -200,7 +200,8 @@ func (a *Attachments) handleBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errBadRequest, "could not read the request body: "+err.Error())
 		return
 	}
-	if dec.More() {
+	// A token read rather than More(), for the reason decodeBody gives.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		writeError(w, http.StatusBadRequest, errBadRequest, "the request body must be a single JSON object")
 		return
 	}

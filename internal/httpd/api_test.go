@@ -885,6 +885,10 @@ func TestBadRequestsAreRefused(t *testing.T) {
 		{"not an object", http.MethodPost, "/api/v1/notes", `["text"]`, http.StatusBadRequest},
 		{"empty body", http.MethodPost, "/api/v1/notes", "", http.StatusBadRequest},
 		{"trailing content", http.MethodPost, "/api/v1/notes", `{"text":"a"}{"text":"b"}`, http.StatusBadRequest},
+		// A brace or a bracket too many is a client that concatenated its body
+		// wrongly, and is trailing content as much as a second object is.
+		{"a brace too many", http.MethodPost, "/api/v1/notes", `{"text":"a"}}`, http.StatusBadRequest},
+		{"a bracket too many", http.MethodPost, "/api/v1/notes", `{"text":"a"}]`, http.StatusBadRequest},
 		// A misspelt field that silently did nothing is the bug nobody catches.
 		{"unknown field", http.MethodPost, "/api/v1/budget-items", `{"item":"Cake","unitt":"5.00"}`, http.StatusBadRequest},
 		{"null on a non-nullable field", http.MethodPost, "/api/v1/budget-items", `{"item":null}`, http.StatusBadRequest},
