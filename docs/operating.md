@@ -239,7 +239,9 @@ go run ./tmp/vapid && rm -rf tmp
 are documented in. The underlying `webpush.GenerateVAPIDKeys` returns them the
 other way round — exactly the sort of thing that gets transposed once and not
 noticed — so if you call the library directly, the *first* value is the private
-key.
+key. Setting all three variables to values that are not two halves of one
+P-256 pair is a refusal to start, and a transposed pair is named as such in the
+error; a half-configured set is still only a warning.
 
 Then set all three:
 
@@ -290,6 +292,7 @@ than being absent.
 | `SOIREE_BOOTSTRAP_PASSWORD` without `SOIREE_BOOTSTRAP_ADMIN`, or shorter than 12 characters | There is no account for it to belong to, or the app would refuse the same password from a form. |
 | Malformed `SOIREE_EVENT_DATE`, `SOIREE_CURRENCY`, `SOIREE_BASE_URL`, `SOIREE_BUDGET_CEILING`, `SOIREE_ALLOW_INDEXING`, `SOIREE_DEMO_DATA` or `SOIREE_TRUST_PROXY_HEADERS` | A value nobody can parse is a typo, and every one of these fails quietly at runtime instead. `SOIREE_PASSKEYS_ENABLED` is the deliberate exception: a value it cannot parse reads as off, because off loses nothing and refusing to start would turn a declined convenience into an outage. |
 | Any malformed `SOIREE_REMINDER_*` | A digest that silently never arrives is the same outcome as having no reminders at all, which is the thing the feature exists to prevent. |
+| All three `SOIREE_VAPID_*` variables set, but the two keys are not halves of one P-256 pair | The public half is published into a page anyone can fetch, so a transposed pair puts the signing key there — and nothing reports it afterwards: a browser refuses to subscribe against it, so no notification is ever sent and nothing ever fails. A pair that is merely wrong fails at the first weekly digest instead, once the permission prompt has been spent. |
 | Some but not all of the five `SOIREE_S3_*` variables | A bucket with no secret starts cleanly, draws the upload control, and fails every upload in somebody's hand. The error names what is set and what is missing. |
 | `SOIREE_ATTACHMENT_MAX_MB` or `SOIREE_ATTACHMENTS_TOTAL_MB` not a whole number above zero, or the first larger than the second | No file could ever be that large; it is a typo. |
 | The database is unreachable, or a migration fails | There is nothing to serve the API from. |

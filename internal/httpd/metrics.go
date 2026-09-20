@@ -1,7 +1,9 @@
 package httpd
 
 import (
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -94,11 +96,20 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
-// instrument records metrics for each request.
+// instrument records metrics for each request, and is where a handler panic
+// stops being invisible.
 //
 // The route label is deliberately a small fixed set rather than the raw path.
 // Asset URLs contain a content hash, so labelling by path would mint a new
 // time series on every deploy — a textbook cardinality leak.
+//
+// This is also the outermost wrapper that sees a request, which makes it the
+// place to recover. A panic left alone reaches neither of the two channels this
+// deployment is watched through: net/http catches it, and its own "panic
+// serving" line goes through the std log bridge, which slog emits at INFO,
+// while the request itself is never counted at all. The one fault that is
+// entirely the server's own is then the one the 5xx panel and a level=ERROR
+// query both miss.
 func (m *Metrics) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route := routeClass(r.URL.Path)
@@ -108,11 +119,42 @@ func (m *Metrics) instrument(next http.Handler) http.Handler {
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
-		next.ServeHTTP(rec, r)
-		elapsed := time.Since(start).Seconds()
 
-		m.requests.WithLabelValues(route, r.Method, strconv.Itoa(rec.status)).Inc()
-		m.duration.WithLabelValues(route, r.Method).Observe(elapsed)
+		defer func() {
+			v := recover()
+			// A response that has already begun cannot be corrected, and a
+			// handler that panicked with ErrAbortHandler asked for its
+			// connection to be dropped. Both end the same way, below.
+			abort := v != nil && (rec.wrote || v == http.ErrAbortHandler)
+
+			if v != nil && v != http.ErrAbortHandler {
+				// The process logger is the default, which is what puts this
+				// in the same JSON stream as the API's own 500 path rather
+				// than in plain text on stderr.
+				slog.Error("handler panic", "route", route, "method", r.Method,
+					"panic", v, "stack", string(debug.Stack()))
+				if !rec.wrote {
+					writeError(rec, http.StatusInternalServerError, errInternal, "something went wrong")
+				}
+				// Recorded as the failure it was even when a partial body has
+				// already gone out under a 200: nothing about this request
+				// succeeded, and the sample is what an alert reads.
+				rec.status = http.StatusInternalServerError
+			}
+
+			m.requests.WithLabelValues(route, r.Method, strconv.Itoa(rec.status)).Inc()
+			m.duration.WithLabelValues(route, r.Method).Observe(time.Since(start).Seconds())
+
+			if abort {
+				// ErrAbortHandler is how net/http is told to drop a connection
+				// without logging a stack trace of its own on top of the one
+				// above. A truncated body that ends in a clean close reads as
+				// a complete one, which is the thing to prevent here.
+				panic(http.ErrAbortHandler)
+			}
+		}()
+
+		next.ServeHTTP(rec, r)
 	})
 }
 

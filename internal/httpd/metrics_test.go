@@ -1,8 +1,11 @@
 package httpd
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -78,6 +81,77 @@ func TestAPIMetricsRouteLabelIsBounded(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics output missing %s", want)
 		}
+	}
+}
+
+// A handler panic used to be the one server fault that reached neither of the
+// channels this deployment is operated through: net/http's own "panic serving"
+// line arrives through the std log bridge, which slog emits at INFO, and the
+// request never reached the counter, so the 5xx rate stayed flat while the
+// browser retried a write every thirty seconds. The JSON body is a nicety —
+// the page treats a reset, a 502 and a 500 alike — the log line and the sample
+// are the point.
+func TestAHandlerPanicIsLoggedAndCountedAsA500(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	m := NewMetrics("test", "none")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/plan", func(http.ResponseWriter, *http.Request) {
+		panic("a handler that could not cope")
+	})
+
+	rec := httptest.NewRecorder()
+	m.instrument(mux).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"error":"internal"`) {
+		t.Errorf("body = %q, want the API's own internal error", body)
+	}
+	if line := logged.String(); !strings.Contains(line, `"level":"ERROR"`) ||
+		!strings.Contains(line, `"route":"api-plan"`) {
+		t.Errorf("the panic did not reach the log as an error naming the route:\n%s", line)
+	}
+
+	scrape := httptest.NewRecorder()
+	m.Handler().ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if want := `soiree_http_requests_total{method="GET",route="api-plan",status="500"} 1`; !strings.Contains(scrape.Body.String(), want) {
+		t.Errorf("no %s in the exposition, so a 5xx panel would show nothing", want)
+	}
+}
+
+// Once the first byte is out there is no 500 to send, and a truncated body that
+// ends in a clean close reads as a complete one. ErrAbortHandler is how
+// net/http is asked to drop the connection instead — and a handler that panics
+// with it has asked for exactly that itself, so it passes through untouched.
+func TestAPanicAfterTheResponseStartedAbortsTheConnection(t *testing.T) {
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	for name, h := range map[string]http.HandlerFunc{
+		"a half-written body": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"items":[`))
+			panic("a handler that could not cope")
+		},
+		"a handler that aborted on purpose": func(http.ResponseWriter, *http.Request) {
+			panic(http.ErrAbortHandler)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := NewMetrics("test", "none")
+			defer func() {
+				if v := recover(); v != http.ErrAbortHandler {
+					t.Errorf("recovered %v, want http.ErrAbortHandler so the client does not read a truncated body as whole", v)
+				}
+			}()
+			m.instrument(h).ServeHTTP(httptest.NewRecorder(),
+				httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil))
+		})
 	}
 }
 

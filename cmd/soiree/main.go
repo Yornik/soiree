@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -165,9 +167,16 @@ func main() {
 			"total_mb", cfg.Attachments.TotalBytes>>20)
 	}
 
+	// net/http complains through a std log.Logger, and without one of its own
+	// that is the std bridge into slog, which emits every line at INFO — a
+	// panic it had to catch itself included. They are not INFO, and a
+	// level=ERROR query is how this deployment is looked at first.
+	serverErrors := slog.NewLogLogger(log.Handler(), slog.LevelError)
+
 	hs := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           srv.Handler(),
+		ErrorLog:          serverErrors,
 		ReadHeaderTimeout: httpd.ReadHeaderTimeout,
 		ReadTimeout:       httpd.ReadTimeout,
 		WriteTimeout:      httpd.WriteTimeout,
@@ -185,12 +194,39 @@ func main() {
 	// anyone who asked. The probes stay on the main listener, because that is
 	// the port kubelet reaches.
 	ms := &http.Server{
-		Addr:              cfg.MetricsAddr,
-		Handler:           srv.MetricsHandler(),
+		Addr:    cfg.MetricsAddr,
+		Handler: srv.MetricsHandler(),
+		// The metrics listener is not behind the instrumentation that recovers
+		// a panic, so this is the only thing raising the level of one here.
+		ErrorLog:          serverErrors,
 		ReadHeaderTimeout: httpd.ReadHeaderTimeout,
 		ReadTimeout:       httpd.ReadTimeout,
 		WriteTimeout:      httpd.WriteTimeout,
 		IdleTimeout:       httpd.IdleTimeout,
+	}
+
+	// Both ports are taken here rather than inside ListenAndServe, because the
+	// bind is the one part of serving that can fail at startup, and a metrics
+	// port that cannot bind takes the process down exactly as the main one
+	// does: the alternative is a pod that looks healthy while every scrape
+	// fails, which is the failure nobody notices until they need the graph.
+	//
+	// Doing it before the announcement is what makes that a refusal to start
+	// with a non-zero status, like every other row of the "Refuses to start"
+	// table, instead of a line claiming a listener that never existed followed
+	// by an ordinary shutdown and exit 0 — which `restart: on-failure`, systemd
+	// and a CI step all read as a successful run.
+	ln, err := net.Listen("tcp", hs.Addr)
+	if err != nil {
+		log.Error("cannot bind the listener", "addr", hs.Addr, "err", err)
+		os.Exit(1)
+	}
+	mln, err := net.Listen("tcp", ms.Addr)
+	if err != nil {
+		// Released, so the port is free for whatever starts next.
+		_ = ln.Close()
+		log.Error("cannot bind the metrics listener", "addr", ms.Addr, "err", err)
+		os.Exit(1)
 	}
 
 	// Housekeeping: expired sessions and spent links. Tied to the signal
@@ -220,30 +256,38 @@ func main() {
 		defer stopReminders()
 	}
 
+	// The addresses the listeners actually got, not the ones that were asked
+	// for: with a port of 0 the two differ, and the one worth printing is the
+	// one something can connect to.
+	log.Info("soiree listening",
+		"addr", ln.Addr().String(),
+		"metricsAddr", mln.Addr().String(),
+		"version", version,
+		"commit", commit,
+		"event", cfg.EventName,
+		"currency", cfg.Currency,
+		"demoData", cfg.DemoData,
+		"api", cfg.DatabaseURL != "",
+	)
+
+	// A serve failure later in the process's life is the same fault as a bind
+	// failure and must not be reported as success either. Recorded rather than
+	// exited on, so that the shutdown below still runs; stop() alone would be
+	// indistinguishable from a SIGTERM.
+	var serveFailed atomic.Bool
+
 	go func() {
-		log.Info("soiree listening",
-			"addr", cfg.ListenAddr,
-			"metricsAddr", cfg.MetricsAddr,
-			"version", version,
-			"commit", commit,
-			"event", cfg.EventName,
-			"currency", cfg.Currency,
-			"demoData", cfg.DemoData,
-			"api", cfg.DatabaseURL != "",
-		)
-		if err := hs.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := hs.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server stopped", "err", err)
+			serveFailed.Store(true)
 			stop()
 		}
 	}()
 
-	// A metrics port that cannot bind takes the process down with it, exactly
-	// as the main one does. The alternative is a pod that looks healthy while
-	// every scrape fails, which is the failure nobody notices until they need
-	// the graph.
 	go func() {
-		if err := ms.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := ms.Serve(mln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("metrics server stopped", "err", err)
+			serveFailed.Store(true)
 			stop()
 		}
 	}()
@@ -258,6 +302,11 @@ func main() {
 	// termination grace period.
 	if err := errors.Join(hs.Shutdown(shutdownCtx), ms.Shutdown(shutdownCtx)); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
+		os.Exit(1)
+	}
+	// A shutdown this process asked for itself is not a successful run, however
+	// tidily it ended.
+	if serveFailed.Load() {
 		os.Exit(1)
 	}
 }

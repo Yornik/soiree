@@ -89,9 +89,10 @@ func (c Config) Partial() bool {
 
 // LoadConfig reads the VAPID identity from the environment.
 //
-// No error return, because there is nothing here that can be malformed in a
-// way this could detect: a key that is not a key fails at the first send, with
-// a message from the crypto that says so. Reading the same variables that
+// No error return, because the pair is checked once at startup rather than
+// here: config.Load decodes both keys and refuses to boot unless they are two
+// halves of one P-256 pair, so a process that reaches this has either nothing
+// configured or something it can sign with. Reading the same variables that
 // internal/config reads follows the mailer, which does the same — the two
 // answer to different things, and the alternative is threading configuration
 // through a scheduler that otherwise needs none.

@@ -3,8 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Yornik/soiree/internal/config"
 	"github.com/Yornik/soiree/internal/httpd"
@@ -120,20 +124,29 @@ func TestSMTPConfigMapsOntoTheTransport(t *testing.T) {
 // disagreement is silent. A page that offers to subscribe against a key the
 // sender does not have, and a sender holding keys the page never publishes,
 // both present as notifications that simply never arrive.
+//
+// A real pair rather than two labelled strings, because a complete set is now
+// checked at startup — which also means this pins the order GenerateKeys hands
+// them back in, the thing that gets transposed once and not noticed.
 func TestBothReadersOfTheVAPIDKeysAgree(t *testing.T) {
+	publicKey, privateKey, err := push.GenerateKeys()
+	if err != nil {
+		t.Fatalf("generate a VAPID pair: %v", err)
+	}
+
 	for name, env := range map[string]map[string]string{
 		"nothing set": {},
 		"complete": {
-			"SOIREE_VAPID_PUBLIC_KEY":  "BPublicHalf",
-			"SOIREE_VAPID_PRIVATE_KEY": "the-private-half",
+			"SOIREE_VAPID_PUBLIC_KEY":  publicKey,
+			"SOIREE_VAPID_PRIVATE_KEY": privateKey,
 			"SOIREE_VAPID_SUBJECT":     "mailto:ada@example.test",
 		},
 		"a public key alone": {
-			"SOIREE_VAPID_PUBLIC_KEY": "BPublicHalf",
+			"SOIREE_VAPID_PUBLIC_KEY": publicKey,
 		},
 		"a pair with no subject": {
-			"SOIREE_VAPID_PUBLIC_KEY":  "BPublicHalf",
-			"SOIREE_VAPID_PRIVATE_KEY": "the-private-half",
+			"SOIREE_VAPID_PUBLIC_KEY":  publicKey,
+			"SOIREE_VAPID_PRIVATE_KEY": privateKey,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -177,5 +190,53 @@ func TestNoRelayMeansNoMailer(t *testing.T) {
 	}
 	if smtpConfig(config.SMTPConfig{}).Configured() {
 		t.Error("an empty relay mapped to a configured mailer, so mail would be attempted and fail")
+	}
+}
+
+// docs/operating.md lists "Either listener cannot bind" under "Refuses to
+// start", and every other row there ends in a non-zero exit. This one did not:
+// the bind failure cancelled the signal context, the ordinary shutdown ran and
+// main returned 0, so `restart: on-failure`, systemd and a CI step all read a
+// process that never served a request as a successful run. The announcement
+// came out first as well, naming a listener that did not exist.
+//
+// main() is what is under test, so it runs in a child copy of this test binary.
+// That is the standard way to assert on a process that ends in os.Exit.
+func TestAListenerThatCannotBindStopsTheProcessWithAFailure(t *testing.T) {
+	if os.Getenv("SOIREE_TEST_RUN_MAIN") == "1" {
+		main()
+		return
+	}
+
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("take a port for the child to collide with: %v", err)
+	}
+	defer func() { _ = occupied.Close() }()
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locate this test binary: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, self, "-test.run="+t.Name())
+	// An environment built from nothing rather than inherited: a DATABASE_URL
+	// in the shell that ran the tests would make the child exit 1 on "database
+	// unavailable", and this would pass without the listener ever being the
+	// reason.
+	child.Env = []string{
+		"SOIREE_TEST_RUN_MAIN=1",
+		"SOIREE_LISTEN_ADDR=" + occupied.Addr().String(),
+		"SOIREE_METRICS_ADDR=127.0.0.1:0",
+	}
+	out, err := child.CombinedOutput()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Errorf("the process reported success with its port already taken (err=%v):\n%s", err, out)
+	}
+	if strings.Contains(string(out), "soiree listening") {
+		t.Errorf("the log announced a listener that was never bound:\n%s", out)
 	}
 }
