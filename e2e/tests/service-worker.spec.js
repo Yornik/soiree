@@ -34,8 +34,10 @@ test('a browser that opens the page ends up with an active worker and the shell 
     ]));
     expect(['activating', 'activated']).toContain(state);
 
-    // Install has finished by the time a worker is active, so the precache is
-    // complete: the shell and the script it needs are there to be served offline.
+    // Install has finished by the time a worker is active, and nothing here
+    // stands in its way, so the precache is complete: the shell and the script
+    // it needs are there to be served offline. A precache that loses a request
+    // is the test below.
     const cached = await page.evaluate(async () => {
       const names = await caches.keys();
       const urls = [];
@@ -72,6 +74,76 @@ test('under a working worker, only the planner itself is answered from the cache
     // And the planner still comes from the worker: it opens with the network gone.
     await page.goto('/');
     await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15000 });
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator('#daysNum')).toBeVisible();
+  } finally {
+    await context.setOffline(false).catch(() => {});
+    await context.close();
+  }
+});
+
+/*
+ * A deploy that gets half way, which is the one the offline copy has to come
+ * through.
+ *
+ * The worker names its cache after the version it was rendered with, and
+ * activate deletes every cache that is not that one. Install fills the new
+ * cache with a single addAll, and addAll is all or nothing: one lost request
+ * and it stores nothing at all. An install that shrugs that off therefore ends
+ * with the previous version's complete cache deleted and the new one empty,
+ * and the next launch with no connection gets a browser error page where the
+ * planner should be: the cache is gone in exactly the conditions it exists
+ * for, and on the far links where a request goes missing in the first place.
+ *
+ * Two things make that deploy out of one running server. The arriving worker
+ * is asked for at a URL of its own, because one server serves one version and
+ * a second request for a script URL the browser already holds never reaches
+ * it; the body it gets back is the worker the server just served with its
+ * VERSION changed, which for the cache is the whole of what a new build is.
+ * And the shell answers 503: "/" is the precache entry that cannot be dodged,
+ * since it is no-cache and always asks the network, and a rollout is exactly
+ * when the server it asks may be the one going away.
+ */
+test('a deploy whose precache cannot finish leaves the copy that works in place', async ({ browser, request }) => {
+  const arriving = (await (await request.get('/sw.js')).text())
+    .replace(/var VERSION = "[^"]*"/, 'var VERSION = "the next build"');
+  const context = await browser.newContext({ baseURL: BASE_URL, serviceWorkers: 'allow' });
+  try {
+    const page = await context.newPage();
+    await page.goto('/');
+    // The cache rather than the worker: a worker is active a moment before the
+    // install that fills it has finished.
+    await expect.poll(() => page.evaluate(() => caches.match('/').then((hit) => !!hit)),
+      { timeout: 15_000 }).toBe(true);
+
+    await context.route(/\/sw\.js\?deploy=2$/, (route) => route.fulfill({ contentType: 'text/javascript', body: arriving }));
+    await context.route(`${BASE_URL}/`, (route) => route.fulfill({ status: 503, contentType: 'text/plain', body: 'deploying' }));
+
+    const fate = await page.evaluate(() => new Promise((resolve) => {
+      navigator.serviceWorker.ready.then((reg) => {
+        reg.addEventListener('updatefound', () => {
+          const next = reg.installing;
+          // Terminal either way, so nothing here waits on a clock: the arriving
+          // worker is refused, or it is in charge. "activated" is reached only
+          // once activate has finished deleting what it means to delete.
+          const settle = () => {
+            if (next.state === 'redundant') resolve('refused');
+            if (next.state === 'activated') resolve('took over');
+          };
+          next.addEventListener('statechange', settle);
+          settle();
+        });
+        // Rejected when the install is refused, which is the point of it.
+        navigator.serviceWorker.register('/sw.js?deploy=2').catch(() => {});
+      });
+    }));
+    expect(fate).toBe('refused');
+    expect(await page.evaluate(() => caches.match('/').then((hit) => !!hit))).toBe(true);
+
+    // And what that cache is for. The routes go first, so that offline is
+    // offline rather than a fulfilled 503.
+    await context.unrouteAll();
     await context.setOffline(true);
     await page.reload();
     await expect(page.locator('#daysNum')).toBeVisible();

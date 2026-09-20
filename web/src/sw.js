@@ -24,8 +24,21 @@ self.addEventListener('install', function (event) {
   event.waitUntil(
     caches.open(CACHE)
       .then(function (cache) { return cache.addAll(PRECACHE); })
-      // A single failed precache entry must not wedge the worker.
-      .catch(function () { return undefined; })
+      // addAll is all or nothing, and activate below deletes every cache that
+      // is not this one. So an update that lets a failed precache pass throws
+      // away a complete offline copy and puts an empty cache in its place, and
+      // the next launch with no connection gets a browser error page: the one
+      // thing the cache is here to prevent, on the far links where a request
+      // is most likely to go missing in the first place. Failing the install
+      // instead leaves the worker that is already serving the planner where it
+      // is, cache and all, and the browser tries the new one again on the next
+      // navigation.
+      //
+      // A first install has no cache to lose, so it is still tolerated: the
+      // planner has no offline copy either way, and a worker that installs is
+      // what reminders and push need to exist at all. What it misses refills
+      // itself on demand on the next visit.
+      .catch(function (err) { if (self.registration.active) throw err; })
       .then(function () { return self.skipWaiting(); })
   );
 });
