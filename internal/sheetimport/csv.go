@@ -149,7 +149,8 @@ func sniffDelimiter(raw []byte) rune {
 // the file was read and belongs at the top of the report — "which delimiter
 // did it decide on" is the first question when a CSV imports as one column.
 func OpenFile(path string, comma rune) (book *Book, note string, err error) {
-	switch strings.ToLower(filepath.Ext(path)) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
 	case ".ods":
 		b, rerr := ReadODS(path)
 		if rerr != nil {
@@ -179,5 +180,12 @@ func OpenFile(path string, comma rune) (book *Book, note string, err error) {
 		}
 		return b, "delimited text, " + how, nil
 	}
-	return nil, "", fmt.Errorf("%s: unsupported file type (want .ods, .csv or .tsv)", path)
+	// Most people's planning sheet is an .xlsx, so this message is the first
+	// thing the tool ever says to them. "Unsupported" on its own leaves them
+	// with nothing to do about it, and File > Save As is all it takes.
+	switch ext {
+	case ".xlsx", ".xlsm", ".xlsb", ".xls", ".fods", ".numbers":
+		return nil, "", fmt.Errorf("%s: %s is not read here: save it as OpenDocument (.ods) or as CSV, and run again", path, ext)
+	}
+	return nil, "", fmt.Errorf("%s: unsupported file type (want .ods, .csv, .tsv or .txt)", path)
 }

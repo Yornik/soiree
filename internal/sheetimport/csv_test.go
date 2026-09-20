@@ -198,3 +198,23 @@ func TestReportNamesARowReadFromSeveralLines(t *testing.T) {
 		t.Errorf("row 3 was read from two lines of the file and nothing says so; warnings: %v", tr.Warnings)
 	}
 }
+
+// Most people's planning sheet is an .xlsx, so the first thing the tool ever
+// says to them is this message. It has to name the way out.
+func TestOpenFileSaysWhatToDoWithASheetItCannotRead(t *testing.T) {
+	_, _, err := OpenFile("plan.xlsx", 0)
+	if err == nil {
+		t.Fatal("OpenFile read an .xlsx")
+	}
+	for _, want := range []string{".ods", "save"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%v; want it to mention %q", err, want)
+		}
+	}
+	// .txt is accepted by the reader, so leaving it out of the list is a way
+	// to be told that a file which works is unsupported.
+	_, _, err = OpenFile("plan.pdf", 0)
+	if err == nil || !strings.Contains(err.Error(), ".txt") {
+		t.Errorf("%v; want the accepted types listed in full", err)
+	}
+}

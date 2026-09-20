@@ -75,6 +75,11 @@ func run(args []string) error {
 	fs.Usage = func() { usage(fs) }
 
 	if err := fs.Parse(args); err != nil {
+		// -h is a question, and flag has already answered it. Reporting the
+		// answer as a failure misleads anything reading the exit status.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() != 1 {
@@ -357,15 +362,20 @@ single table, or write a mapping file for a sheet holding several.
   soiree-import -mapping mapping.json -o plan.json plan.ods
 
 mapping file:
+  The loader reads JSON and nothing else, and rejects a key it does not know,
+  so the keys are explained under the example rather than inside it. Paste
+  this as it stands, or start from what -detect writes.
+
   {
-    "decimal": "auto",                  // auto | dot | comma
-    "currency": "EUR",                  // the planner's SOIREE_CURRENCY
-    "totalKeywords": ["total"],         // rows whose label matches are summaries
+    "decimal": "auto",
+    "dateOrder": "auto",
+    "currency": "EUR",
+    "totalKeywords": ["total"],
     "tables": [
       {
         "name": "run of show",
-        "sheet": "Plan",                 // name or 1-based index
-        "kind": "tasks",                 // budget (default) | tasks | notes
+        "sheet": "Plan",
+        "kind": "tasks",
         "headerRow": 2,
         "firstRow": 3, "lastRow": 32,
         "columns": { "name": "A", "owner": "C", "due": "D", "status": "E" }
@@ -377,17 +387,28 @@ mapping file:
         "headerRow": 34,
         "firstRow": 35, "lastRow": 53,
         "columns": { "item": "A", "qty": "B", "total": "C", "paid": "D" },
-        "skipRowsWithoutAmount": false
+        "skipRowsWithoutAmount": false,
+        "skipHidden": false
       },
       {
         "name": "catering quote",
         "sheet": "Quote",
         "headerRow": 1, "firstRow": 2,
-        "parentItem": "Catering",        // rows become children of that item
+        "parentItem": "Catering",
         "columns": { "item": "A", "qty": "B", "unit": "C" }
       }
     ]
   }
+
+  decimal                auto | dot | comma
+  dateOrder              auto | dmy | mdy
+  currency               the planner's SOIREE_CURRENCY
+  totalKeywords          rows whose label matches one exactly are summaries
+  sheet                  sheet name or 1-based index
+  kind                   budget (default) | tasks | notes
+  parentItem             every row becomes a child of that budget item
+  skipRowsWithoutAmount  drop rows with no figure instead of importing zeroes
+  skipHidden             leave out rows the spreadsheet does not show
 
 fields — budget: item, vendor, unit, qty, total, paid, note, lockBy, phase
          tasks:  name, owner, due, status
