@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -97,6 +98,7 @@ func (c *converter) table(idx int) error {
 		tr.Notes = append(tr.Notes, "no headerRow set — repeated header rows cannot be recognised in this table")
 	}
 	c.reportUnmapped(t, tr, sh, first, last)
+	c.reportEmptyMapped(t, tr, sh, first, last)
 
 	switch t.kind() {
 	case KindBudget:
@@ -639,7 +641,11 @@ func (c *converter) value(tr *TableReport, n int, field string, cn cellNumber, n
 		return 0, false
 	}
 	if cn.Assumed {
+		// Counted and located: on a sheet of three hundred rows, "40 figures"
+		// is a number nobody can check, and a separator guessed wrong is
+		// wrong by a factor of a thousand.
 		tr.AssumedGrouping++
+		tr.assume(n, fmt.Sprintf("%s %q read as %s", field, cn.Raw, formatNumber(cn.Value)))
 	}
 	return cn.Value, cn.Present
 }
@@ -695,5 +701,39 @@ func (c *converter) reportUnmapped(t *Table, tr *TableReport, sh *Sheet, first, 
 			}
 		}
 		tr.UnmappedColumns = append(tr.UnmappedColumns, label)
+	}
+}
+
+// reportEmptyMapped is the mirror of reportUnmapped: a column the mapping
+// names that holds nothing at all. A wrong letter is the likeliest typo in a
+// hand-written mapping, and it imports a budget of zeroes under a report that
+// never mentions the column.
+//
+// A column whose header is there and whose cells are not, a paid column
+// before anything has been paid, is not a typo, and saying so every time
+// would teach the operator to skip the line. Only a column with nothing in it
+// at all, header included, is named.
+func (c *converter) reportEmptyMapped(t *Table, tr *TableReport, sh *Sheet, first, last int) {
+	mapped := t.mappedColumns()
+	cols := make([]int, 0, len(mapped))
+	for col := range mapped {
+		cols = append(cols, col)
+	}
+	sort.Ints(cols)
+
+	for _, col := range cols {
+		if t.HeaderRow > 0 && !sh.Cell(t.HeaderRow, col).Empty() {
+			continue
+		}
+		used := false
+		for n := first; n <= last; n++ {
+			if !sh.Cell(n, col).Empty() {
+				used = true
+				break
+			}
+		}
+		if !used {
+			tr.EmptyColumns = append(tr.EmptyColumns, mapped[col]+"="+ColumnLabel(col))
+		}
 	}
 }

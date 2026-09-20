@@ -694,6 +694,87 @@ func TestOutputLoadsInTheApp(t *testing.T) {
 	}
 }
 
+// A thousands separator is a coin flip the report already counts. A count is
+// not enough to check one: on a sheet of three hundred rows the operator has
+// to find the guesses by eye, and a guess that is wrong is wrong by a factor
+// of a thousand.
+func TestReportLocatesTheGuessesItMade(t *testing.T) {
+	const csv = "Item,Total,Due\n" +
+		"Venue,1.005,\n" +
+		"Catering,8.325,\n" +
+		"Flowers,12,05/06/2027\n"
+	book, _, err := ReadCSV(strings.NewReader(csv), ',')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg := &Config{Tables: []Table{{
+		HeaderRow: 1,
+		FirstRow:  2,
+		Columns:   map[string]string{"item": "A", "total": "B", "lockBy": "C"},
+	}}}
+	_, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	out := report.String()
+	for _, want := range []string{
+		`row 2: total "1.005" read as 1005`,
+		`row 3: total "8.325" read as 8325`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report does not locate the guess %q:\n%s", want, out)
+		}
+	}
+}
+
+// A wrong column letter is the likeliest typo in a hand-written mapping, and
+// it imports a budget of zeroes under a report that never mentions the
+// column. The mirror of the unmapped-column line has to exist.
+func TestReportNamesAMappedColumnThatHoldsNothing(t *testing.T) {
+	const csv = "Item,Cost\n" +
+		"Venue,2500\n" +
+		"Catering,1800\n"
+	book, _, err := ReadCSV(strings.NewReader(csv), ',')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg := &Config{Tables: []Table{{
+		HeaderRow: 1,
+		FirstRow:  2,
+		Columns:   map[string]string{"item": "A", "total": "Z"},
+	}}}
+	_, report, err := Convert(book, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	out := report.String()
+	for _, want := range []string{"total=Z", "rows 2-3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report does not say that the mapped column Z is empty (%q):\n%s", want, out)
+		}
+	}
+	// A column that holds nothing because nothing has been paid yet is not a
+	// typo, and calling it one every time would train the operator to skip
+	// the line. Its header says the letter is right.
+	const paidCSV = "Item,Cost,Paid\n" +
+		"Venue,2500,\n" +
+		"Catering,1800,\n"
+	paid, _, err := ReadCSV(strings.NewReader(paidCSV), ',')
+	if err != nil {
+		t.Fatalf("ReadCSV: %v", err)
+	}
+	cfg.Tables[0].Columns = map[string]string{"item": "A", "total": "B", "paid": "C"}
+	_, report, err = Convert(paid, cfg)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if strings.Contains(report.String(), "paid=C") {
+		t.Errorf("column C is headed \"Paid\" and simply empty; that is not a wrong letter:\n%s", report.String())
+	}
+}
+
 func findItem(items []BudgetItem, name string) *BudgetItem {
 	for i := range items {
 		if items[i].Item == name {
