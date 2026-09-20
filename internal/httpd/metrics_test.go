@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/Yornik/soiree/internal/config"
 	"github.com/Yornik/soiree/internal/migrate"
@@ -179,5 +180,27 @@ func TestRouteClassIsAFixedSet(t *testing.T) {
 		if _, ok := known[routeClass(path)]; !ok {
 			t.Errorf("routeClass(%q) = %q, which is not in the fixed set", path, routeClass(path))
 		}
+	}
+}
+
+// The registry is private, so a feature that lives outside this package can
+// only declare a series of its own through MetricsRegistry, and a series that
+// does not reach the exposition is one nobody can alert on. The deadline
+// digest's run counters are registered exactly this way, from
+// internal/reminders.
+func TestASeriesRegisteredFromOutsideThePackageIsServed(t *testing.T) {
+	s, err := New(config.Config{Currency: "EUR", Locale: "en-US"}, web.FS())
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	s.MetricsRegistry().MustRegister(prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "soiree_a_feature_of_its_own",
+		Help: "Registered the way a collector outside this package registers one.",
+	}))
+
+	scrape := httptest.NewRecorder()
+	s.MetricsHandler().ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(scrape.Body.String(), "soiree_a_feature_of_its_own") {
+		t.Error("a series registered through MetricsRegistry is not in the exposition the listener serves")
 	}
 }
