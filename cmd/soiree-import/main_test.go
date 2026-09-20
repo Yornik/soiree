@@ -205,6 +205,26 @@ func TestRunRejectsMixedMappingSources(t *testing.T) {
 	}
 }
 
+// The report is built in memory before a byte of it is written, because half
+// a report is worse than none. The JSON deserves the same: -o truncated the
+// previous import before the encoder had agreed to produce anything.
+func TestWriteStateKeepsTheOldFileWhenTheNewOneCannotBeWritten(t *testing.T) {
+	out := writeFixture(t, "plan.json", `{"budgetItems":["the previous import"]}`)
+
+	state := sheetimport.NewState()
+	state.FxRate = math.NaN() // JSON has no way to write it
+	if err := writeState(state, out); err == nil {
+		t.Fatal("writeState wrote a plan JSON cannot encode")
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !strings.Contains(string(body), "previous import") {
+		t.Errorf("the previous import was destroyed by a write that never happened: %q", body)
+	}
+}
+
 func TestParseRows(t *testing.T) {
 	cases := []struct {
 		in          string

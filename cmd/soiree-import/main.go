@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -204,9 +205,18 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 	return cfg, nil
 }
 
+// writeState encodes the plan before it opens anything, for the reason the
+// report gives for building its text in memory first: a file the encoder
+// never agreed to fill is worse than no file, and -o names the previous
+// import.
 func writeState(state *sheetimport.State, out string) (err error) {
+	var buf bytes.Buffer
+	if err := state.WriteJSON(&buf); err != nil {
+		return err
+	}
 	if out == "-" {
-		return state.WriteJSON(os.Stdout)
+		_, err := os.Stdout.Write(buf.Bytes())
+		return err
 	}
 	f, err := os.Create(out)
 	if err != nil {
@@ -215,7 +225,8 @@ func writeState(state *sheetimport.State, out string) (err error) {
 	defer func() {
 		err = errors.Join(err, f.Close())
 	}()
-	return state.WriteJSON(f)
+	_, err = f.Write(buf.Bytes())
+	return err
 }
 
 // columnFlag collects repeated -map flags.

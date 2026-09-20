@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -225,7 +226,12 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 func readCellValue(t xml.StartElement, cell *Cell, dateValue *string) {
 	switch localAttr(t, "value-type") {
 	case "float", "currency", "percentage":
-		if v, err := strconv.ParseFloat(localAttr(t, "value"), 64); err == nil {
+		// ParseFloat also reads NaN and Inf, which JSON cannot write: the run
+		// would print a clean report and then fail on the way out, with the
+		// file it was overwriting already truncated. The displayed text is a
+		// better answer than a number no output can carry.
+		if v, err := strconv.ParseFloat(localAttr(t, "value"), 64); err == nil &&
+			!math.IsNaN(v) && !math.IsInf(v, 0) {
 			cell.Value, cell.HasValue = v, true
 		}
 	case "date":

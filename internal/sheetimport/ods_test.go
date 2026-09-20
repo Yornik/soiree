@@ -290,6 +290,26 @@ func TestConvertSkipsHiddenRowsOnRequest(t *testing.T) {
 	}
 }
 
+// office:value goes to the output untouched, and NaN or Inf is a value JSON
+// cannot encode: the run reported an import and then failed writing it, after
+// the previous plan.json had already been truncated.
+func TestReadODSIgnoresAValueJSONCannotWrite(t *testing.T) {
+	cell := `<table:table-cell office:value-type="float" office:value="NaN"><text:p>1.234</text:p></table:table-cell>`
+	path := writeODS(t, tSheet("Costs", tRow(cStr("Venue"), cell)))
+
+	book, err := ReadODS(path)
+	if err != nil {
+		t.Fatalf("ReadODS: %v", err)
+	}
+	c := book.Sheets[0].Cell(1, 2)
+	if c.HasValue {
+		t.Errorf("B1 = %+v; want the value left to the text parser, not carried into the plan", c)
+	}
+	if c.Text != "1.234" {
+		t.Errorf("B1 text = %q; want the displayed figure kept", c.Text)
+	}
+}
+
 // A repeat run is how a sheet says "and the same again". A file of a few
 // hundred bytes can say it four thousand columns wide and two hundred
 // thousand rows deep, which is tens of gigabytes of cells: the caps at the
