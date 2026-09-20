@@ -484,6 +484,9 @@ func TestAccountsConfigRejectsHalfConfigurations(t *testing.T) {
 		"a sender with no relay": {
 			"SOIREE_SMTP_FROM": "soiree@example.test",
 		},
+		"a relay password with no relay": {
+			"SOIREE_SMTP_PASSWORD": "not-a-real-key",
+		},
 		"a user with no password": {
 			"SOIREE_SMTP_HOST": "smtp.example.test",
 			"SOIREE_SMTP_FROM": "soiree@example.test",
@@ -526,6 +529,21 @@ func TestAccountsConfigRejectsHalfConfigurations(t *testing.T) {
 				t.Errorf("Load() accepted %s", name)
 			}
 		})
+	}
+}
+
+// The table above only asks that Load fails. A relay password is the last of
+// the three that has no relay of its own to belong to, so this one also checks
+// which variable the refusal names: without that, a reordering that made
+// something else fatal would keep this passing for the wrong reason.
+func TestSMTPPasswordNeedsARelay(t *testing.T) {
+	t.Setenv("SOIREE_SMTP_PASSWORD", "not-a-real-key")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() accepted a relay password with no SOIREE_SMTP_HOST")
+	}
+	if !strings.Contains(err.Error(), "SOIREE_SMTP_PASSWORD") {
+		t.Errorf("Load() failed for some other reason: %v", err)
 	}
 }
 

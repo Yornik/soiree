@@ -296,7 +296,7 @@ than being absent.
 | Condition | Why it is fatal |
 |---|---|
 | `SOIREE_METRICS_ADDR` equals `SOIREE_LISTEN_ADDR` | `/metrics` would be served on the public port after all. Exact string comparison only, so `:8080` and `0.0.0.0:8080` are not caught — the case worth catching is the operator who set one and forgot the other. |
-| `SOIREE_SMTP_FROM` or `SOIREE_SMTP_USER` set without `SOIREE_SMTP_HOST` | Half a relay looks configured and silently sends nothing. |
+| `SOIREE_SMTP_FROM`, `SOIREE_SMTP_USER` or `SOIREE_SMTP_PASSWORD` set without `SOIREE_SMTP_HOST` | Half a relay looks configured and silently sends nothing. |
 | `SOIREE_SMTP_HOST` set without `SOIREE_SMTP_FROM`, or user without password | The failure would otherwise be an authentication error against the relay at the worst possible moment. |
 | `SOIREE_SMTP_HOST` set without `SOIREE_BASE_URL` | A mail whose link is relative is a mail that cannot be clicked. |
 | `SOIREE_BOOTSTRAP_PASSWORD` without `SOIREE_BOOTSTRAP_ADMIN`, or shorter than 12 characters | There is no account for it to belong to, or the app would refuse the same password from a form. |
