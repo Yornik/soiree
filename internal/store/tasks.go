@@ -45,7 +45,7 @@ func (s *Store) CreateTask(ctx context.Context, in Task, actor *uuid.UUID) (Task
 			`INSERT INTO tasks (id, name, owner, due, status, position, updated_by)
 			 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, COALESCE($5::text, 'not-started'), $6, $7)
 			 RETURNING `+taskColumns,
-			newID(in.ID), in.Name, in.Owner, in.Due, nullString(string(in.Status)), in.Position, actor)
+			newID(in.ID), in.Name, in.Owner, in.Due, nullString(string(in.Status)), in.Position, who.ID)
 	})
 }
 
@@ -73,7 +73,7 @@ func (s *Store) UpdateTask(ctx context.Context, in Task, actor *uuid.UUID) (Task
 				        revision = revision + 1, updated_at = now(), updated_by = $6
 				  WHERE id = $7 AND revision = $8
 				RETURNING `+taskColumns,
-				in.Name, in.Owner, in.Due, in.Status, in.Position, actor, in.ID, in.Revision)
+				in.Name, in.Owner, in.Due, in.Status, in.Position, who.ID, in.ID, in.Revision)
 		})
 	if err == nil {
 		return out, nil

@@ -296,6 +296,66 @@ func TestActorIsRecorded(t *testing.T) {
 	}
 }
 
+// TestTheRowAndTheLogNameTheSameActor holds `updated_by` to the actor the entry
+// was given. The two were resolved once and then written from different
+// places: the log from the context, the column from the explicit argument. The
+// API names its actor in the context only, so the log said who and the row said
+// nobody, and an edit put NULL over an attribution the row already had.
+func TestTheRowAndTheLogNameTheSameActor(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	ada, err := s.CreateUser(ctx, store.User{Email: "ada@example.test", Role: store.RoleEditor})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	grace, err := s.CreateUser(ctx, store.User{Email: "grace@example.test", Role: store.RoleEditor})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	asAda := store.WithActor(ctx, store.Actor{ID: &ada.ID})
+	asGrace := store.WithActor(ctx, store.Actor{ID: &grace.ID})
+
+	agree := func(step string, by *uuid.UUID, id uuid.UUID, want uuid.UUID) {
+		t.Helper()
+		if by == nil || *by != want {
+			t.Errorf("%s: updated_by = %v, want %s", step, by, want)
+		}
+		if got := history(t, s, store.EntityTasks, id)[0]; got.ActorID == nil || *got.ActorID != want {
+			t.Errorf("%s: the entry names %v, want %s", step, got.ActorID, want)
+		}
+	}
+
+	// The shape of every API write: the session in the context, no argument.
+	task, err := s.CreateTask(asAda, store.Task{Name: "Book the band"}, nil)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	agree("create", task.UpdatedBy, task.ID, ada.ID)
+
+	task.Name = "Book the quartet"
+	if task, err = s.UpdateTask(asGrace, task, nil); err != nil {
+		t.Fatalf("update task: %v", err)
+	}
+	agree("update", task.UpdatedBy, task.ID, grace.ID)
+
+	// Where both are given the session wins, in the column as in the log: the
+	// argument is only ever the caller's own claim.
+	task.Name = "Book the trio"
+	if task, err = s.UpdateTask(asAda, task, &grace.ID); err != nil {
+		t.Fatalf("update task: %v", err)
+	}
+	agree("update with both", task.UpdatedBy, task.ID, ada.ID)
+
+	reread, err := s.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("task: %v", err)
+	}
+	if reread.UpdatedBy == nil || *reread.UpdatedBy != ada.ID {
+		t.Errorf("a read finds updated_by = %v, want %s", reread.UpdatedBy, ada.ID)
+	}
+}
+
 // TestConcurrentUpdatesEachRecordOnce: four people editing the same line at
 // once must produce four entries, not three and not five. Lose one and the
 // history no longer adds up to the figure now on the row.

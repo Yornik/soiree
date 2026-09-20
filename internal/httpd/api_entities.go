@@ -13,9 +13,10 @@ import (
 // themselves are the generic handlers in api.go, which is what keeps six
 // collections from becoming eighteen near-identical handlers that drift.
 //
-// actor is nil throughout. There is no session until the accounts milestone, and
-// inventing a user id to fill the column would put a lie in the audit fields
-// rather than an absence.
+// The actor argument is nil throughout, which is not the same as nobody: the
+// session's account travels in the context, where withActor puts it, and the
+// store reads it from there for `updated_by` and the change log alike. Naming
+// it a second time here could only ever disagree with the session.
 //
 // Every constructor takes the deployment's currency, including the four whose
 // tables hold no money. Decoding money needs it — major units on the wire,
