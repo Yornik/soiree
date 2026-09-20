@@ -31,6 +31,21 @@
  *  - Repeating it needs one worker (`--repeat-each=3 --workers=1`). Without
  *    that, Playwright runs the copies of this group concurrently, which is the
  *    same collision by another route.
+ *
+ * And one thing follows from the page listening. With the event stream open a
+ * browser reads the plan again by itself: 400 ms after it hears of a change,
+ * and every 400 ms after that until it is idle. A spec that stages a conflict
+ * is racing that read, and both results are correct. Either this browser's
+ * write goes first and meets a 409, which it merges and mentions, or the read
+ * goes first and there is no conflict left to meet. A spec that means one of
+ * them has to arrange it, because asserting the 409 and leaving the order to
+ * luck failed one run in five on a slow machine:
+ *
+ *  - for the 409, take the stream away before the page loads (delete
+ *    window.EventSource in an init script), so nothing can arm the read;
+ *  - for the silent merge, wait until their edit is on this screen.
+ *
+ * The two merge specs below are the pattern.
  */
 const fs = require('fs/promises');
 const { test, expect, chromium } = require('@playwright/test');
@@ -248,6 +263,13 @@ test('rows come back in the order they were typed', async ({ page, request }) =>
 });
 
 test("someone else's edit to the same line is merged, not overwritten", async ({ page, request }) => {
+  // No event stream, so the 409 is the only way this page can learn of their
+  // edit. With it on, the re-read described at the top of this file lands
+  // between their write and the keystroke below about one run in five, the
+  // conflict is settled before it is met, and nothing is said. app.js treats
+  // a browser without EventSource as one with no live sync and arms no timer.
+  await page.addInitScript(() => { delete window.EventSource; });
+
   await openSharedPlanner(page);
   await gotoTab(page, 'budget');
   const row = await addBudgetLine(page, {
@@ -292,6 +314,71 @@ test("someone else's edit to the same line is merged, not overwritten", async ({
   // Rebuilding it while somebody is mid-word would take their cursor with it,
   // so the rebuild waits rather than interrupting.
   await page.locator('#ceilingInput').click();
+  await expect(budgetRow(page, 0).note).toHaveValue('Deposit already wired');
+  await expect(budgetRow(page, 0).unit).toHaveValue('2500');
+});
+
+/*
+ * The other order, which is every bit as correct and looks nothing like it.
+ * With the stream on, this browser normally hears of their edit before anybody
+ * here has typed: it reads the plan again and takes their note, and the write
+ * that follows goes up at the revision that now stands. No 409, no merge, and
+ * no message, because nobody's work was ever in question.
+ *
+ * What puts the two edits in that order is the screen. A GET /plan seen from
+ * out here has only arrived; the page may yet throw it away, which it does if
+ * a keystroke lands first, and then this is the 409 path after all. Their note
+ * in the row says the read has been merged, and nothing short of it does.
+ */
+test("someone else's edit that arrives before ours is taken in without a word", async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  const row = await addBudgetLine(page, {
+    item: 'Venue deposit',
+    unit: 2000,
+    qty: 1,
+    note: 'Balance due one month before',
+  });
+
+  let stored;
+  await expect
+    .poll(async () => {
+      const plan = await apiPlan(request);
+      stored = plan.budgetItems[0];
+      return !!stored && stored.note === 'Balance due one month before';
+    })
+    .toBe(true);
+
+  // Out of the table, or the rebuild that shows their note waits for the
+  // caret to leave and there is nothing on the screen to wait for.
+  await page.locator('#ceilingInput').click();
+
+  const theirs = await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
+    data: { revision: stored.revision, note: 'Deposit already wired' },
+  });
+  expect(theirs.status()).toBe(200);
+  await expect(budgetRow(page, 0).note).toHaveValue('Deposit already wired', { timeout: 15_000 });
+
+  // Registered before the keystroke, so it is this edit's write and not one
+  // that happened to be passing.
+  const written = page.waitForResponse(
+    (r) => r.request().method() === 'PATCH' && r.url().includes(`/api/v1/budget-items/${stored.id}`),
+  );
+  await row.unit.fill('2500');
+  expect((await written).status(), 'the write should go up at their revision and meet no conflict').toBe(200);
+
+  await expect
+    .poll(async () => {
+      const item = (await apiPlan(request)).budgetItems[0];
+      return [item.unit, item.note];
+    })
+    .toEqual(['2500.00', 'Deposit already wired']);
+
+  // Both moments a message could have come from are behind us: the merge is
+  // on the screen and the write has its answer. Asserting the silence any
+  // earlier would be asserting nothing.
+  await expect(page.locator('#dataMsg')).not.toHaveText(/Both sets of changes have been kept/);
   await expect(budgetRow(page, 0).note).toHaveValue('Deposit already wired');
   await expect(budgetRow(page, 0).unit).toHaveValue('2500');
 });

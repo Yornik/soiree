@@ -27,9 +27,14 @@ package s3test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/Yornik/soiree/internal/objstore"
 )
 
 // Image is MinIO, pinned by digest, from quay.io — the project no longer
@@ -45,6 +50,16 @@ const (
 	ContainerSecretKey = "soiree-test-secret"
 	ContainerBucket    = "soiree-test"
 	ContainerRegion    = "us-east-1"
+)
+
+// How long Get waits for a started container to serve its bucket, and how
+// often it asks. The wait is normally over on the first or second try; the
+// minute is for a runner busy enough to have needed the wait at all. The key
+// is under attachments/ like everything else here, and is only ever read.
+const (
+	readyPatience = time.Minute
+	readyInterval = 200 * time.Millisecond
+	probeKey      = "attachments/s3test-ready-probe"
 )
 
 // Entrypoint starts MinIO with the bucket already there. A directory under the
@@ -74,6 +89,10 @@ var (
 // Get returns the bucket for this test binary, starting the container on first
 // use. It skips the test under -short, exactly as pgtest.Pool does.
 //
+// A container it started is handed out only once it serves; see awaitServing.
+// A bucket named by the environment is taken as it is: somebody else runs it,
+// and the first test says soon enough if it is not there.
+//
 // Lazy rather than in TestMain, because most tests in a package that has
 // attachment tests are not attachment tests, and should not wait for an image
 // pull they will never use.
@@ -87,24 +106,78 @@ func Get(t *testing.T, start Starter) Bucket {
 			bucket = b
 			return
 		}
-		endpoint, s, err := start(context.Background())
-		if err != nil {
-			failure = err
-			return
-		}
-		stop = s
-		bucket = Bucket{
-			Endpoint:        endpoint,
-			Region:          ContainerRegion,
-			Name:            ContainerBucket,
-			AccessKeyID:     ContainerAccessKey,
-			SecretAccessKey: ContainerSecretKey,
-		}
+		bucket, stop, failure = open(context.Background(), start, readyPatience)
 	})
 	if failure != nil {
 		t.Fatalf("s3test: start: %v", failure)
 	}
 	return bucket
+}
+
+// open starts the container and returns its bucket once that bucket serves.
+func open(ctx context.Context, start Starter, patience time.Duration) (Bucket, func(), error) {
+	endpoint, s, err := start(ctx)
+	if err != nil {
+		return Bucket{}, func() {}, err
+	}
+	b := Bucket{
+		Endpoint:        endpoint,
+		Region:          ContainerRegion,
+		Name:            ContainerBucket,
+		AccessKeyID:     ContainerAccessKey,
+		SecretAccessKey: ContainerSecretKey,
+	}
+	if err := awaitServing(ctx, b, patience); err != nil {
+		// Get never hands this bucket out, so nothing would call Stop for it.
+		s()
+		return Bucket{}, func() {}, err
+	}
+	return b, s, nil
+}
+
+// awaitServing returns once the bucket answers a signed request as S3 would.
+//
+// The starters wait for /minio/health/ready, and that alone is not enough.
+// MinIO answers it 200 as soon as the process is listening, while the object
+// layer is still initialising behind it; all that says so is an
+// `X-Minio-Server-Status: offline` header, which a wait on the status never
+// reads. Until the object layer is up every S3 call is a 503, and on a machine
+// that is starting every other package's containers at the same moment the
+// first tests of a package land in that gap and fail with nothing wrong in
+// the code.
+//
+// So the probe is the call the tests are about to make. A signed HEAD for an
+// object that is not there comes back as ErrNotFound only after the signature
+// has been verified and the object layer has been asked. An anonymous request
+// is turned away before either, and a health endpoint is MinIO's to redefine.
+func awaitServing(ctx context.Context, b Bucket, patience time.Duration) error {
+	s, err := objstore.New(objstore.Config{
+		Endpoint: b.Endpoint, Region: b.Region, Bucket: b.Name,
+		AccessKeyID: b.AccessKeyID, SecretAccessKey: b.SecretAccessKey,
+	})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, patience)
+	defer cancel()
+
+	var last error
+	for {
+		_, err := s.Head(ctx, probeKey)
+		if err == nil || errors.Is(err, objstore.ErrNotFound) {
+			return nil
+		}
+		// Once the patience has run out the error is only "deadline exceeded".
+		// The answer before it is the one that says what was wrong.
+		if last == nil || ctx.Err() == nil {
+			last = err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("the bucket was still not serving after %s: %w", patience, last)
+		case <-time.After(readyInterval):
+		}
+	}
 }
 
 // Stop takes the container down, if this binary started one. For a TestMain
