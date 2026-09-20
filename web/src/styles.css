@@ -1093,8 +1093,11 @@ body.is-archived .settlement { display: block; }
 body.is-archived .first-run { display: none; }
 body.is-archived .when-data { display: block; }
 
-/* --- Narrow -------------------------------------------------------------- */
-@media (max-width: 720px) {
+/* --- Narrow ---
+   A screen this size is a phone, and only a screen: the page area of a sheet
+   of A4 is narrower than this breakpoint and is not one, so paper is left to
+   the print rules at the foot of this file. */
+@media screen and (max-width: 720px) {
   .wrap { padding: 26px 16px 64px; }
   /* Two by two, not one stack: these figures exist to be compared. */
   .reckoning { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -1211,7 +1214,7 @@ body.is-archived .when-data { display: block; }
 /* Touch, and anything narrow enough to be held: a 24px delete button is not
    usable with a thumb, and a narrow viewport is a phone whatever the pointer
    emulation claims. */
-@media (pointer: coarse), (max-width: 720px) {
+@media screen and (pointer: coarse), screen and (max-width: 720px) {
   /* 16px is not a taste in type size: iOS Safari zooms the whole page the
      moment a focused field is smaller than that, and does not zoom back out.
      At 14px every tap into a field on a phone shifted the layout and left the
@@ -1532,7 +1535,7 @@ body.role-viewer #plannerWrap select { color: var(--ink-2); }
 body.role-viewer #plannerWrap .by-btn { color: var(--ink-2); cursor: default; }
 body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize: none; }
 
-@media (max-width: 720px) {
+@media screen and (max-width: 720px) {
   .auth-wrap { padding: 26px 16px 64px; }
   /* Same unwinding the budget grid does: the columns go, and each account
      becomes one entry read top to bottom. */
@@ -1548,7 +1551,7 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   .auth-form-row .auth-field { margin-bottom: 18px; max-width: none; }
 }
 
-@media (pointer: coarse), (max-width: 720px) {
+@media screen and (pointer: coarse), screen and (max-width: 720px) {
   .solid-btn { padding: 13px 18px; }
   /* A line of text is not a target. These get one without becoming buttons to
      look at. */
@@ -1557,4 +1560,173 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   /* These three are styled after the touch block above, so the 16px that
      keeps iOS from zooming on focus has to be said again here. */
   .auth-link-out input, .person-role, .person-language { font-size: 16px; }
+}
+
+/* --- Paper ---
+   A plan is a record, and what people do with a record is print it: hand a
+   copy to the venue, keep one with the receipts, post one to the relative who
+   is covering three of the lines. Until this block the page printed whatever
+   was on the screen - the tab in front of you, in the colour scheme the
+   device happened to be in, with the flags, the tabs and the export row on
+   the sheet. A dark page printed worst of all: browsers drop backgrounds and
+   keep ink, so it came out pale grey on white.
+
+   Paper therefore gets its own reading of the same page. The light palette
+   whatever the device is set to, all three sections rather than the one in
+   view, a sheet each, and nothing on them that can only be pressed. The
+   figures are what is being carried away, so the figures are what is left.
+
+   The narrow rules above are addressed to screen for this block's sake: the
+   page area of A4 portrait is about 715px, which is under their 720px
+   breakpoint, and the one-entry-per-line grid they draw is right for a phone
+   and wrong for paper, where it turns fourteen lines into four sheets. */
+@media print {
+  /* Small enough that the grid has room for its columns, wide enough to clear
+     the edge every printer refuses to reach. */
+  @page { margin: 12mm; }
+
+  /* Paper is the light theme's, so the tokens are the light ones, with the
+     page tint dropped because the sheet is already supplying it.
+
+     The selector is doubled to carry weight, not for effect: both places the
+     dark palette is declared - :root:not([data-theme="light"]) for the device
+     setting and :root[data-theme="dark"] for a theme picked by hand - are a
+     step more specific than a plain :root, and a printer that asked for dark
+     because the laptop is in dark is exactly the case this block exists for.
+     Equal weight and later in the file is enough to win. */
+  :root:root {
+    color-scheme: light;
+    --paper: #FFFFFF;
+    --tint: #E7E3EF;
+    --raise: #FFFFFF;
+    --ink: #231B3A;
+    --ink-2: #5B5474;
+    --committed: #4B3F9E;
+    --paid: #186B5F;
+    --owed: #8A5200;
+    --alarm: #A92C48;
+    --lamp: #B8720C;
+    /* A hairline that survives anti-aliasing on a screen disappears into the
+       dither of a laser printer, so the rules that separate rows are graded
+       up one step for paper. */
+    --rule: rgba(35,27,58,0.26);
+    --rule-mid: rgba(35,27,58,0.40);
+    --rule-ink: rgba(35,27,58,0.70);
+  }
+
+  /* The sheet is the page's margin now. */
+  .wrap { max-width: none; padding: 0; }
+
+  /* Nothing that can only be pressed. The theme control and the export row go
+     together because the control is built inside that row. */
+  .lang-switch,
+  .account-bar,
+  .tabs,
+  .filter-pills,
+  .data-tools,
+  .size-tools,
+  .add-row-btn,
+  .del-btn,
+  .files-btn,
+  .col-grip,
+  .row-grip,
+  .archive-note .ghost-btn { display: none; }
+
+  /* Every section, not the one in front. Each starts its own sheet, which is
+     also how they are read: the reckoning, then the ledger, then the jobs. */
+  .tab-panel { display: block; }
+  .tab-panel + .tab-panel { break-before: page; }
+
+  /* The drawings go and their figures stay. Every one of these is a bar whose
+     number is printed beside it, and a bar is a background: the browser drops
+     it and leaves an empty box on the sheet. The run-up is worse than empty -
+     its marks are placed absolutely and its months collide with the date. */
+  .moneybar,
+  .gauge-track,
+  .split-list .share,
+  .runup-scale,
+  .runup-months { display: none; }
+  .runup { grid-template-areas: "count ends"; align-items: center; }
+
+  /* A field on paper is a reading, not somewhere to type: no frame, no fill,
+     and none of the height a thumb needs. */
+  input, select, textarea, .by-btn,
+  .field input,
+  .flag textarea {
+    /* The width every field is given so it can be aimed at only pushes it out
+       past the column it belongs to here. */
+    min-width: 0;
+    border-color: transparent;
+    background: transparent;
+  }
+  /* What is wanted is the value. The arrow, the resize corner and the date
+     picker's button are all ways of changing it, which paper is not. */
+  select { appearance: none; }
+  textarea, .flag textarea { resize: none; }
+  input[type="date"]::-webkit-calendar-picker-indicator { display: none; }
+
+  /* The grid, fitted to the sheet. The column widths and the table width are
+     inline styles the resize handles wrote for one screen, and a sheet is not
+     that screen: they are dropped for paper and the columns take a share of
+     whatever the page is instead. The shares are the desk proportions with
+     the money columns cut to what a figure needs, and the last column is the
+     one that removed a line, which is not on the sheet at all. */
+  .table-wrap { overflow: visible; }
+  table.budget { width: 100% !important; }
+  #budgetCols col:nth-child(1) { width: 21% !important; }
+  #budgetCols col:nth-child(2) { width: 8% !important; }
+  #budgetCols col:nth-child(3) { width: 6% !important; }
+  #budgetCols col:nth-child(4) { width: 13% !important; }
+  #budgetCols col:nth-child(5) { width: 9% !important; }
+  #budgetCols col:nth-child(6) { width: 14% !important; }
+  #budgetCols col:nth-child(7) { width: 9% !important; }
+  #budgetCols col:nth-child(8) { width: 20% !important; }
+  #budgetCols col:nth-child(9) { width: 0 !important; }
+  table.budget tbody tr { height: auto !important; }
+  /* Type and gutters both come in a step: nine columns on a sheet have less
+     room than nine on a desk, and a ledger is read at arm's length. */
+  table { font-size: 12px; }
+  table input, table textarea, table select, table .by-btn { font-size: 12px; }
+  table.budget td.note-cell textarea { font-size: 11px; }
+  table th, table td { padding-left: 8px; padding-right: 8px; }
+  table.budget td input, table.budget td textarea { padding-left: 0; padding-right: 0; }
+  /* On screen a column heading is one line and the grid scrolls; on paper it
+     has the width it has, and a heading cut in half names nothing. */
+  thead th { white-space: normal; }
+  /* A task's name and its owner are single-line fields, which cut rather than
+     wrap, so the two of them take the room the removed column gives up. */
+  table.tasks th:nth-child(1) { width: 50%; }
+  table.tasks th:nth-child(2) { width: 14%; }
+  table.tasks th:nth-child(3) { width: 16%; }
+  table.tasks th:nth-child(4) { width: 20%; }
+  td.del-cell { width: 0; padding: 0; }
+  .status-select { min-width: 0; }
+  table.budget thead th, table.budget td { overflow: visible; }
+  /* Freezing the first column is a scrolling device, and there is no
+     scrolling on paper. */
+  table.budget thead th:first-child,
+  table.budget tbody td.item-cell,
+  table.budget tfoot th { position: static; box-shadow: none; }
+  /* Narrower columns wrap a name onto more lines than the height app.js
+     measured on screen, and a field in a tab that was never shown has no
+     measured height at all. Where the browser can size a field to its text we
+     let it; where it cannot, the fitted height is still the best guess going
+     and is left alone. */
+  @supports (field-sizing: content) {
+    table.budget textarea, .flag textarea {
+      field-sizing: content;
+      height: auto !important;
+    }
+  }
+
+  /* Breaks. A line of the ledger, a figure or a note split across two sheets
+     is a figure read twice; a heading at the foot of a sheet belongs to the
+     section overleaf. */
+  tbody tr,
+  .fig,
+  .gauge,
+  .flag,
+  .split-list li,
+  .upnext-list li { break-inside: avoid; }
+  h1, h2 { break-after: avoid; }
 }
