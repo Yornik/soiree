@@ -34,6 +34,25 @@ func TestParseNumber(t *testing.T) {
 		{in: "Rp.5000", want: 5000},
 		{in: "Rp. 5.000,-", want: 5000, assumed: true},
 		{in: "5.000,--", want: 5000, assumed: true},
+		// A symbol is not an abbreviation and has no full stop of its own: the
+		// one after it is a decimal point. Dropped along with the symbol, fifty
+		// cents a stamp came in as fifty a stamp.
+		{in: "$.50", want: 0.5},
+		{in: "€.25", want: 0.25},
+		{in: "$.5", want: 0.5},
+		{in: "R$.50", want: 0.5},
+		{in: "$ .50", want: 0.5},
+		{in: "$.50", mode: DecimalDot, want: 0.5},
+		{in: "$.50", mode: DecimalComma, err: errors.New("x")},
+		// After letters, one or two digits could be either: fifty, or fifty
+		// cents. Both are wrong half the time, so neither is picked.
+		{in: "USD.50", err: errors.New("x")},
+		{in: "Rp.50", err: errors.New("x")},
+		{in: "kr.5", err: errors.New("x")},
+		// Three digits are five hundred on either reading, and ",-" says the
+		// figure in front of it is whole.
+		{in: "Rp.500", want: 500},
+		{in: "Rp.50,-", want: 50},
 
 		// Negatives. The typographic minus is what a spreadsheet displays and
 		// what a PDF pastes; dropped, a discount becomes a cost.

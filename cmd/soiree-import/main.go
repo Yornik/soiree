@@ -62,7 +62,7 @@ func run(args []string) error {
 	fs.IntVar(&o.header, "header", 0, "single-table mode: 1-based header row")
 	fs.StringVar(&o.kind, "kind", "budget", "single-table mode: budget, tasks or notes")
 	fs.Var(&o.columns, "map", "single-table mode: field=column, repeatable or comma-separated (e.g. item=B,total=E)")
-	fs.StringVar(&o.decimal, "decimal", "auto", "decimal separator: auto, dot or comma")
+	fs.StringVar(&o.decimal, "decimal", "auto", "decimal separator: auto, dot or comma; with dot or comma a figure written the other way round is refused, not reread")
 	fs.StringVar(&o.currency, "currency", "", "the planner's SOIREE_CURRENCY; decides the decimals a stated total is checked at (default: 2 decimals)")
 	fs.StringVar(&o.totalKeywords, "total-keywords", "", "comma-separated words marking a summary row (default: total, subtotal, grand total, sum)")
 	fs.BoolVar(&o.skipCostless, "skip-costless", false, "drop rows with no figure instead of importing them at zero")

@@ -136,7 +136,20 @@ func ParseNumber(raw string, mode DecimalMode) (Number, error) {
 	// go either: stripping them would read "5k" as 5, off by three orders of
 	// magnitude and completely invisible in the output.
 	if bare := strings.TrimLeftFunc(core, isCurrencyMark); bare != core {
-		core = strings.TrimPrefix(bare, ".")
+		// Only letters abbreviate. After a symbol the full stop is a decimal
+		// point, and dropping it made "$.50" fifty.
+		last, _ := utf8.DecodeLastRuneInString(core[:len(core)-len(bare)])
+		if rest, stop := strings.CutPrefix(bare, "."); stop && unicode.IsLetter(last) {
+			// One or two digits and nothing else read as decimals just as well:
+			// "USD.50" is fifty, or fifty cents. Three digits or more are not
+			// the decimals of any amount of money, and "Rp.5000" is the case
+			// this exists for.
+			if len(rest) < 3 && strings.TrimFunc(rest, unicode.IsDigit) == "" {
+				return Number{}, fmt.Errorf("%q could be %s or 0.%s", raw, rest, rest)
+			}
+			bare = rest
+		}
+		core = bare
 	}
 	// ",-" and ".-" mean "and no cents". A minus at the end of anything else
 	// is a sign written the way a ledger does, and a percent sign is not an
