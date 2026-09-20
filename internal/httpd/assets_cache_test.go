@@ -107,23 +107,72 @@ func brotliDefaultWindow(t *testing.T, b []byte) []byte {
 
 // The point of it. Building the first server pays for the compression; every
 // one after it must not, or this package is back to ten minutes under -race.
+//
+// Asserted on the bytes rather than on how long the second build took. The
+// cache hands back the very slice it stored, so a variant that starts at the
+// same address as the first server's came out of the cache, while a fresh
+// compression writes a buffer of its own. This used to be a bound on the
+// second build's wall clock, which measures the machine rather than the cache:
+// a loaded one can cross it with nothing compressed at all, and the failure
+// then blames a compression that did not happen.
 func TestASecondServerDoesNotCompressAgain(t *testing.T) {
 	cfg := config.Config{EventName: "Ada's Leaving Do", Currency: "EUR", Locale: "en-US"}
-	build := func() time.Duration {
+	build := func() (*Server, time.Duration) {
 		start := time.Now()
-		if _, err := New(cfg, web.FS()); err != nil {
+		s, err := New(cfg, web.FS())
+		if err != nil {
 			t.Fatal(err)
 		}
-		return time.Since(start)
+		return s, time.Since(start)
 	}
-	first := build() // may already be warm if another test ran first; then both are fast
-	second := build()
-	t.Logf("first %v, second %v", first, second)
+	first, firstTook := build()
+	second, secondTook := build()
+	t.Logf("first %v, second %v", firstTook, secondTook)
 
-	// Generous: the rest of New() is parsing a template and hashing a few
-	// files. Compressing again costs hundreds of milliseconds, seconds under
-	// the race detector.
-	if second > 250*time.Millisecond {
-		t.Errorf("a second server took %v to build; it is compressing its assets again", second)
+	// Counted, because a variant the encoder made no smaller is dropped and
+	// one for an image or the font was never built at all: neither says
+	// anything about the cache, and a check left comparing nothing would pass
+	// in silence.
+	var checked int
+	same := func(name, encoding string, a, b []byte) {
+		t.Helper()
+		if len(a) == 0 {
+			return
+		}
+		checked++
+		if len(b) == 0 {
+			t.Errorf("%s: the first server has %s bytes for it and the second none", name, encoding)
+			return
+		}
+		if &a[0] != &b[0] {
+			t.Errorf("%s: the second server's %s bytes are a buffer of their own; it compressed the asset again", name, encoding)
+		}
+	}
+	for name, as := range first.assets.byName {
+		again, ok := second.assets.byName[name]
+		if !ok {
+			t.Errorf("%s: the second server did not build it at all", name)
+			continue
+		}
+		same(name, "gzip", as.Gzip, again.Gzip)
+		same(name, "brotli", as.Brotli, again.Brotli)
+	}
+	// The files New() renders from the configuration are compressed there
+	// rather than in BuildAssets, so they are the part of the startup cost the
+	// map above cannot see.
+	for name, pair := range map[string][2]*Asset{
+		"the shell":          {first.index, second.index},
+		"the service worker": {first.sw, second.sw},
+		"robots.txt":         {first.robots, second.robots},
+	} {
+		same(name, "gzip", pair[0].Gzip, pair[1].Gzip)
+		same(name, "brotli", pair[0].Brotli, pair[1].Brotli)
+	}
+	// Fourteen variants as the assets stand, both encodings of the scripts,
+	// the stylesheet and the shell among them. Those are the files the seconds
+	// were spent on, so a count that falls much below it means the check has
+	// stopped looking at them.
+	if checked < 12 {
+		t.Errorf("only %d compressed variants compared; this test is no longer looking at the shell", checked)
 	}
 }
