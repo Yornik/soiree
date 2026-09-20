@@ -110,33 +110,59 @@ async function plannerWithWorker(path) {
   await expect.poll(() => registrations.some((r) => r.scopeURL === `${BASE_URL}/`)).toBe(true);
   const { registrationId } = registrations.find((r) => r.scopeURL === `${BASE_URL}/`);
 
+  const shown = () => page.evaluate(async () => {
+    const reg = await navigator.serviceWorker.ready;
+    return (await reg.getNotifications()).map((n) => ({ title: n.title, body: n.body, tag: n.tag, url: n.data && n.data.url }));
+  });
+
   return {
     full,
     context,
     page,
-    push: (data) => cdp.send('ServiceWorker.deliverPushMessage', { origin: BASE_URL, registrationId, data }),
-    shown: () => page.evaluate(async () => {
-      const reg = await navigator.serviceWorker.ready;
-      return (await reg.getNotifications()).map((n) => ({ title: n.title, body: n.body, tag: n.tag, url: n.data && n.data.url }));
-    }),
+    /*
+     * A digest delivered until it is on screen, rather than delivered once and
+     * then waited for.
+     *
+     * Nothing acknowledges this delivery. Sent with a registration id nothing
+     * owns it is still answered as a success, in three milliseconds, and no
+     * notification ever follows: a message the browser dropped looks exactly
+     * like one still on its way, and unlike a real push service there is
+     * nothing behind this one to send it again. On a loaded machine it does
+     * get dropped, five times in ninety runs of the tap test below, and the
+     * wait then spent its whole budget on a notification nobody was going to
+     * send. So the wait sends it again. Every digest carries the same tag,
+     * which is what makes that safe: a second copy replaces the notification
+     * on screen instead of joining it. It goes out only after a second of
+     * quiet, an order of magnitude longer than the round trip takes when the
+     * first one arrived, so a delivery merely on its way is never doubled.
+     */
+    push: async (data, expected) => {
+      let sent = 0;
+      await expect.poll(async () => {
+        if (Date.now() - sent > 1000) {
+          await cdp.send('ServiceWorker.deliverPushMessage', { origin: BASE_URL, registrationId, data });
+          sent = Date.now();
+        }
+        return shown();
+      }).toEqual(expected);
+    },
+    shown,
   };
 }
 
 test('a push that reaches the worker is shown as the server wrote it, and the next one replaces it', async () => {
-  const { full, push, shown } = await plannerWithWorker('/');
+  const { full, push } = await plannerWithWorker('/');
   try {
-    await push(JSON.stringify(DIGEST));
-    await expect.poll(shown).toEqual([{ title: DIGEST.title, body: DIGEST.body, tag: DIGEST.tag, url: DIGEST.url }]);
+    await push(JSON.stringify(DIGEST), [{ title: DIGEST.title, body: DIGEST.body, tag: DIGEST.tag, url: DIGEST.url }]);
 
     // Same tag, so tomorrow's digest takes today's place instead of joining it.
-    await push(JSON.stringify({ ...DIGEST, title: 'Four things need attention' }));
-    await expect.poll(shown).toEqual([{ title: 'Four things need attention', body: DIGEST.body, tag: DIGEST.tag, url: DIGEST.url }]);
+    await push(JSON.stringify({ ...DIGEST, title: 'Four things need attention' }),
+      [{ title: 'Four things need attention', body: DIGEST.body, tag: DIGEST.tag, url: DIGEST.url }]);
 
     // A payload the worker cannot read is still shown as something. The
     // subscription is userVisibleOnly: a push handled in silence is one the
     // browser counts against the site, and eventually ends the subscription for.
-    await push('not json');
-    await expect.poll(shown).toEqual([{ title: 'soiree', body: '', tag: DIGEST.tag, url: '/' }]);
+    await push('not json', [{ title: 'soiree', body: '', tag: DIGEST.tag, url: '/' }]);
   } finally {
     await full.close();
   }
@@ -148,8 +174,7 @@ test('tapping a reminder leaves an open planner on the screen it was on', async 
   const { full, context, page, push, shown } = await plannerWithWorker('/#tasks');
   try {
     await page.evaluate(() => { window.__neverReloaded = true; });
-    await push(JSON.stringify(DIGEST));
-    await expect.poll(async () => (await shown()).length).toBe(1);
+    await push(JSON.stringify(DIGEST), [{ title: DIGEST.title, body: DIGEST.body, tag: DIGEST.tag, url: DIGEST.url }]);
 
     // The tap itself cannot be made from here, so the event is: the real
     // handler, in the real worker, given the real notification. What a made
