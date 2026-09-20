@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -28,9 +29,11 @@ type Sender interface {
 //
 // Ambiguous is false for everything up to and including RCPT: the server
 // refused before it had the message, so nothing was delivered and trying again
-// is free. It is true from the terminating dot onwards, where a dropped
-// connection means either "rejected" or "accepted, acknowledgement lost" and
-// there is no way to tell which.
+// is free. It is false again when the server answers the terminating dot with
+// a refusal code, which is it saying it took none of the message. It is true
+// where the verdict never arrives — a dropped connection, a timeout, a reply
+// that is not a reply — which means either "rejected" or "accepted,
+// acknowledgement lost" and there is no way to tell which.
 type SendError struct {
 	Err       error
 	Ambiguous bool
@@ -163,9 +166,18 @@ func (s *SMTP) Send(ctx context.Context, m Message) error {
 		return &SendError{Err: fmt.Errorf("write body: %w", err)}
 	}
 	// The point of no return: this writes the terminating dot and reads the
-	// server's verdict. A failure here may mean the mail was accepted and the
-	// reply was lost, so the caller must not retry.
+	// server's verdict. Silence is what cannot be interpreted — the mail may
+	// have been accepted and the reply lost — so the caller must not retry.
 	if err := w.Close(); err != nil {
+		// A reply, on the other hand, is an answer. A refusal code means the
+		// server read the message and took none of it, which is where a relay
+		// applies spam scoring and rate limits; nothing was delivered, so
+		// trying again is as free as a refusal at RCPT. Anything below 400 is
+		// not a refusal and is left ambiguous rather than read as acceptance.
+		var reply *textproto.Error
+		if errors.As(err, &reply) && reply.Code >= 400 {
+			return &SendError{Err: fmt.Errorf("message refused at end of data: %w", err)}
+		}
 		return &SendError{Err: fmt.Errorf("end of message: %w", err), Ambiguous: true}
 	}
 
