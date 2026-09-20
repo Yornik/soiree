@@ -87,12 +87,32 @@ func TestTheBuilderIsPinnedAndCITestsThatSameToolchain(t *testing.T) {
 
 	pinnedGo := leadingVersion.FindString(tag)
 
-	v := goVersionEnv.FindStringSubmatch(repoFile(t, ".github/workflows/ci.yaml"))
-	if v == nil {
-		t.Fatal("ci.yaml declares no GO_VERSION, so nothing says which toolchain the jobs test with")
+	// Every workflow, rather than one named file: the jobs that hand a
+	// toolchain to setup-go live in whichever workflow calls them, so reading
+	// a file by name would leave this passing on a file that no longer
+	// declares anything, and a second declaration that drifts is the failure
+	// being looked for in the first place.
+	dir := filepath.Join("..", "..", ".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
 	}
-	if v[1] != pinnedGo {
-		t.Errorf("CI tests with Go %q and the image ships Go %q; ci.yaml asks for those to be the same", v[1], pinnedGo)
+
+	declared := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+			continue
+		}
+		for _, v := range goVersionEnv.FindAllStringSubmatch(repoFile(t, ".github/workflows/"+name), -1) {
+			declared++
+			if v[1] != pinnedGo {
+				t.Errorf(".github/workflows/%s tests with Go %q and the image ships Go %q; the workflows ask for those to be the same", name, v[1], pinnedGo)
+			}
+		}
+	}
+	if declared == 0 {
+		t.Fatal("no workflow declares GO_VERSION, so nothing says which toolchain the jobs test with")
 	}
 
 	// The digest fixes which Go the image carries, not which Go compiles.
