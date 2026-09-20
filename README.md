@@ -290,7 +290,10 @@ What works end to end:
   history.
 - **Live sync.** The page holds one `EventSource` on `GET /api/v1/events`. A
   second person's edit arrives on its own, and is merged three ways against the
-  copy both sides started from, so nothing anybody is typing is overwritten.
+  copy both sides started from, so nothing being typed in this browser is
+  overwritten. Where both people changed the same field, who is paying for a
+  line is merged as the set it is, and anything else keeps this browser's
+  value.
 - **Signing out takes the plan off that browser.** The offline copy is a ledger
   of names against money; a sign-out removes it from every tab, after trying to
   send anything unsent and asking before discarding what it could not.
