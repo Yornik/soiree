@@ -829,7 +829,7 @@
    * ------------------------------------------------------------------
    * Every read and write of planner data goes through Store. Nothing else in
    * this file touches localStorage. To move onto a shared backend, replace
-   * the two methods below and leave the rest of the file alone.
+   * the three methods below and leave the rest of the file alone.
    *
    *   Store.read()       -> what was saved, or null if nothing was yet
    *   Store.write(state) -> persist the whole state object

@@ -137,8 +137,9 @@ the code is right.
 All persistence in `web/src/app.js` goes through one object:
 
 ```js
-Store.read()        // -> state object, or null
+Store.read()        // -> what was saved, or null if nothing was yet
 Store.write(state)  // persist the whole state object
+Store.keep()        // persist it again, because the merge base moved
 ```
 
 Nothing else touches `localStorage`. `save()` wraps `Store.write` and is
