@@ -124,10 +124,8 @@ func (s *Store) ConsumePasswordToken(ctx context.Context, tokenHash []byte, pass
 			return User{}, fmt.Errorf("password_tokens: %w", err)
 		}
 
-		// The account as it stands, held until this transaction ends: the
-		// "before" side of the history entry further down, and the reason a
-		// second redemption of the same link queues here rather than at the
-		// write.
+		// The account as it stands, and held until this transaction ends: the
+		// "before" side of the history entry further down.
 		before, err := lockRow[User](ctx, tx, EntityUsers, userColumns, userID)
 		if isNotFound(err) {
 			// Deleted between the two statements, which the UPDATE below
