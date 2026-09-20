@@ -165,6 +165,69 @@ test('with no database behind it, the page asks its two questions once and then 
   expect(errors.filter((e) => !probes.some((p) => e.url.indexOf(p) !== -1))).toEqual([]);
 });
 
+/*
+ * The same deployment, opened while it cannot be reached. The page cannot know
+ * yet that there is no database, so it keeps asking, as it must for the
+ * deployment that has one (api.spec.js). Two things keep that from costing
+ * this one anything: nothing is said about a server to a planner that has
+ * never met one, and the 404 is as final when it arrives late as when it
+ * arrives first.
+ */
+test('opened while the origin is away, a planner that never met a server is told nothing about one, and a late 404 is still final', async ({ page }) => {
+  await openPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await flushToStorage(page);
+  await page.goto('about:blank');
+
+  // Installed, not paused: time passes as it would, and the test may also move
+  // it on, so that the page's backoff is not something to sit through.
+  await page.clock.install();
+
+  // A switch rather than route-then-unroute: see api.spec.js.
+  let away = true;
+  let asked = 0;
+  let total = 0;
+  await page.route('**/api/v1/**', (route) => {
+    total += 1;
+    if (route.request().url().endsWith('/api/v1/plan')) asked += 1;
+    return away ? route.abort('internetdisconnected') : route.continue();
+  });
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).committed).toHaveText('€2,500');
+
+  // Past the second failure, which is where a cached copy of a shared plan
+  // gets its notice.
+  for (let n = 1; n <= 3; n += 1) {
+    await expect.poll(() => asked, { message: `request ${n} for the plan` }).toBeGreaterThanOrEqual(n);
+    await page.clock.fastForward(30_000);
+  }
+  await expect.poll(() => asked).toBeGreaterThanOrEqual(4);
+  await expect(page.locator('#dataMsg')).toHaveText('');
+
+  // Back, and the answer is the one this deployment always gives.
+  away = false;
+  const answered = page.waitForResponse((r) => r.url().endsWith('/api/v1/plan') && r.status() === 404, { timeout: 5_000 });
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await answered;
+
+  // The accounts surface asked its own question into the same silence and
+  // drew a sign-in door meanwhile. With no database there is nothing behind
+  // one, so it goes again.
+  await expect(page.locator('body')).toHaveClass(/accounts-none/);
+  await expect(page.locator('#accountBar')).toBeHidden();
+
+  // Nothing is booked after that, by either script. Moving the clock fires
+  // whatever is, and the round trip through the page lets a request made that
+  // way be counted.
+  const settled = total;
+  await page.clock.fastForward(60_000);
+  await page.evaluate(() => 0);
+  expect(total).toBe(settled);
+  await expect(page.locator('#dataMsg')).toHaveText('');
+});
+
 test('the planner is stored under one known key, and nothing else', async ({ page }) => {
   await openPlanner(page);
   await gotoTab(page, 'budget');

@@ -50,6 +50,7 @@
 const fs = require('fs/promises');
 const { test, expect, chromium } = require('@playwright/test');
 const {
+  ADMIN_EMAIL,
   API_URL,
   STORAGE_KEY,
   addBudgetLine,
@@ -456,6 +457,79 @@ test('a write that cannot get out is retried and said out loud, not dropped', as
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item), { timeout: 20_000 })
     .toEqual(['Venue deposit']);
   await expect(page.locator('#dataMsg')).toHaveText(/Back in touch with the server/);
+});
+
+/*
+ * The same outage, met from the other end: the origin is already away when the
+ * page opens. That is the ordinary start for an installed planner, because the
+ * service worker paints the shell with no network at all, and it is also a pod
+ * restarting at the wrong moment. The cached copy is on screen and editable.
+ *
+ * The page used to ask five times over fifteen seconds and then stop, for the
+ * rest of its life and without a word: every edit after that went to
+ * localStorage only, under a status line that said nothing.
+ */
+test('a page opened while the origin is away says so, keeps asking, and sends what was typed once it is back', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  // The copy this browser keeps has to be the server's, under the server's id:
+  // that is what tells the next page it is looking at a shared plan and not at
+  // a planner that only ever lived here.
+  const { id } = (await apiPlan(request)).budgetItems[0];
+  await expect
+    .poll(() => page.evaluate((key) => {
+      window.dispatchEvent(new Event('pagehide'));
+      return JSON.parse(localStorage.getItem(key) || '{}').budgetItems.map((i) => i.id);
+    }, STORAGE_KEY))
+    .toEqual([id]);
+  await page.goto('about:blank');
+
+  // Installed, not paused: time passes as it would, and the test may also move
+  // it on. The waits being skipped are the page's own backoff, up to thirty
+  // seconds a time, and sitting through those would make this a clock.
+  await page.clock.install();
+
+  // A switch, for the reason the spec above gives.
+  let away = true;
+  let asked = 0;
+  await page.route('**/api/v1/**', (route) => {
+    if (route.request().method() === 'GET' && route.request().url().endsWith('/api/v1/plan')) asked += 1;
+    return away ? route.abort('internetdisconnected') : route.continue();
+  });
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).committed).toHaveText('€2,500');
+
+  // Six, because the fifth was where it used to stop. Each wait is on the
+  // request having gone out, and the clock only supplies the pause before it.
+  for (let n = 1; n <= 6; n += 1) {
+    await expect.poll(() => asked, { message: `request ${n} for the plan` }).toBeGreaterThanOrEqual(n);
+    await page.clock.fastForward(30_000);
+  }
+
+  // Said where a person can see it, and before they have typed for an hour.
+  await expect(page.locator('#dataMsg')).toHaveText(/not reaching the server/);
+
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+  expect((await apiPlan(request)).budgetItems[0].paid).toBe('500.00');
+
+  // Back. The browser says so itself, and that is taken as a reason to ask now
+  // rather than when the backoff next comes round.
+  away = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.paid]))
+    .toEqual([['Venue deposit', '750.00']]);
+  await expect(page.locator('#dataMsg')).toHaveText(/Back in touch with the server/);
+
+  // The other question asked at load went unanswered too, and is asked again
+  // on the same terms: the door was drawn meanwhile, and the person who was
+  // signed in all along is not left looking at it.
+  await expect(page.locator('.account-email')).toHaveText(ADMIN_EMAIL);
 });
 
 test('the shared planner is still cached under one known key, and nothing else', async ({ page }) => {
@@ -1403,6 +1477,64 @@ test('a signed-in load asks for the plan once, not once per thing that wanted it
 
   release();
   await expect(page.locator('body')).not.toHaveClass(/showing-auth/);
+});
+
+/*
+ * The other question asked at load, and the same outage.
+ *
+ * "Who is signed in" got one request, and no answer was drawn as signed out
+ * for the life of the page, while the planner beside it retried, got the plan
+ * and ran fully synced. The door is still the right thing to draw meanwhile.
+ * It is not an answer, so the question is asked again.
+ *
+ * The worse order first: the plan has already arrived when the probe is lost.
+ * "Signed out" then reaches a planner that is running, which stops its three
+ * loops and tells a person with a perfectly good session to sign in again.
+ */
+test('a session probe lost at load is asked again, and nobody signed in is left looking signed out', async ({ page, request }) => {
+  await signInPage(page);
+
+  let probes = 0;
+  let planned;
+  const plan = new Promise((resolve) => { planned = resolve; });
+  page.on('response', (r) => { if (r.url().endsWith('/api/v1/plan')) r.finished().then(planned); });
+  await page.route('**/api/v1/auth/session', async (route) => {
+    probes += 1;
+    if (probes > 1) return route.continue();
+    await plan;
+    return route.abort('internetdisconnected');
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.account-email')).toHaveText(ADMIN_EMAIL);
+  await expect(page.locator('#accountActs')).toContainText('Sign out');
+  await expect(page.locator('#dataMsg')).not.toHaveText(/session has ended/);
+
+  // And the planner it stopped is running again: an edit still gets out.
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item)).toEqual(['Venue deposit']);
+});
+
+// What a lost probe cost the person with the least to fall back on: the lock
+// is only ever applied on "signed in, as a viewer", so their planner looked
+// editable and every edit in it was refused.
+test('a viewer whose session probe was lost at load still gets a read-only planner', async ({ page, request }) => {
+  const viewer = await ensureEditor(request, API_URL, 'vera', 'viewer');
+  await adoptSession(page, await freshSession(request, API_URL, viewer));
+
+  let probes = 0;
+  await page.route('**/api/v1/auth/session', (route) => {
+    probes += 1;
+    return probes > 1 ? route.continue() : route.abort('internetdisconnected');
+  });
+
+  await awaitPlan(page, () => page.goto('/'));
+  await expect(page.locator('body')).toHaveClass(/role-viewer/);
+  await expect(page.locator('.account-email')).toHaveText(viewer.email);
+  await gotoTab(page, 'budget');
+  await expect(page.locator('#addBudgetRow')).toBeHidden();
+  await expect(page.locator('#importData')).toBeDisabled();
 });
 
 /* ------------------------------------------------------------------

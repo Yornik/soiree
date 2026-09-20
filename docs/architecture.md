@@ -150,9 +150,24 @@ mutation sites: they call `save()` and know nothing about where the state goes.
 
 The page asks the origin for `GET /api/v1/plan` exactly once on load. A `404` is
 the final answer for a deployment with no database — those paths are never
-registered, so asking again would only be a second `404` — and anything else
-that is not an answer gets a few retries, because it might be a browser offline
-on a first visit.
+registered, so asking again would only be a second `404`. Anything else that is
+not an answer is asked again for as long as the page is open, doubling from a
+second to the thirty-second cap the write loop uses, and at once when the
+browser reports `online` or `auth.js` reports a sign-in. `200`, `401` and `404`
+end the asking, exactly as they do when they arrive first, and a `200` merges
+what was typed meanwhile the way a sign-in does.
+
+It used to be four retries and then silence. That was written for a browser
+offline on a first visit, but an origin that is away at load is the ordinary
+start for an installed planner, because the service worker paints the shell
+with no network at all. A page that gave up stayed a local-only planner for the
+rest of its life: the write loop does nothing until a plan has arrived, so
+every edit went to `localStorage` only and nothing said so. Now the status line
+says, after the second failure, that the changes are not reaching the server,
+as it does for a write that cannot get out. Only when the cached copy holds
+rows under server ids, though. A planner that has only ever lived in this
+browser may belong to a deployment with no database, and is told nothing about
+a server it may not have.
 
 There is one connection at a time. Two things want one on an ordinary signed-in
 load — the page starting, and `auth.js` reporting the session a moment later,
@@ -169,6 +184,19 @@ deployment that *has* an API, which wants a session. Falling back to
 in one browser, and never reach the plan everybody else is reading. The page
 holds, and connects properly when `auth.js` announces a sign-in on
 `soiree:session`.
+
+The other question asked at load, `GET /api/v1/auth/session`, is held to the
+same rule. `200`, `401` and `404` are answers. Anything else draws the sign-in
+door, which is the right thing to offer meanwhile, and is asked again on the
+same backoff, and at once on `online` or when `soiree:api` says the planner has
+just heard from the origin. It used to be drawn as signed out for the life of
+the page, on the grounds that the planner works either way. It did not: the
+planner retried, got its plan and ran fully synced beside an account bar that
+said "Sign in", with no admin links and no lock on a viewer's ledger, which is
+only applied on a session; and when the plan had arrived first, "signed out"
+stopped a running planner and told somebody with a good session to sign in
+again. An outage is not a sign-out at load either. A `401` is an answer and is
+never asked about twice.
 
 - **No API.** `localStorage` is the planner. One browser, one copy, no network
   after the probe. A self-hoster without Postgres, and `docker run` with no
