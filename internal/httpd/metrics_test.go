@@ -78,7 +78,13 @@ func TestAPIMetricsRouteLabelIsBounded(t *testing.T) {
 	if strings.Contains(out, `route="/api/`) {
 		t.Error("raw API paths leaked into the route label")
 	}
-	for _, want := range []string{`route="api-budget-items"`, `route="api-plan"`, `route="api-other"`} {
+	// The fixture signs in through the real route, so api-auth-login is here
+	// from a request that was actually served: the classifier having a label
+	// for it is worth little if a scrape never shows one.
+	for _, want := range []string{
+		`route="api-budget-items"`, `route="api-plan"`, `route="api-other"`,
+		`route="api-auth-login"`,
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics output missing %s", want)
 		}
@@ -170,12 +176,19 @@ func TestRouteClassIsAFixedSet(t *testing.T) {
 	for _, label := range apiRoutes {
 		known[label] = struct{}{}
 	}
+	for _, label := range authRoutes {
+		known[label] = struct{}{}
+	}
 
 	for _, path := range []string{
 		"/", "/sw.js", "/healthz", "/readyz", "/metrics", "/assets/app.deadbeef.js",
 		"/api/v1/plan", "/api/v1/budget-items", "/api/v1/budget-items/" + uuid.New().String(),
 		"/api/v1/programme-entries/" + uuid.New().String(), "/api/v1/" + uuid.New().String(),
 		"/api/v1/", "/api/v1", "/api/v2/plan", "/nope/" + uuid.New().String(),
+		"/api/v1/auth/login", "/api/v1/auth/session", "/api/v1/auth",
+		"/api/v1/auth/" + uuid.New().String(), "/api/v1/users/" + uuid.New().String(),
+		"/api/v1/attachments/" + uuid.New().String() + "/content",
+		"/api/v1/push/subscriptions", "/api/v1/activity",
 	} {
 		if _, ok := known[routeClass(path)]; !ok {
 			t.Errorf("routeClass(%q) = %q, which is not in the fixed set", path, routeClass(path))
@@ -202,5 +215,34 @@ func TestASeriesRegisteredFromOutsideThePackageIsServed(t *testing.T) {
 	s.MetricsHandler().ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if !strings.Contains(scrape.Body.String(), "soiree_a_feature_of_its_own") {
 		t.Error("a series registered through MetricsRegistry is not in the exposition the listener serves")
+	}
+}
+
+// Everything that is not a plan collection used to share api-other: login, the
+// session check every page load makes, accounts, attachments, push
+// subscriptions and the activity feed. A rate over that label answers no
+// question, and login is the one buried deepest, because it is rate limited,
+// it costs an Argon2id evaluation, and its refusals are what a ban is built
+// on, while /auth/session outnumbers it by a page load to one.
+func TestTheRoutesWorthWatchingHaveALabelOfTheirOwn(t *testing.T) {
+	for path, want := range map[string]string{
+		"/api/v1/auth/login":                         "api-auth-login",
+		"/api/v1/auth/session":                       "api-auth",
+		"/api/v1/auth":                               "api-auth",
+		"/api/v1/auth/passkeys/login/begin":          "api-auth",
+		"/api/v1/users":                              "api-users",
+		"/api/v1/users/" + uuid.New().String():       "api-users",
+		"/api/v1/attachments/" + uuid.New().String(): "api-attachments",
+		"/api/v1/push/subscriptions":                 "api-push",
+		"/api/v1/activity":                           "api-activity",
+		// The second segment is caller-controlled like the first, so an
+		// invented one falls back to the collection's own label rather than
+		// minting one of its own.
+		"/api/v1/auth/" + uuid.New().String(): "api-auth",
+		"/api/v1/" + uuid.New().String():      "api-other",
+	} {
+		if got := routeClass(path); got != want {
+			t.Errorf("routeClass(%q) = %q, want %q", path, got, want)
+		}
 	}
 }

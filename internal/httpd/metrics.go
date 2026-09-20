@@ -205,12 +205,36 @@ var apiRoutes = map[string]string{
 	"notes":             "api-notes",
 	"phases":            "api-phases",
 	"programme-entries": "api-programme-entries",
+	"auth":              "api-auth",
+	"users":             "api-users",
+	"attachments":       "api-attachments",
+	"push":              "api-push",
+	"activity":          "api-activity",
+}
+
+// authRoutes splits one second segment out of api-auth, by the same fixed-map
+// rule: a segment the caller invented stays api-auth rather than minting a
+// label.
+//
+// Login is the one route that is worth a panel of its own. It is the expensive
+// one to serve, the rate-limited one, and the one whose refusals a ban is built
+// from, while /auth/session runs on every page load and would bury all of that
+// under traffic a hundred times its size.
+var authRoutes = map[string]string{
+	"login": "api-auth-login",
 }
 
 func apiRouteClass(path string) string {
-	collection, _, _ := strings.Cut(strings.TrimPrefix(path, apiPrefix), "/")
-	if label, ok := apiRoutes[collection]; ok {
-		return label
+	collection, rest, _ := strings.Cut(strings.TrimPrefix(path, apiPrefix), "/")
+	label, ok := apiRoutes[collection]
+	if !ok {
+		return "api-other"
 	}
-	return "api-other"
+	if collection == "auth" {
+		action, _, _ := strings.Cut(rest, "/")
+		if sub, ok := authRoutes[action]; ok {
+			return sub
+		}
+	}
+	return label
 }
