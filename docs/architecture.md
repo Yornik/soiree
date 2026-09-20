@@ -676,7 +676,9 @@ CREATE UNIQUE INDEX programme_entries_budget_item_key
 -- Grid column widths and row heights are per-person preferences, not shared
 -- data. Deliberately jsonb and deliberately unvalidated: the shape is owned by
 -- the frontend and nothing on the server reads it, so a column per preference
--- would be a migration per stylistic change.
+-- would be a migration per stylistic change. Nothing writes a row yet: the
+-- widths live in the browser (see *State shape*), and this is what a layout
+-- that follows somebody between devices would be built on.
 CREATE TABLE user_ui_prefs (
   user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   prefs   jsonb NOT NULL DEFAULT '{}'::jsonb

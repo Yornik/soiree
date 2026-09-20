@@ -12,8 +12,15 @@ import (
 // Opaque jsonb, and deliberately so: the shape belongs to the frontend, it
 // changes whenever the grid does, and nothing on the server reads it. A column
 // per preference would mean a migration every time somebody adds a resizable
-// thing. They are per-user because they are not shared data — in the browser's
-// state blob today, one person dragging a column resizes it for everyone.
+// thing. They are per-user because they are not shared data.
+//
+// Nothing reaches any of this yet: no route and no page mentions prefs, so no
+// row is ever written. Widths and heights live in the browser, and a plan
+// adopted from the server leaves them there — one person dragging a column
+// must not resize it for everybody. The table is what a layout that follows a
+// person between devices would be built on; until then the only other code
+// that touches it is the privacy export and erasure, which have no caller
+// either.
 func (s *Store) UIPrefs(ctx context.Context, userID uuid.UUID) (json.RawMessage, error) {
 	var prefs json.RawMessage
 	err := s.pool.QueryRow(ctx, `SELECT prefs FROM user_ui_prefs WHERE user_id = $1`, userID).Scan(&prefs)
