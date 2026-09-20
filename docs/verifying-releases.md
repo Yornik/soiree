@@ -26,9 +26,22 @@ in the Rekor transparency log. So the question `cosign verify` answers is not
 "was this signed by someone with a key" but **"was this built by this workflow,
 in this repository"**.
 
-Install [cosign](https://github.com/sigstore/cosign). These commands were
-written against cosign v3.0.6 (the version pinned by the
-`sigstore/cosign-installer` release that CI uses).
+Install [cosign](https://github.com/sigstore/cosign). The cosign these commands
+are exercised against is whichever one the digest-pinned
+`sigstore/cosign-installer` step in the release workflows installs. Renovate
+moves that pin on its own, so a version number written here would go stale
+without anybody touching the page.
+
+Every command below names one release. Set it once, and release-please keeps
+this line at the newest release so the page never advertises an old one:
+
+<!-- x-release-please-start-version -->
+
+```sh
+TAG=v1.2.1   # or whichever release you are checking
+```
+
+<!-- x-release-please-end -->
 
 Normal releases are cut by release-please, which builds and signs the image in
 the same `push`-to-`main` run that creates the tag. The certificate identity
@@ -39,7 +52,7 @@ mistake most people make first:
 cosign verify \
   --certificate-identity 'https://github.com/Yornik/soiree/.github/workflows/release-please.yaml@refs/heads/main' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ghcr.io/yornik/soiree:v0.3.0
+  "ghcr.io/yornik/soiree:${TAG}"
 ```
 
 A release cut by pushing a `vX.Y.Z` tag by hand is built and signed by `ci.yaml`
@@ -47,9 +60,9 @@ instead, and its identity does end in the tag ref:
 
 ```sh
 cosign verify \
-  --certificate-identity 'https://github.com/Yornik/soiree/.github/workflows/ci.yaml@refs/tags/v0.3.0' \
+  --certificate-identity "https://github.com/Yornik/soiree/.github/workflows/ci.yaml@refs/tags/${TAG}" \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ghcr.io/yornik/soiree:v0.3.0
+  "ghcr.io/yornik/soiree:${TAG}"
 ```
 
 To accept either without knowing which path produced a given release, use a
@@ -61,7 +74,7 @@ cosign verify \
   --certificate-identity-regexp '^https://github\.com/Yornik/soiree/\.github/workflows/(release-please|ci)\.yaml@refs/(heads/main|tags/v.+)$' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   --certificate-github-workflow-repository 'Yornik/soiree' \
-  ghcr.io/yornik/soiree:v0.3.0
+  "ghcr.io/yornik/soiree:${TAG}"
 ```
 
 Success prints a verification block (`Certificate subject`, `Certificate issuer
@@ -82,7 +95,7 @@ The signature is made over the image **digest**, so verifying a tag is only as
 good as the tag. If you are pinning a deployment, resolve and verify the digest:
 
 ```sh
-DIGEST=$(docker buildx imagetools inspect ghcr.io/yornik/soiree:v0.3.0 --format '{{ json .Manifest }}' | jq -r '.digest')
+DIGEST=$(docker buildx imagetools inspect "ghcr.io/yornik/soiree:${TAG}" --format '{{ json .Manifest }}' | jq -r '.digest')
 cosign verify \
   --certificate-identity 'https://github.com/Yornik/soiree/.github/workflows/release-please.yaml@refs/heads/main' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
@@ -99,15 +112,15 @@ The SBOM is published twice, deliberately. As a release asset it can be read
 without pulling anything:
 
 ```sh
-gh release download v0.3.0 --repo Yornik/soiree --pattern 'soiree-*-sbom.spdx.json'
+gh release download "${TAG}" --repo Yornik/soiree --pattern 'soiree-*-sbom.spdx.json'
 ```
 
 And as an attestation on the image itself, which is the authoritative copy — the
 release asset is extracted from it during the release run:
 
 ```sh
-docker buildx imagetools inspect ghcr.io/yornik/soiree:v0.3.0 --format '{{ json .SBOM }}'
-docker buildx imagetools inspect ghcr.io/yornik/soiree:v0.3.0 --format '{{ json .Provenance }}'
+docker buildx imagetools inspect "ghcr.io/yornik/soiree:${TAG}" --format '{{ json .SBOM }}'
+docker buildx imagetools inspect "ghcr.io/yornik/soiree:${TAG}" --format '{{ json .Provenance }}'
 ```
 
 These are BuildKit in-toto attestations stored in the image index, not cosign
@@ -127,11 +140,14 @@ to a line of code.
 
 ## Reproducible builds
 
-The image is a single static Go binary built with `-trimpath`, `CGO_ENABLED=0`
-and a fixed toolchain, so the same source produces the same binary. CI checks
-this rather than claiming it: the `Reproducible build` job builds twice on two
-independent BuildKit instances with caching disabled and fails if the binaries
-differ byte for byte.
+The image is a single static Go binary built with `-trimpath` and
+`CGO_ENABLED=0`, so the same source built with the same toolchain produces the
+same binary. The toolchain is not frozen: the `Dockerfile` names
+`golang:1.27-alpine` and Renovate moves that tag on, so a build of the same
+commit months later may legitimately differ. CI checks what it can rather than
+claiming it: the `Reproducible build` job builds twice on two independent
+BuildKit instances with caching disabled, within one run and therefore on one
+toolchain, and fails if the binaries differ byte for byte.
 
 What that does **not** assert is a reproducible *image digest*. BuildKit stamps
 the build time into the image config, so two builds of identical source yield

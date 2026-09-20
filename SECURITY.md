@@ -17,10 +17,14 @@ is the exact set of commands.
 | The latest release — newest `vX.Y.Z` tag, which is what `ghcr.io/yornik/soiree:latest` points at | Yes |
 | Anything older | No |
 
-The project is pre-1.0 and has one maintainer. A fix lands on `main` and goes
-out in the next release; nothing is backported, so upgrading is the only
-remediation on offer. If that does not work for your deployment, say so in the
-report rather than assuming it is understood.
+The project has one maintainer. A fix lands on `main` and goes out in the next
+release; nothing is backported, so upgrading is the only remediation on offer.
+If that does not work for your deployment, say so in the report rather than
+assuming it is understood.
+
+Releases before v1.0.0 mounted `/api/v1` with no authorisation at all, so
+anyone who could reach one could read and change everything in it. Those tags
+are not merely unsupported: do not run them.
 
 Images built before keyless signing was set up are genuinely unsigned and will
 fail `cosign verify`. That failure is correct and is not a vulnerability.
@@ -41,10 +45,11 @@ out of it.
 
 A report is easiest to act on with:
 
-- **The image tag or commit.** Every instance exposes
-  `soiree_build_info{version,commit}` on `/metrics`, and stamps the same pair
-  into its startup log line, so this is precisely answerable rather than a
-  guess.
+- **The image tag or commit.** Every instance stamps the pair into its startup
+  log line, and exposes `soiree_build_info{version,commit}` on the metrics
+  listener (`SOIREE_METRICS_ADDR`, never the public port, where `/metrics` is a
+  404). Signed in, the release is at the foot of the page as well. So this is
+  precisely answerable rather than a guess.
 - The relevant `SOIREE_*` configuration, with any real event details removed.
 - What you did, what happened, and what you expected instead.
 - What an attacker gets out of it, and what access they need first — whether
@@ -75,12 +80,28 @@ way of avoiding that conversation.
 ## Scope
 
 In scope — the code in this repository, the image built from it, and the path
-by which that image is published. The store and migration layers are included
-even though the binary does not use them yet; they ship shortly and a flaw
-found now is cheaper than one found later:
+by which that image is published:
 
+- **Authentication and authorisation**, which since v1.0.0 is most of what is
+  worth attacking here: the session and the cookie that carries it, the role
+  check (`RequireWrite`) that guards the whole `/api/v1` subtree, single-use
+  set-password and reset links, passkeys, the rate limiters in front of login
+  and password reset together with the client address they key on and the
+  `X-Forwarded-For` they believe when `SOIREE_TRUST_PROXY_HEADERS` is set, and
+  what a viewer rather than an editor or an admin can reach on the live stream
+  at `/api/v1/events` and on the activity feed.
+- `internal/auth` — Argon2id password hashing, and the minting and checking of
+  single-use tokens.
 - `internal/httpd` — routing, cache and conditional-request handling, the
-  headers the binary sets, the rendered shell and service worker.
+  headers the binary sets, its refusal of cross-origin writes, the rendered
+  shell and service worker.
+- `internal/objstore` and the attachment routes — what a presigned URL is
+  signed for and how long it lives, the quota on total size, and the content
+  type and filename a download is served under.
+- `internal/push` — who may register a subscription, and the endpoint a
+  subscription names, which is a URL this server then requests.
+- `internal/mailer` and `internal/reminders` — header injection through
+  anything that reaches a message, and the links built from `SOIREE_BASE_URL`.
 - `internal/config` — environment parsing, and the config data block rendered
   into the page.
 - `internal/store` and `internal/migrate` — SQL handling, constraint and
@@ -96,29 +117,35 @@ found now is cheaper than one found later:
 
 Out of scope, because these are known and documented rather than undiscovered:
 
-- **There is no authentication or authorization.** Accounts and roles are step 4
-  of the roadmap in [docs/architecture.md](docs/architecture.md). Today, anyone
-  who can reach an instance can read and change everything in it. Who can reach
-  it is the operator's decision, and "the app has no login" is the documented
-  current state, not a finding.
 - **Missing TLS, HSTS and CSP on a bare `docker run`.** The binary sets
   `X-Content-Type-Options`, `Referrer-Policy` and `X-Frame-Options`; TLS, HSTS
   and a strict Content-Security-Policy are applied at the ingress in the
   deployed setup. A report that an instance you started with `docker run -p
   8080:8080` speaks plain HTTP is describing the deployment, not the software.
-- **Last-write-wins on concurrent edits**, and state living in the browser's
-  `localStorage`. Both are known limitations with per-row revisions and a
-  server-side store on the roadmap.
-- **Denial of service by flooding** an instance you can already reach. There is
-  no rate limiting yet, and this is not news.
+- **The browser-only mode.** Started without `DATABASE_URL`, the binary
+  registers neither the API nor the auth routes: the planner runs on its own
+  with its state in `localStorage`, there is no account to sign in to, and
+  there is no server-side copy of anything to protect. "It has no login" is the
+  documented shape of that mode. With a database behind it the API is guarded
+  and the rows carry revisions, and a way past either of those is a finding.
+- **Denial of service by flooding** an instance you can already reach. The
+  limiters in front of login and password reset are per process rather than
+  cluster-wide, and `internal/httpd/ratelimit.go` says so at the top, along
+  with what they are and are not for. A report that they do not stop a
+  distributed attack is describing what is already written down. A way for one
+  client to slip past them is a different thing, and is in scope.
 - **Scanner output with no demonstrated impact on this code.** `govulncheck`
   runs on every pull request and reports only vulnerabilities actually
   reachable from this binary. A CVE in a dependency along a path that is never
   called is not by itself a finding — send the reachable call path and it is.
-- The bundled Fraunces font, and the demo data behind `SOIREE_DEMO_DATA`, which
-  is obviously fictional and only appears when asked for.
-- Missing roadmap features in `docs/architecture.md` — audit trail, data
-  protection tooling, deadline reminders. They are already recorded as missing.
+- The bundled Bricolage Grotesque font, and the demo data behind
+  `SOIREE_DEMO_DATA`, which is obviously fictional and only appears when asked
+  for.
+- Gaps the README and [docs/architecture.md](docs/architecture.md) already
+  record: nothing scans an uploaded file, the subject export, erasure and purge
+  in `internal/store/privacy.go` have no route or subcommand to invoke them,
+  and a session that expires by itself leaves that browser's copy of the plan
+  behind.
 
 Anything not covered above: report it anyway. A wrong guess about scope costs
 far less than an unreported flaw.
