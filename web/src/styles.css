@@ -1640,19 +1640,27 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   /* The drawings go and their figures stay. Every one of these is a bar whose
      number is printed beside it, and a bar is a background: the browser drops
      it and leaves an empty box on the sheet. The run-up is worse than empty -
-     its marks are placed absolutely and its months collide with the date. */
+     its marks are placed absolutely and its months collide with the date.
+     "Today" goes with the line it labels rather than standing on the sheet
+     with nothing between it and the day, which is what the run-up's own
+     no-scale case does for the same reason. */
   .moneybar,
   .gauge-track,
   .split-list .share,
   .runup-scale,
+  .runup-from,
   .runup-months { display: none; }
   .runup { grid-template-areas: "count ends"; align-items: center; }
 
   /* A field on paper is a reading, not somewhere to type: no frame, no fill,
-     and none of the height a thumb needs. */
+     and none of the height a thumb needs. The caret is in the list because a
+     print is usually asked for straight after an edit, and the field that
+     happened to hold it would otherwise come out framed, filled and with the
+     bar itself printed in it while no other field on the sheet has one. */
   input, select, textarea, .by-btn,
   .field input,
-  .flag textarea {
+  .flag textarea,
+  input:focus, select:focus, textarea:focus {
     /* The width a field is given so it can be aimed at. This says it for the
        fields outside the grid: the ones inside it are given theirs by a typed
        selector, which outweighs the bare `input` here, so the grid has to say
@@ -1660,7 +1668,12 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
     min-width: 0;
     border-color: transparent;
     background: transparent;
+    caret-color: transparent;
   }
+  /* The ring the caret draws is an outline rather than a border, so it
+     survives the fill and the frame going and prints as a box around one
+     field. */
+  :focus-visible { outline: none; }
   /* What is wanted is the value. The arrow, the resize corner, the date
      picker's button and the number field's spinner are all ways of changing
      it, which paper is not. The spinner is the expensive one: drawn or not,

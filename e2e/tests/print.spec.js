@@ -162,3 +162,34 @@ test('every figure and heading prints whole, inside its own column', async ({ pa
   });
   expect(spilled).toEqual([]);
 });
+
+test('the field that held the caret prints like every other', async ({ page }) => {
+  await openPlanner(page);
+  await gotoTab(page, 'budget');
+  const row = await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 0 });
+
+  // A print is usually asked for straight after an edit, so the field last
+  // typed into is the one still carrying the caret when the sheet is drawn.
+  await row.note.click();
+  await expect(row.note).toBeFocused();
+
+  await page.emulateMedia({ media: 'print' });
+  await expect(row.note).toHaveCSS('border-color', 'rgba(0, 0, 0, 0)');
+  await expect(row.note).toHaveCSS('outline-style', 'none');
+  // The bar itself prints too, and a PDF of this page had one standing in the
+  // remark of whichever line was last typed into.
+  await expect(row.note).toHaveCSS('caret-color', 'rgba(0, 0, 0, 0)');
+});
+
+test('the run-up prints as its two ends and nothing between them', async ({ page }) => {
+  await openPlanner(page);
+  await page.emulateMedia({ media: 'print' });
+
+  // The line and its months are drawings, and "today" is the label on one end
+  // of the line: without the line it is a word on a sheet with nothing to say.
+  await expect(page.locator('#runupScale')).toBeHidden();
+  await expect(page.locator('#runupMonths')).toBeHidden();
+  await expect(page.locator('#runupFrom')).toBeHidden();
+  await expect(page.locator('#daysNum')).toBeVisible();
+  await expect(page.locator('#statDaysLabel')).toBeVisible();
+});
