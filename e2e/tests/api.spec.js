@@ -35,6 +35,7 @@
 const fs = require('fs/promises');
 const { test, expect, chromium } = require('@playwright/test');
 const {
+  ADMIN_EMAIL,
   API_URL,
   STORAGE_KEY,
   addBudgetLine,
@@ -437,6 +438,11 @@ test('a page opened while the origin is away says so, keeps asking, and sends wh
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.paid]))
     .toEqual([['Venue deposit', '750.00']]);
   await expect(page.locator('#dataMsg')).toHaveText(/Back in touch with the server/);
+
+  // The other question asked at load went unanswered too, and is asked again
+  // on the same terms: the door was drawn meanwhile, and the person who was
+  // signed in all along is not left looking at it.
+  await expect(page.locator('.account-email')).toHaveText(ADMIN_EMAIL);
 });
 
 test('the shared planner is still cached under one known key, and nothing else', async ({ page }) => {
@@ -1384,6 +1390,64 @@ test('a signed-in load asks for the plan once, not once per thing that wanted it
 
   release();
   await expect(page.locator('body')).not.toHaveClass(/showing-auth/);
+});
+
+/*
+ * The other question asked at load, and the same outage.
+ *
+ * "Who is signed in" got one request, and no answer was drawn as signed out
+ * for the life of the page, while the planner beside it retried, got the plan
+ * and ran fully synced. The door is still the right thing to draw meanwhile.
+ * It is not an answer, so the question is asked again.
+ *
+ * The worse order first: the plan has already arrived when the probe is lost.
+ * "Signed out" then reaches a planner that is running, which stops its three
+ * loops and tells a person with a perfectly good session to sign in again.
+ */
+test('a session probe lost at load is asked again, and nobody signed in is left looking signed out', async ({ page, request }) => {
+  await signInPage(page);
+
+  let probes = 0;
+  let planned;
+  const plan = new Promise((resolve) => { planned = resolve; });
+  page.on('response', (r) => { if (r.url().endsWith('/api/v1/plan')) r.finished().then(planned); });
+  await page.route('**/api/v1/auth/session', async (route) => {
+    probes += 1;
+    if (probes > 1) return route.continue();
+    await plan;
+    return route.abort('internetdisconnected');
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.account-email')).toHaveText(ADMIN_EMAIL);
+  await expect(page.locator('#accountActs')).toContainText('Sign out');
+  await expect(page.locator('#dataMsg')).not.toHaveText(/session has ended/);
+
+  // And the planner it stopped is running again: an edit still gets out.
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item)).toEqual(['Venue deposit']);
+});
+
+// What a lost probe cost the person with the least to fall back on: the lock
+// is only ever applied on "signed in, as a viewer", so their planner looked
+// editable and every edit in it was refused.
+test('a viewer whose session probe was lost at load still gets a read-only planner', async ({ page, request }) => {
+  const viewer = await ensureEditor(request, API_URL, 'vera', 'viewer');
+  await adoptSession(page, await freshSession(request, API_URL, viewer));
+
+  let probes = 0;
+  await page.route('**/api/v1/auth/session', (route) => {
+    probes += 1;
+    return probes > 1 ? route.continue() : route.abort('internetdisconnected');
+  });
+
+  await awaitPlan(page, () => page.goto('/'));
+  await expect(page.locator('body')).toHaveClass(/role-viewer/);
+  await expect(page.locator('.account-email')).toHaveText(viewer.email);
+  await gotoTab(page, 'budget');
+  await expect(page.locator('#addBudgetRow')).toBeHidden();
+  await expect(page.locator('#importData')).toBeDisabled();
 });
 
 /* ------------------------------------------------------------------

@@ -212,6 +212,12 @@ test('opened while the origin is away, a planner that never met a server is told
   await page.evaluate(() => window.dispatchEvent(new Event('online')));
   await answered;
 
+  // The accounts surface asked its own question into the same silence and
+  // drew a sign-in door meanwhile. With no database there is nothing behind
+  // one, so it goes again.
+  await expect(page.locator('body')).toHaveClass(/accounts-none/);
+  await expect(page.locator('#accountBar')).toBeHidden();
+
   // Nothing is booked after that, by either script. Moving the clock fires
   // whatever is, and the round trip through the page lets a request made that
   // way be counted.

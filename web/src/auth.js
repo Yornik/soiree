@@ -964,7 +964,8 @@
    *              screens, no sign-in. Not an error.
    *   out      — 401: there are accounts, and this browser has no session.
    *              Also not an error, and the only state in which "Sign in"
-   *              means anything.
+   *              means anything. It is also what is drawn while the probe has
+   *              had no answer, and then it is provisional: see probeSession().
    *   in       — 200: `user` is who the server says we are.
    * ------------------------------------------------------------------ */
 
@@ -977,6 +978,11 @@
     // A registration begun for one account is refused when another finishes
     // it, so options fetched ahead of time do not outlive whose they were.
     if ((who && who.id) !== (user && user.id)) registerCeremony.drop();
+
+    // Whatever changed the session has answered the question a probe booked
+    // by probeSession() was going to ask again. Left booked, it would spend a
+    // 401 on somebody who signed in and out again inside its wait.
+    if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
 
     state = next;
     user = who || null;
@@ -1054,25 +1060,73 @@
     if (state === 'in' && readRoute().path === 'account') renderReminders();
   });
 
-  function probeSession() {
+  // The backoff app.js gives connect(), which is asking the same origin at the
+  // same moment for the same reason.
+  var PROBE_RETRY_BASE_MS = 1000;
+  var PROBE_RETRY_MAX_MS = 30000;
+  // The wait before the probe is sent again, while there is one.
+  var probeTimer = null;
+
+  function probeSession(attempt) {
+    attempt = attempt || 0;
     if (apiKnownAbsent()) {
       setSession('none');
       return Promise.resolve();
     }
     return request('GET', '/auth/session').then(function (res) {
+      // Asked again, and settled some other way while this was in flight:
+      // somebody signed in through the form, or the planner's own doubt was
+      // answered first.
+      if (attempt > 0 && state !== 'out') return;
       if (res.status === 200 && res.body) {
         setSession('in', res.body);
         return;
       }
       // 404: the routes are not mounted, so this deployment has no accounts.
       // 401: there are accounts and nobody is signed in. Both are ordinary.
-      // Anything else — a 500, or no answer at all — is treated as signed out
-      // rather than as a reason to break the page: the planner works either
-      // way, and the sign-in door is the right thing to offer when the answer
-      // is not "you are Ada".
-      setSession(res.status === 404 ? 'none' : 'out');
+      if (res.status === 404) {
+        setSession('none');
+        return;
+      }
+      // Anything else, a 500 or no answer at all, is drawn as signed out
+      // rather than as a reason to break the page: the sign-in door is the
+      // right thing to offer when the answer is not "you are Ada". Drawn once;
+      // asking again changes nothing until somebody answers.
+      if (attempt === 0) setSession('out');
+      if (res.status === 401) return;
+
+      // But it is not an answer, so it is asked again, for as long as
+      // connect() goes on asking for the plan. This used to stop here, on the
+      // grounds that the planner works either way. It does not: connect()
+      // retries, gets its 200 and runs fully synced beside an account bar that
+      // says "Sign in", with no admin links, no role for the planner to gate
+      // reminders and files on, and no lock on a viewer's ledger, which is
+      // only ever applied on "in". When the plan had arrived first it was
+      // worse, because "out" stops a running planner and tells a person with a
+      // good session to sign in again. Never after a 401, which is an answer,
+      // and the one a proxy's ban rule counts.
+      probeTimer = setTimeout(function () {
+        probeTimer = null;
+        probeSession(attempt + 1);
+      }, Math.min(PROBE_RETRY_MAX_MS, PROBE_RETRY_BASE_MS * Math.pow(2, attempt)));
     });
   }
+
+  // Ask now rather than when the backoff comes round, and start it over. Only
+  // while a retry is booked, so neither of these can add a request to a load
+  // that went the ordinary way.
+  function probeNow() {
+    if (!probeTimer) return;
+    clearTimeout(probeTimer);
+    probeTimer = null;
+    probeSession(1);
+  }
+
+  // app.js has just heard from the origin, with either answer: "no API" is
+  // read off the latch without a request. And the browser's own word that the
+  // network is back, which is a hint and not a promise.
+  document.addEventListener('soiree:api', probeNow);
+  window.addEventListener('online', probeNow);
 
   /* Somebody picked another language from the switcher. app.js owns that
    * decision and has already re-said everything of its own; this has to say
@@ -1109,9 +1163,10 @@
    *         app.js is already waiting that out. Saying "in" again would make
    *         it refetch the plan for nothing, so nothing is said.
    *   401 — the session is gone. The same ending as above.
-   *   anything else — an outage is not a sign-out. probeSession() reads a 500
-   *         as "out" because at load there is nothing to lose by offering the
-   *         door; here there is a signed-in person to wrongly throw out.
+   *   anything else — an outage is not a sign-out. probeSession() draws a 500
+   *         as "out", because at load the door is the right thing to offer
+   *         meanwhile, and then asks again; here there is a signed-in person
+   *         to wrongly throw out, so nothing is drawn at all.
    *
    * A doubt that arrives while one is already being asked about is not
    * dropped: it is asked again afterwards, because the answer in flight may

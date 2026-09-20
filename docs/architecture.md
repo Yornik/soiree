@@ -185,6 +185,19 @@ in one browser, and never reach the plan everybody else is reading. The page
 holds, and connects properly when `auth.js` announces a sign-in on
 `soiree:session`.
 
+The other question asked at load, `GET /api/v1/auth/session`, is held to the
+same rule. `200`, `401` and `404` are answers. Anything else draws the sign-in
+door, which is the right thing to offer meanwhile, and is asked again on the
+same backoff, and at once on `online` or when `soiree:api` says the planner has
+just heard from the origin. It used to be drawn as signed out for the life of
+the page, on the grounds that the planner works either way. It did not: the
+planner retried, got its plan and ran fully synced beside an account bar that
+said "Sign in", with no admin links and no lock on a viewer's ledger, which is
+only applied on a session; and when the plan had arrived first, "signed out"
+stopped a running planner and told somebody with a good session to sign in
+again. An outage is not a sign-out at load either. A `401` is an answer and is
+never asked about twice.
+
 - **No API.** `localStorage` is the planner. One browser, one copy, no network
   after the probe. A self-hoster without Postgres, and `docker run` with no
   arguments, both land here and both work.
