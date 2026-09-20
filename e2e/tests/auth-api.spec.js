@@ -150,7 +150,8 @@ test('an admin invites somebody, and the link in the invitation is what lets the
     await them.fill('#newPassword', chosen);
     await them.fill('#newPassword2', chosen);
     await them.click('#setPasswordSubmit');
-    await expect(them.locator('#authNote')).toContainText('Your password is saved');
+    await expect(them.locator('#panelLogin')).toBeVisible();
+    await expect(them.locator('#authLede')).toContainText('Your password is saved');
 
     // The link works once. A second browser presenting the same one is
     // refused, which is what makes a leaked link survivable.
@@ -168,7 +169,6 @@ test('an admin invites somebody, and the link in the invitation is what lets the
     }
 
     // And the password they chose signs them in, as the viewer they were made.
-    await them.click('#authNoteAct');
     await them.fill('#loginEmail', invited);
     await them.fill('#loginPassword', chosen);
     await them.click('#loginSubmit');
@@ -618,9 +618,8 @@ test('somebody invited in Dutch is met in Dutch, from the link onwards', async (
     await them.fill('#newPassword', chosen);
     await them.fill('#newPassword2', chosen);
     await them.click('#setPasswordSubmit');
-    await expect(them.locator('#authNote')).toContainText('Je wachtwoord is opgeslagen');
+    await expect(them.locator('#authLede')).toContainText('Je wachtwoord is opgeslagen');
 
-    await them.click('#authNoteAct');
     await them.fill('#loginEmail', invited);
     await them.fill('#loginPassword', chosen);
     await them.click('#loginSubmit');

@@ -117,6 +117,8 @@
       'setpw.new': 'New password',
       'setpw.hint': 'At least 12 characters. Length is what makes a password hard to guess, so a short sentence beats a short scramble.',
       'setpw.again': 'Type it again',
+      'setpw.show': 'Show password',
+      'setpw.hide': 'Hide password',
       'setpw.submit': 'Set password',
       'setpw.incomplete.open': 'This link is incomplete. Open the whole link from your email, or ask an admin for a new one.',
       'setpw.incomplete': 'This link is incomplete. Ask an admin for a new one.',
@@ -124,7 +126,6 @@
       'setpw.short': 'A password needs at least 12 characters.',
       'setpw.weak': 'Choose a password between 12 and 1024 characters.',
       'setpw.expired': 'This link has expired or has already been used. Ask an admin for a new one.',
-      'setpw.done.title': 'Password set',
       'setpw.done.body': 'Your password is saved. Sign in with it to reach the planner.',
       'people.title': 'People',
       'people.lede': 'Everyone with an account on this planner.',
@@ -136,6 +137,7 @@
       'login.lede.activity': 'Sign in with an admin account to see what has changed.',
       'act.empty': 'Nothing has changed yet.',
       'act.more': 'Show older',
+      'act.retry': 'Try again',
       'act.failed': 'Could not load the activity. Try again.',
       'act.s.create': 'Added {e} {l}',
       'act.s.update': 'Changed {e} {l}',
@@ -208,6 +210,7 @@
       'person.conflict': 'Somebody else changed that account first. The list now shows where it stands.',
       'person.conflict.retry': 'Somebody else changed that account first. Check it and try again.',
       'person.removed': 'Removed {email}.',
+      'person.gone': 'That account no longer exists. It has gone off the list.',
       'invite.sent': 'A set-password link is on its way to {email}.',
       'invite.manual': 'No mail is configured on this deployment, so send this link to {email} yourself. It works once, expires in 24 hours, and is not shown again.',
       'link.aria': 'Set-password link',
@@ -236,6 +239,7 @@
       'pk.unused': 'not used yet',
       'pk.confirm': 'Remove {label}? Signing in with that device will stop working.',
       'pk.removed': 'Removed.',
+      'pk.gone': 'That passkey is already gone. It has gone off the list.',
       'pk.follow': 'Follow the prompt from your device.',
       'pk.ok': 'Passkey added. You can sign in with it from now on.',
       'pk.e.device': 'This device already has a passkey for this account.',
@@ -318,6 +322,8 @@
       'setpw.new': 'Nieuw wachtwoord',
       'setpw.hint': 'Minstens 12 tekens. Lengte maakt een wachtwoord moeilijk te raden, dus een korte zin is beter dan een korte brij tekens.',
       'setpw.again': 'Typ het nog een keer',
+      'setpw.show': 'Wachtwoord tonen',
+      'setpw.hide': 'Wachtwoord verbergen',
       'setpw.submit': 'Wachtwoord instellen',
       'setpw.incomplete.open': 'Deze link is onvolledig. Open de hele link uit je e-mail, of vraag een beheerder om een nieuwe.',
       'setpw.incomplete': 'Deze link is onvolledig. Vraag een beheerder om een nieuwe.',
@@ -325,7 +331,6 @@
       'setpw.short': 'Een wachtwoord heeft minstens 12 tekens nodig.',
       'setpw.weak': 'Kies een wachtwoord van 12 tot 1024 tekens.',
       'setpw.expired': 'Deze link is verlopen of al gebruikt. Vraag een beheerder om een nieuwe.',
-      'setpw.done.title': 'Wachtwoord ingesteld',
       'setpw.done.body': 'Je wachtwoord is opgeslagen. Meld je ermee aan om bij de planner te komen.',
       'people.title': 'Mensen',
       'people.lede': 'Iedereen met een account op deze planner.',
@@ -337,6 +342,7 @@
       'login.lede.activity': 'Meld je aan met een beheerdersaccount om te zien wat er is gewijzigd.',
       'act.empty': 'Er is nog niets gewijzigd.',
       'act.more': 'Ouder tonen',
+      'act.retry': 'Opnieuw proberen',
       'act.failed': 'De activiteit kon niet worden geladen. Probeer het opnieuw.',
       'act.s.create': '{e} {l} toegevoegd',
       'act.s.update': '{e} {l} gewijzigd',
@@ -409,6 +415,7 @@
       'person.conflict': 'Iemand anders heeft dat account eerder gewijzigd. De lijst toont nu hoe het ervoor staat.',
       'person.conflict.retry': 'Iemand anders heeft dat account eerder gewijzigd. Controleer het en probeer het opnieuw.',
       'person.removed': '{email} is verwijderd.',
+      'person.gone': 'Dat account bestaat niet meer. Het staat niet meer in de lijst.',
       'invite.sent': 'Er is een link om een wachtwoord in te stellen onderweg naar {email}.',
       'invite.manual': 'Op deze installatie is geen mail ingesteld, dus stuur deze link zelf naar {email}. Hij werkt één keer, verloopt na 24 uur en wordt niet opnieuw getoond.',
       'link.aria': 'Link om een wachtwoord in te stellen',
@@ -437,6 +444,7 @@
       'pk.unused': 'nog niet gebruikt',
       'pk.confirm': '{label} verwijderen? Aanmelden met dat apparaat werkt dan niet meer.',
       'pk.removed': 'Verwijderd.',
+      'pk.gone': 'Die passkey is er al niet meer. Hij staat niet meer in de lijst.',
       'pk.follow': 'Volg de aanwijzingen van je apparaat.',
       'pk.ok': 'Passkey toegevoegd. Je kunt je er vanaf nu mee aanmelden.',
       'pk.e.device': 'Dit apparaat heeft al een passkey voor dit account.',
@@ -519,6 +527,8 @@
       'setpw.new': 'Kata sandi baru',
       'setpw.hint': 'Minimal 12 karakter. Panjanglah yang membuat kata sandi sulit ditebak, jadi kalimat pendek lebih baik daripada acakan pendek.',
       'setpw.again': 'Ketik sekali lagi',
+      'setpw.show': 'Tampilkan kata sandi',
+      'setpw.hide': 'Sembunyikan kata sandi',
       'setpw.submit': 'Simpan kata sandi',
       'setpw.incomplete.open': 'Tautan ini tidak lengkap. Buka tautan utuh dari emailmu, atau minta yang baru ke admin.',
       'setpw.incomplete': 'Tautan ini tidak lengkap. Minta yang baru ke admin.',
@@ -526,7 +536,6 @@
       'setpw.short': 'Kata sandi harus minimal 12 karakter.',
       'setpw.weak': 'Pilih kata sandi antara 12 dan 1024 karakter.',
       'setpw.expired': 'Tautan ini sudah kedaluwarsa atau sudah dipakai. Minta yang baru ke admin.',
-      'setpw.done.title': 'Kata sandi tersimpan',
       'setpw.done.body': 'Kata sandimu sudah tersimpan. Masuk dengan kata sandi itu untuk membuka perencana.',
       'people.title': 'Anggota',
       'people.lede': 'Semua orang yang punya akun di perencana ini.',
@@ -538,6 +547,7 @@
       'login.lede.activity': 'Masuk dengan akun admin untuk melihat apa yang berubah.',
       'act.empty': 'Belum ada perubahan.',
       'act.more': 'Tampilkan yang lebih lama',
+      'act.retry': 'Coba lagi',
       'act.failed': 'Aktivitas tidak dapat dimuat. Coba lagi.',
       'act.s.create': 'Menambahkan {e} {l}',
       'act.s.update': 'Mengubah {e} {l}',
@@ -610,6 +620,7 @@
       'person.conflict': 'Orang lain lebih dulu mengubah akun itu. Daftar ini sekarang menunjukkan keadaan terbarunya.',
       'person.conflict.retry': 'Orang lain lebih dulu mengubah akun itu. Periksa lalu coba lagi.',
       'person.removed': '{email} sudah dihapus.',
+      'person.gone': 'Akun itu sudah tidak ada dan sudah hilang dari daftar.',
       'invite.sent': 'Tautan untuk membuat kata sandi sedang dikirim ke {email}.',
       'invite.manual': 'Email belum diatur di instalasi ini, jadi kirim sendiri tautan ini ke {email}. Tautan hanya bisa dipakai sekali, kedaluwarsa dalam 24 jam, dan tidak ditampilkan lagi.',
       'link.aria': 'Tautan untuk membuat kata sandi',
@@ -638,6 +649,7 @@
       'pk.unused': 'belum pernah dipakai',
       'pk.confirm': 'Hapus {label}? Masuk dengan perangkat itu tidak akan bisa lagi.',
       'pk.removed': 'Sudah dihapus.',
+      'pk.gone': 'Kunci sandi itu sudah tidak ada dan sudah hilang dari daftar.',
       'pk.follow': 'Ikuti petunjuk dari perangkatmu.',
       'pk.ok': 'Kunci sandi ditambahkan. Mulai sekarang kamu bisa masuk dengannya.',
       'pk.e.device': 'Perangkat ini sudah punya kunci sandi untuk akun ini.',
@@ -856,6 +868,31 @@
     forbidden: 'p.403',
     read_only: 'p.403'
   };
+
+  /* Two refusals that are not about what was asked, and are answered by
+   * changing the screen rather than by printing a sentence on it. Somebody
+   * told "try again" by something that will refuse every time has been sent
+   * round a loop with no way out of it.
+   *
+   * The first: the session ended while a screen was open. Read from the code
+   * and not the status, because signing in is refused with a 401 too, and
+   * there it means the password was wrong rather than that there is nothing
+   * to do here but sign in again. A 401 with nothing readable behind it, a
+   * proxy's own page say, is read as the session, which is the answer the
+   * activity list has always given it.
+   */
+  function signedOut(res) {
+    if (res.status !== 401) return false;
+    return !res.body || res.body.error === 'unauthenticated';
+  }
+
+  /* The second: the row is not there any more. Another admin removed it, or
+   * this person did in another tab, while this screen still had it drawn.
+   * Every retry is refused the same way, so the row comes off the screen
+   * instead of being offered once more. */
+  function gone(res) {
+    return res.status === 404 && !!res.body && res.body.error === 'not_found';
+  }
 
   /* ---------- base64url ----------
    * The whole WebAuthn boundary is base64url, unpadded on the way out of the
@@ -1431,11 +1468,15 @@
   function showNote(title, lede, line) {
     showPanel('panelNote', title, lede);
     setText(byId('authNote'), line || '');
-    show(byId('authNoteAct'), false);
   }
 
   // Where to land after signing in: back where you were headed.
   var afterLogin = '';
+
+  // A password chosen a moment ago, on this page load. The sign-in form is
+  // where redeeming a link leads, and it says so rather than opening as if
+  // nothing had happened.
+  var passwordSet = false;
 
   function render() {
     var r = readRoute();
@@ -1461,7 +1502,8 @@
     if (path === 'set-password') { renderSetPassword(); return; }
     if (path === 'login') {
       afterLogin = '';
-      renderLogin(t(endedNotice ? 'login.ended' : 'login.lede'));
+      renderLogin(t(passwordSet ? 'setpw.done.body'
+        : endedNotice ? 'login.ended' : 'login.lede'));
       return;
     }
 
@@ -1506,6 +1548,7 @@
     var next = afterLogin;
     afterLogin = '';
     endedNotice = false;
+    passwordSet = false;
     var pw = byId('loginPassword');
     if (pw) pw.value = '';       // out of the DOM the moment it is spent
     setSession('in', who);
@@ -1585,8 +1628,27 @@
     }
     byId('setPasswordSubmit').disabled = false;
     say(msg, '');
+    // Off again whenever this screen is drawn: a password still showing is a
+    // password on screen for whoever looks next.
+    revealPassword(false);
     var first = byId('newPassword');
     if (first) first.focus();
+  }
+
+  /* Showing what was typed.
+   *
+   * There are two fields here because there is no other way to catch a typo
+   * in something that is drawn as dots, and a phone keyboard is where that
+   * typo happens. This is the other way, and it is off until somebody asks
+   * for it: the button says which of the two states pressing it leads to,
+   * and aria-pressed says which one it is in. */
+  function revealPassword(on) {
+    var btn = byId('showPassword');
+    if (!btn) return;
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    setText(btn, t(on ? 'setpw.hide' : 'setpw.show'));
+    byId('newPassword').type = on ? 'text' : 'password';
+    byId('newPassword2').type = on ? 'text' : 'password';
   }
 
   function bindSetPassword() {
@@ -1594,6 +1656,13 @@
     if (!form) return;
     var msg = byId('setPasswordMsg');
     var submit = byId('setPasswordSubmit');
+
+    var reveal = byId('showPassword');
+    if (reveal) {
+      reveal.addEventListener('click', function () {
+        revealPassword(reveal.getAttribute('aria-pressed') !== 'true');
+      });
+    }
 
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -1624,13 +1693,16 @@
             pendingToken = '';
             byId('newPassword').value = '';
             byId('newPassword2').value = '';
+            revealPassword(false);
+            passwordSet = true;
             // Redeeming revoked every session this account had, including
             // this browser's if it had one.
             setSession('out');
-            showNote(t('setpw.done.title'), '', t('setpw.done.body'));
-            var b2 = byId('authNoteAct');
-            show(b2, true);
-            setText(b2, t('signin'));
+            // Straight to the form they need next, which used to be a screen
+            // whose one button led to it. The sentence comes along as its
+            // lede, so what just happened is still on screen while they sign
+            // in with what they just chose.
+            goto('login');
             return;
           }
           say(msg, problem(res, {}), true);
@@ -1683,15 +1755,25 @@
     var path = '/activity?limit=50' + (activityNext ? '&before=' + encodeURIComponent(activityNext) : '');
     request('GET', path).then(function (res) {
       activityLoading = false;
-      if (res.status === 401) { sessionEnded(); return; }
+      if (signedOut(res)) { sessionEnded(); return; }
+      var list = byId('activityList');
+      var more = byId('activityMore');
       if (res.status !== 200 || !res.body || !Array.isArray(res.body.entries)) {
-        say(byId('activityMsg'), t('act.failed'));
+        say(byId('activityMsg'), t('act.failed'), true);
+        // Something to press. That button asks for the next page, and with
+        // nothing listed there is no next page to ask for, so it asks for
+        // this one again and says so: "Show older" under an empty list offers
+        // something that is not there.
+        if (!list.firstChild) setText(more, t('act.retry'));
+        show(more, true);
         return;
       }
-      var list = byId('activityList');
+      // A load that worked leaves nothing of the one that did not.
+      say(byId('activityMsg'), '');
+      setText(more, t('act.more'));
       each(res.body.entries, function (entry) { list.appendChild(activityRow(entry)); });
       activityNext = res.body.nextBefore || null;
-      show(byId('activityMore'), !!activityNext);
+      show(more, !!activityNext);
       show(byId('activityEmpty'), !list.firstChild);
     });
   }
@@ -1772,6 +1854,7 @@
 
   function loadPeople() {
     request('GET', '/users').then(function (res) {
+      if (signedOut(res)) { sessionEnded(); return; }
       if (res.status !== 200 || !res.body) {
         say(byId('adminMsg'), problem(res, {}), true);
         return;
@@ -1942,6 +2025,12 @@
         adminSays(t('person.conflict'), true);
         return;
       }
+      if (signedOut(res)) { sessionEnded(); return; }
+      if (gone(res)) {
+        dropPerson(p.id);
+        adminSays(t('person.gone'), true);
+        return;
+      }
       adminSays(problem(res, {}), true);
       drawPeople(); // put the select back to what the server still believes
     });
@@ -1963,6 +2052,12 @@
           adminSays(t('person.conflict.retry'), true);
           return;
         }
+        if (signedOut(res)) { sessionEnded(); return; }
+        if (gone(res)) {
+          dropPerson(p.id);
+          adminSays(t('person.gone'), true);
+          return;
+        }
         adminSays(problem(res, {}), true);
       });
   }
@@ -1975,6 +2070,12 @@
       if (res.status === 200 && res.body) {
         if (res.body.user) adoptPerson(res.body.user);
         afterInvite(res.body, p.email);
+        return;
+      }
+      if (signedOut(res)) { sessionEnded(); return; }
+      if (gone(res)) {
+        dropPerson(p.id);
+        adminSays(t('person.gone'), true);
         return;
       }
       adminSays(problem(res, {}), true);
@@ -2038,6 +2139,7 @@
           afterInvite(res.body, res.body.user.email);
           return;
         }
+        if (signedOut(res)) { sessionEnded(); return; }
         adminSays(problem(res, {}), true);
         if (res.status === 409) loadPeople();
       });
@@ -2175,6 +2277,7 @@
 
   function loadPasskeys() {
     request('GET', '/auth/passkeys').then(function (res) {
+      if (signedOut(res)) { sessionEnded(); return; }
       if (res.status !== 200 || !res.body) {
         say(byId('passkeyMsg'), problem(res, {}), true);
         return;
@@ -2219,15 +2322,20 @@
         btn.disabled = true;
         request('DELETE', '/auth/passkeys/' + k.id).then(function (res) {
           btn.disabled = false;
-          if (res.status === 204) {
+          // Removed, and "it was already gone" because another device got
+          // there first, end the same way: the key is not on this account any
+          // more, so it comes off the list either way.
+          if (res.status === 204 || gone(res)) {
             passkeys = passkeys.filter(function (x) { return x.id !== k.id; });
             drawPasskeys();
             // The options in hand still tell this device not to make a second
             // key, for a key the server has just forgotten.
             registerCeremony.renew();
-            say(byId('passkeyMsg'), t('pk.removed'));
+            var was = res.status === 204;
+            say(byId('passkeyMsg'), t(was ? 'pk.removed' : 'pk.gone'), !was);
             return;
           }
+          if (signedOut(res)) { sessionEnded(); return; }
           say(byId('passkeyMsg'), problem(res, {}), true);
         });
       }));
@@ -2658,9 +2766,6 @@
   each(document.querySelectorAll('[data-auth-goto]'), function (el) {
     el.addEventListener('click', function () { goto(el.getAttribute('data-auth-goto')); });
   });
-
-  var noteAct = byId('authNoteAct');
-  if (noteAct) noteAct.addEventListener('click', function () { goto('login'); });
 
   render();
   probeSession();

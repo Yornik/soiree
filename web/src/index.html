@@ -440,6 +440,13 @@
       <div class="auth-field">
         <label for="newPassword2" data-i18n-auth="setpw.again">Type it again</label>
         <input type="password" id="newPassword2" autocomplete="new-password">
+        <!-- A passphrase of twelve characters or more, typed on a phone with
+             nothing to check it against, is the first thing anybody invited
+             here is asked to do. -->
+        <p class="auth-hint">
+          <button class="link-btn" type="button" id="showPassword"
+                  aria-pressed="false" data-i18n-auth="setpw.show">Show password</button>
+        </p>
       </div>
       <p class="auth-msg" id="setPasswordMsg" role="status" aria-live="polite"></p>
       <div class="auth-acts">
@@ -544,9 +551,6 @@
   <!-- Anything with one sentence to say and nothing to fill in. -->
   <section class="auth-panel" id="panelNote" hidden>
     <p class="auth-note-body" id="authNote"></p>
-    <div class="auth-acts">
-      <button class="solid-btn" type="button" id="authNoteAct" data-i18n-auth="signin" hidden>Sign in</button>
-    </div>
   </section>
 
   <p class="auth-foot">
