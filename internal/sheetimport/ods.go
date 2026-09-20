@@ -18,6 +18,12 @@ const (
 	// built. These caps only bite on repeat runs that actually carry content.
 	maxSheetCols = 4096
 	maxSheetRows = 200000
+	// Those two are a cap per row and a cap per column, and a repeat run asks
+	// for the product of them: a few hundred bytes of XML for four thousand
+	// columns across two hundred thousand rows. Every pass over a sheet walks
+	// it row by column, so a file needing more cells than this is one no run
+	// would finish anyway.
+	maxSheetCells = 5000000
 )
 
 // ReadODS reads an OpenDocument spreadsheet.
@@ -78,6 +84,7 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 		rowRepeat   int
 		pendingCols int // empty cells counted but not materialised
 		pendingRows int
+		cells       int // materialised cells in the sheet being read
 	)
 
 	for {
@@ -97,7 +104,7 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 					break
 				}
 				cur = &Sheet{Name: localAttr(t, "name")}
-				pendingRows = 0
+				pendingRows, cells = 0, 0
 
 			case "table-row":
 				if cur == nil {
@@ -180,13 +187,20 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 				if len(cur.Rows)+pendingRows+rowRepeat > maxSheetRows {
 					return nil, fmt.Errorf("sheet %q has more than %d rows", sheetName(cur), maxSheetRows)
 				}
+				if cells += len(row) * rowRepeat; cells > maxSheetCells {
+					return nil, fmt.Errorf("sheet %q repeats its rows out to more than %d cells: it is a repeat run, not a table",
+						sheetName(cur), maxSheetCells)
+				}
 				cur.Rows = append(cur.Rows, make([][]Cell, pendingRows)...)
 				pendingRows = 0
 				for i := 0; i < rowRepeat; i++ {
 					if rowHidden {
 						cur.markHidden(len(cur.Rows) + 1)
 					}
-					cur.Rows = append(cur.Rows, append([]Cell(nil), row...))
+					// Every repeat shares the one slice. A row is read-only
+					// once it is parsed, and a copy per repeat is how a file
+					// of a few hundred bytes asks for gigabytes.
+					cur.Rows = append(cur.Rows, row)
 				}
 
 			case "table":

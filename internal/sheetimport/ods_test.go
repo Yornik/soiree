@@ -289,3 +289,17 @@ func TestConvertSkipsHiddenRowsOnRequest(t *testing.T) {
 		t.Errorf("scanned %d rows, accounted for %d", tr.Scanned, tr.Accounted())
 	}
 }
+
+// A repeat run is how a sheet says "and the same again". A file of a few
+// hundred bytes can say it four thousand columns wide and two hundred
+// thousand rows deep, which is tens of gigabytes of cells: the caps at the
+// top of ods.go are per row and per column, so neither of them sees it.
+func TestReadODSRefusesARepeatRunTooBigToHold(t *testing.T) {
+	wide := `<table:table-cell office:value-type="string" table:number-columns-repeated="4000">` +
+		`<text:p>x</text:p></table:table-cell>`
+	path := writeODS(t, tSheet("Bomb", tRowRepeat(2000, wide)))
+
+	if _, err := ReadODS(path); err == nil {
+		t.Error("ReadODS built 8 million cells out of a 700-byte file without complaint")
+	}
+}
