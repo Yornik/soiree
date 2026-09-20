@@ -187,6 +187,18 @@ shipped, so a file that changes fails `go test -short` instead of somebody's
 next deploy. A new migration adds its line there in the pull request that adds
 it.
 
+Append-only is about the bytes. The other half of the rule is about time: a
+migration has to leave the previous release's binary working. The new pod
+migrates before it listens while the old one is still serving, so every rollout
+runs the release before yours against your schema, and a rollback runs it for
+longer. Add columns nullable or with a default, the way
+`0009_phase_revision.sql` does; drop or rename one only in a release after the
+code stopped reading it. `change_log` carries a trigger that refuses every
+UPDATE and DELETE on it, so a migration that has to touch those rows disables
+and re-enables it in the same file: the comment above that trigger in
+`migrations/0007_audit.sql` asks for exactly that, deliberately rather than by
+accident.
+
 ## Style
 
 Follow what is there. Comments explain *why* a thing is the way it is, not what
