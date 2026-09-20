@@ -961,10 +961,11 @@ func TestACreateThatNamesItsIdCanBeSentTwice(t *testing.T) {
 
 // TestARepeatedCreateAnswersWithTheRowAsStored: the retry carries the row as
 // it looks now, which is not always what committed the first time, because
-// somebody kept typing while the answer was not arriving. The answer is the stored row,
-// so the browser takes that as the version both sides agree on and sends the
-// difference as an ordinary patch afterwards. Merging here instead would be a
-// write nobody asked for, made from a body whose revision means nothing.
+// somebody kept typing while the answer was not arriving. The answer is the
+// stored row, so the browser takes that as the version both sides agree on
+// and sends the difference as an ordinary patch afterwards. Merging here
+// instead would be a write nobody asked for, made from a body whose revision
+// means nothing.
 func TestARepeatedCreateAnswersWithTheRowAsStored(t *testing.T) {
 	h, _ := newAPIServer(t)
 

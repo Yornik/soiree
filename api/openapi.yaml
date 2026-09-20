@@ -1090,6 +1090,7 @@ paths:
             schema:
               $ref: '#/components/schemas/PhaseWrite'
       responses:
+        '200': { $ref: '#/components/responses/PhaseCreatedAlready' }
         '201': { $ref: '#/components/responses/PhaseCreated' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1155,6 +1156,7 @@ paths:
             schema:
               $ref: '#/components/schemas/SponsorWrite'
       responses:
+        '200': { $ref: '#/components/responses/SponsorCreatedAlready' }
         '201': { $ref: '#/components/responses/SponsorCreated' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1222,6 +1224,7 @@ paths:
             schema:
               $ref: '#/components/schemas/BudgetItemWrite'
       responses:
+        '200': { $ref: '#/components/responses/BudgetItemCreatedAlready' }
         '201': { $ref: '#/components/responses/BudgetItemCreated' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1292,6 +1295,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ProgrammeEntryWrite'
       responses:
+        '200': { $ref: '#/components/responses/ProgrammeEntryCreatedAlready' }
         '201': { $ref: '#/components/responses/ProgrammeEntryCreated' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1359,6 +1363,7 @@ paths:
             schema:
               $ref: '#/components/schemas/TaskWrite'
       responses:
+        '200': { $ref: '#/components/responses/TaskCreatedAlready' }
         '201': { $ref: '#/components/responses/TaskCreated' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -1418,6 +1423,7 @@ paths:
             schema:
               $ref: '#/components/schemas/NoteWrite'
       responses:
+        '200': { $ref: '#/components/responses/NoteCreatedAlready' }
         '201': { $ref: '#/components/responses/NoteCreated' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -2004,6 +2010,41 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Note' }
 
+    # The answer to a create that named an `id` a row already holds: this
+    # create has already been done. The body is the row as stored, which is
+    # not always what the repeated request carried, and the difference is an
+    # ordinary change to make afterwards.
+    PhaseCreatedAlready:
+      description: This create has already been done. The phase as stored.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Phase' }
+    SponsorCreatedAlready:
+      description: This create has already been done. The sponsor as stored.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Sponsor' }
+    BudgetItemCreatedAlready:
+      description: This create has already been done. The budget item as stored.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/BudgetItem' }
+    ProgrammeEntryCreatedAlready:
+      description: This create has already been done. The entry as stored.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ProgrammeEntry' }
+    TaskCreatedAlready:
+      description: This create has already been done. The task as stored.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Task' }
+    NoteCreatedAlready:
+      description: This create has already been done. The note as stored.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Note' }
+
   schemas:
 
     ########################################################################
@@ -2521,7 +2562,13 @@ components:
         revision: { $ref: '#/components/schemas/Revision' }
         id:
           $ref: '#/components/schemas/Id'
-          description: Accepted and dropped. The path names the row.
+          description: |
+            On a create, the id to store the row under. Sending that create
+            again is then safe: the second one answers **200** with the row
+            as stored rather than adding a second row. Omit it and the
+            server chooses the id. An id that is not a uuid is a **400**.
+
+            On a change it is accepted and dropped. The path names the row.
         updatedAt:
           type: string
           format: date-time
@@ -2560,7 +2607,13 @@ components:
         revision: { $ref: '#/components/schemas/Revision' }
         id:
           $ref: '#/components/schemas/Id'
-          description: Accepted and dropped. The path names the row.
+          description: |
+            On a create, the id to store the row under. Sending that create
+            again is then safe: the second one answers **200** with the row
+            as stored rather than adding a second row. Omit it and the
+            server chooses the id. An id that is not a uuid is a **400**.
+
+            On a change it is accepted and dropped. The path names the row.
         updatedAt:
           type: string
           format: date-time
@@ -2648,7 +2701,13 @@ components:
         revision: { $ref: '#/components/schemas/Revision' }
         id:
           $ref: '#/components/schemas/Id'
-          description: Accepted and dropped. The path names the row.
+          description: |
+            On a create, the id to store the row under. Sending that create
+            again is then safe: the second one answers **200** with the row
+            as stored rather than adding a second row. Omit it and the
+            server chooses the id. An id that is not a uuid is a **400**.
+
+            On a change it is accepted and dropped. The path names the row.
         updatedAt:
           type: string
           format: date-time
@@ -2720,7 +2779,13 @@ components:
         revision: { $ref: '#/components/schemas/Revision' }
         id:
           $ref: '#/components/schemas/Id'
-          description: Accepted and dropped. The path names the row.
+          description: |
+            On a create, the id to store the row under. Sending that create
+            again is then safe: the second one answers **200** with the row
+            as stored rather than adding a second row. Omit it and the
+            server chooses the id. An id that is not a uuid is a **400**.
+
+            On a change it is accepted and dropped. The path names the row.
         updatedAt:
           type: string
           format: date-time
@@ -2774,7 +2839,13 @@ components:
         revision: { $ref: '#/components/schemas/Revision' }
         id:
           $ref: '#/components/schemas/Id'
-          description: Accepted and dropped. The path names the row.
+          description: |
+            On a create, the id to store the row under. Sending that create
+            again is then safe: the second one answers **200** with the row
+            as stored rather than adding a second row. Omit it and the
+            server chooses the id. An id that is not a uuid is a **400**.
+
+            On a change it is accepted and dropped. The path names the row.
         updatedAt:
           type: string
           format: date-time
@@ -2813,7 +2884,13 @@ components:
         revision: { $ref: '#/components/schemas/Revision' }
         id:
           $ref: '#/components/schemas/Id'
-          description: Accepted and dropped. The path names the row.
+          description: |
+            On a create, the id to store the row under. Sending that create
+            again is then safe: the second one answers **200** with the row
+            as stored rather than adding a second row. Omit it and the
+            server chooses the id. An id that is not a uuid is a **400**.
+
+            On a change it is accepted and dropped. The path names the row.
         updatedAt:
           type: string
           format: date-time
