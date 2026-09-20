@@ -195,6 +195,18 @@ func (c *converter) skipRow(t *Table, tr *TableReport, sh *Sheet, n int, labelFi
 		return "", false, false
 	}
 
+	if sh.RowHidden(n) {
+		// The rejected venue is hidden, the AutoFilter is still on, and what
+		// the person reads off their screen is not what the file holds. The
+		// sheet's own SUM() counts these rows, so they go in by default and
+		// the report says which ones nobody has seen.
+		if t.SkipHidden {
+			tr.skip(n, "hidden in the spreadsheet")
+			return "", false, false
+		}
+		tr.warn(n, "the spreadsheet does not show this row (hidden, or filtered out): imported anyway, set skipHidden to leave hidden rows out")
+	}
+
 	label = c.text(sh, t, n, labelField)
 	if label == "" {
 		// Fall back to the leftmost mapped cell holding text, so a summary

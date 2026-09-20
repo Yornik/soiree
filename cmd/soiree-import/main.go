@@ -44,6 +44,7 @@ type options struct {
 	currency      string
 	totalKeywords string
 	skipCostless  bool
+	skipHidden    bool
 	ceiling       float64
 }
 
@@ -66,6 +67,7 @@ func run(args []string) error {
 	fs.StringVar(&o.currency, "currency", "", "the planner's SOIREE_CURRENCY; decides the decimals a stated total is checked at (default: 2 decimals)")
 	fs.StringVar(&o.totalKeywords, "total-keywords", "", "comma-separated words marking a summary row (default: total, subtotal, grand total, sum)")
 	fs.BoolVar(&o.skipCostless, "skip-costless", false, "drop rows with no figure instead of importing them at zero")
+	fs.BoolVar(&o.skipHidden, "skip-hidden", false, "leave out the rows the spreadsheet hides, by hand or by a filter (default: import them and name them in the report)")
 	fs.Float64Var(&o.ceiling, "ceiling", 0, "budget ceiling to record in the output")
 	fs.Usage = func() { usage(fs) }
 
@@ -185,6 +187,7 @@ func buildConfig(o options) (cfg *sheetimport.Config, err error) {
 		LastRow:               last,
 		Columns:               map[string]string(o.columns),
 		SkipRowsWithoutAmount: o.skipCostless,
+		SkipHidden:            o.skipHidden,
 	}
 	cfg = &sheetimport.Config{
 		Decimal:  o.decimal,

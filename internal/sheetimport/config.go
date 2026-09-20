@@ -86,6 +86,11 @@ type Table struct {
 	// SkipRowsWithoutAmount drops rows with no figure in them instead of
 	// importing them at zero.
 	SkipRowsWithoutAmount bool `json:"skipRowsWithoutAmount,omitempty"`
+	// SkipHidden leaves out the rows the spreadsheet does not show. Off by
+	// default: a hidden row is still in the sheet's own SUM(), so dropping it
+	// unasked is the worse of the two silences. Either way the report names
+	// them.
+	SkipHidden bool `json:"skipHidden,omitempty"`
 	// DashChildren turns the leading-dash convention off when a sheet uses
 	// dashes decoratively. Nil means on.
 	DashChildren *bool `json:"dashChildren,omitempty"`

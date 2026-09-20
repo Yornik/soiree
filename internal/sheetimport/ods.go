@@ -73,6 +73,7 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 		dateValue   string
 		inRow       bool
 		inCell      bool
+		rowHidden   bool
 		cellRepeat  int
 		rowRepeat   int
 		pendingCols int // empty cells counted but not materialised
@@ -104,6 +105,11 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 				}
 				inRow, row, pendingCols = true, nil, 0
 				rowRepeat = repeatAttr(t, "number-rows-repeated")
+				// "collapse" is hidden by hand, "filter" is hidden by an
+				// AutoFilter. Either way the row is in the file and not on
+				// the person's screen.
+				visibility := localAttr(t, "visibility")
+				rowHidden = visibility == "collapse" || visibility == "filter"
 
 			case "table-cell", "covered-table-cell":
 				// covered-table-cell is the hidden half of a merge. It still
@@ -177,6 +183,9 @@ func parseODSContent(r io.Reader) ([]Sheet, error) {
 				cur.Rows = append(cur.Rows, make([][]Cell, pendingRows)...)
 				pendingRows = 0
 				for i := 0; i < rowRepeat; i++ {
+					if rowHidden {
+						cur.markHidden(len(cur.Rows) + 1)
+					}
 					cur.Rows = append(cur.Rows, append([]Cell(nil), row...))
 				}
 
