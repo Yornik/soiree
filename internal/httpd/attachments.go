@@ -91,6 +91,11 @@ var viewableTypes = map[string]bool{
 // the implementation; the interface exists so a test can stand in a bucket
 // that is unreachable, which a real one will not be on demand.
 type objectStore interface {
+	// Origin is where the browser is sent, which the Content-Security-Policy
+	// has to name for an upload to be allowed to start. Asked of the bucket
+	// that signs the address rather than derived again from the endpoint, so
+	// the policy and the signature cannot come to disagree.
+	Origin() string
 	PresignPut(key string, size int64, contentType string, ttl time.Duration) objstore.Upload
 	PresignGet(key string, ttl time.Duration, disposition, contentType string) string
 	Head(ctx context.Context, key string) (int64, error)

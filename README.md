@@ -84,6 +84,7 @@ exists in the source, which is what lets one public image serve any event.
 | `SOIREE_BASE_URL` | *(unset)* | The origin this deployment is reached at, e.g. `https://soiree.example.test`. Mailed links and the passkey Relying Party are built from it and never from a request's `Host` header, which is attacker-supplied. Required when SMTP is configured. |
 | `SOIREE_TRUST_PROXY_HEADERS` | `false` | Whether `X-Forwarded-For` may be believed. Off by default: with it on and no proxy in front, anyone can pick their own client address and the per-IP rate limits stop meaning anything. |
 | `SOIREE_ALLOW_INDEXING` | `false` | Let search engines index the site. Off by default: a planner holds people's names against money they owe, and none of them chose to publish it. While off, `robots.txt` disallows everything **and** every response carries `X-Robots-Tag: noindex, nofollow` — the header matters because `robots.txt` only asks, and says nothing to a crawler that already has the URL from a link or a shared screenshot. |
+| `SOIREE_CSP` | `on` | Whether the binary sends its own Content-Security-Policy. On by default, and strict: no script or style the page did not serve itself, and the attachment bucket's origin in `connect-src`, which is how an upload is allowed to start at all. `off` hands the header to a proxy that sends a policy of its own; a value that is neither refuses to start, because a typo here drops a defence silently. |
 
 ### Accounts
 
@@ -154,8 +155,9 @@ twice.
 
 It has two consequences an operator has to act on, both in
 [docs/operating.md](docs/operating.md): the bucket needs a CORS rule that lets
-this site's pages `PUT` to it, and a deployment behind a Content-Security-Policy
-has to allow the bucket's origin in `connect-src`.
+this site's pages `PUT` to it, and a proxy that sends a Content-Security-Policy
+of its own has to allow the bucket's origin in `connect-src` too, because
+soiree's own policy already names it.
 
 | Variable | Default | Purpose |
 |---|---|---|

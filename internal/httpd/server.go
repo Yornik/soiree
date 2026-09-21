@@ -265,7 +265,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/", s.serveIndex)
 
-	return securityHeaders(s.cfg.AllowIndexing)(s.metrics.instrument(sameOriginWrites(mux)))
+	return securityHeaders(s.cfg.AllowIndexing, s.contentSecurityPolicy())(
+		s.metrics.instrument(sameOriginWrites(mux)))
 }
 
 // sameOriginWrites refuses a write that a browser says came from another
@@ -338,15 +339,22 @@ func (s *Server) serveReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 // securityHeaders sets the headers that do not depend on the reverse proxy.
-// HSTS and CSP are applied at the ingress in the deployed setup, but a bare
-// `docker run` should not be wide open either.
-func securityHeaders(allowIndexing bool) func(http.Handler) http.Handler {
+// HSTS still does: it is a promise about TLS, and this binary speaks plain
+// HTTP and cannot see where TLS terminates, so that one stays at the ingress.
+// The Content-Security-Policy does not: it describes the page, and this is
+// where the page is built.
+//
+// csp is empty when the deployment has said its proxy sends one instead.
+func securityHeaders(allowIndexing bool, csp string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("Referrer-Policy", "no-referrer")
 			h.Set("X-Frame-Options", "DENY")
+			if csp != "" {
+				h.Set("Content-Security-Policy", csp)
+			}
 
 			// robots.txt is a request, not a control: it asks a crawler not to
 			// fetch, and says nothing to one that already has the URL from a
@@ -359,6 +367,63 @@ func securityHeaders(allowIndexing bool) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// contentSecurityPolicy is the policy this binary sends, built once from the
+// configuration, or "" when SOIREE_CSP=off.
+//
+// The page is written to this policy, with no script that executes inline and
+// no `style=` attribute, and the browser is the only thing that can hold it to
+// that. It can only do so if something sends the policy, and a proxy that
+// writes it out by hand leaves the rule true only for the deployments that
+// did. Sending it from here puts the browser tests under it as well, and
+// gives a bare `docker run` the same page a proxied deployment gets.
+//
+// connect-src is the one line the binary knows better than any proxy: the
+// browser uploads to the bucket itself, so the policy has to name that origin,
+// and the bucket that signs those uploads is asked for it here. Copied into a
+// proxy by hand it is a string that drifts, and an upload it no longer matches
+// fails in the browser with nothing in any server log. Asking the store rather
+// than reading the endpoint a second time is what keeps the policy and the
+// signature about the same origin: the store signs for the host a browser
+// actually sends, which is not always the host as it was written down.
+//
+// Two things are deliberately absent. `upgrade-insecure-requests` would break
+// the plain-HTTP deployment the comment above is about. HSTS belongs to
+// whatever terminates TLS.
+func (s *Server) contentSecurityPolicy() string {
+	if s.cfg.DisableCSP {
+		return ""
+	}
+
+	connect := "connect-src 'self'"
+	// No attachment surface means no route to upload through and no control
+	// on the page, so there is nothing for the policy to allow.
+	if s.files != nil {
+		// Sources are separated by spaces and directives by semicolons, so an
+		// origin carrying either would not be a source here but a directive of
+		// its own, and one not named above is one the browser would obey.
+		// Nothing that resolves has such a host, so no working deployment
+		// loses its bucket this way.
+		if origin := s.files.bucket.Origin(); origin != "" && !strings.ContainsAny(origin, " ;,") {
+			connect += " " + origin
+		}
+	}
+
+	return strings.Join([]string{
+		"default-src 'self'",
+		"base-uri 'self'",
+		"frame-ancestors 'none'",
+		"form-action 'self'",
+		"object-src 'none'",
+		"script-src 'self'",
+		"style-src 'self'",
+		// The one scheme any of these allows, and only for an image, which
+		// cannot execute whatever it turns out to be.
+		"img-src 'self' data:",
+		"font-src 'self'",
+		connect,
+	}, "; ")
 }
 
 // serveRobots answers crawlers.

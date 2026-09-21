@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/Yornik/soiree/internal/config"
+	"github.com/Yornik/soiree/internal/objstore"
 	"github.com/Yornik/soiree/web"
 )
 
@@ -402,18 +403,164 @@ func TestMetricsRouteLabelIsBounded(t *testing.T) {
 	}
 }
 
+// wantCSP is the policy a deployment with no bucket gets, spelled out rather
+// than built from the same helper the server uses: a policy asserted against
+// its own generator asserts nothing, and this is the one header whose exact
+// text decides whether the page runs.
+const wantCSP = "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; " +
+	"form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; " +
+	"img-src 'self' data:; font-src 'self'; connect-src 'self'"
+
 func TestSecurityHeaders(t *testing.T) {
 	h := newTestServer(t, config.Config{EventName: "X"})
 	res := get(t, h, "/", nil)
 	_ = res.Body.Close()
 	for k, want := range map[string]string{
-		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":        "DENY",
-		"Referrer-Policy":        "no-referrer",
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+		"Referrer-Policy":         "no-referrer",
+		"Content-Security-Policy": wantCSP,
 	} {
 		if got := res.Header.Get(k); got != want {
 			t.Errorf("%s = %q, want %q", k, got, want)
 		}
+	}
+}
+
+// bucketAt is a bucket that signs nothing and is only ever asked where it is.
+type bucketAt struct {
+	emptyBucket
+	origin string
+}
+
+func (b bucketAt) Origin() string { return b.origin }
+
+// newServerWithBucket is a server whose attachment routes are mounted, which
+// is the only state in which a browser ever uploads anywhere.
+func newServerWithBucket(t *testing.T, cfg config.Config, bucket objectStore) http.Handler {
+	t.Helper()
+	files := NewAttachments(nil, bucket, 1<<20, 1<<24, nil)
+	return newServer(t, cfg).WithAttachments(files).Handler()
+}
+
+// The bucket is another origin and the browser uploads to it directly, so a
+// policy that did not name it would refuse every upload, in the browser, with
+// nothing in this server's log to explain it. The binary knows the origin, so
+// it names it rather than asking the operator to copy it anywhere.
+func TestContentSecurityPolicyNamesTheBucket(t *testing.T) {
+	h := newServerWithBucket(t, config.Config{
+		EventName:   "X",
+		Attachments: config.AttachmentsConfig{Endpoint: "https://s3.example.test"},
+	}, bucketAt{origin: "https://s3.example.test"})
+	res := get(t, h, "/", nil)
+	_ = res.Body.Close()
+
+	want := wantCSP + " https://s3.example.test"
+	if got := res.Header.Get("Content-Security-Policy"); got != want {
+		t.Errorf("Content-Security-Policy = %q, want %q", got, want)
+	}
+}
+
+// The policy names the origin the upload is signed for, and not a second
+// reading of the same setting. An endpoint written with the port its scheme
+// implies is signed for the host without it, because that is the Host header a
+// browser sends; a policy naming the other spelling is a policy about an
+// origin nothing ever connects to.
+func TestContentSecurityPolicyNamesWhatTheBucketSigns(t *testing.T) {
+	const endpoint = "https://s3.example.test:443"
+	bucket, err := objstore.New(objstore.Config{
+		Endpoint: endpoint, Region: "r", Bucket: "b",
+		AccessKeyID: "k", SecretAccessKey: "s",
+	})
+	if err != nil {
+		t.Fatalf("objstore.New(): %v", err)
+	}
+
+	h := newServerWithBucket(t, config.Config{
+		EventName:   "X",
+		Attachments: config.AttachmentsConfig{Endpoint: endpoint},
+	}, bucket)
+	res := get(t, h, "/", nil)
+	_ = res.Body.Close()
+
+	want := wantCSP + " " + bucket.Origin()
+	if got := res.Header.Get("Content-Security-Policy"); got != want {
+		t.Errorf("Content-Security-Policy = %q, want %q", got, want)
+	}
+}
+
+// A host the bucket accepts is a host the browser is sent to, whatever it
+// looks like: `minio_svc` is an ordinary name for a service in a compose file,
+// and an internationalised domain is an ordinary domain. A policy that left
+// either out would block the upload in the browser and log nothing anywhere,
+// which is the failure this header exists to end.
+func TestContentSecurityPolicyNamesAnyHostTheBucketAccepts(t *testing.T) {
+	for _, origin := range []string{"http://minio_svc:9000", "https://ünicode.example"} {
+		t.Run(origin, func(t *testing.T) {
+			h := newServerWithBucket(t, config.Config{
+				EventName:   "X",
+				Attachments: config.AttachmentsConfig{Endpoint: origin},
+			}, bucketAt{origin: origin})
+			res := get(t, h, "/", nil)
+			_ = res.Body.Close()
+
+			want := wantCSP + " " + origin
+			if got := res.Header.Get("Content-Security-Policy"); got != want {
+				t.Errorf("Content-Security-Policy = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// Sources in a directive are separated by spaces and directives by semicolons,
+// so an origin carrying either would not be a source here but a directive of
+// its own, and one this policy does not name above is one the browser would
+// obey. No host that resolves carries one, so nothing that could work is lost.
+func TestContentSecurityPolicyLeavesOutAnOriginThatWouldSplitIt(t *testing.T) {
+	for _, origin := range []string{
+		"https://s3.example.test;style-src-attr",
+		"https://s3.example.test 'unsafe-inline'",
+	} {
+		t.Run(origin, func(t *testing.T) {
+			h := newServerWithBucket(t, config.Config{EventName: "X"}, bucketAt{origin: origin})
+			res := get(t, h, "/", nil)
+			_ = res.Body.Close()
+
+			if got := res.Header.Get("Content-Security-Policy"); got != wantCSP {
+				t.Errorf("Content-Security-Policy = %q, want the policy with no bucket in it", got)
+			}
+		})
+	}
+}
+
+// A bucket with no database behind it is a feature that is off: the routes are
+// never mounted and the page draws no control, so nothing uploads and the
+// policy has no reason to name an origin.
+func TestContentSecurityPolicyNamesNoBucketWithoutTheRoutesToUseIt(t *testing.T) {
+	h := newTestServer(t, config.Config{
+		EventName:   "X",
+		Attachments: config.AttachmentsConfig{Endpoint: "https://s3.example.test"},
+	})
+	res := get(t, h, "/", nil)
+	_ = res.Body.Close()
+
+	if got := res.Header.Get("Content-Security-Policy"); got != wantCSP {
+		t.Errorf("Content-Security-Policy = %q, want the policy with no bucket in it", got)
+	}
+}
+
+// SOIREE_CSP=off is for a deployment whose proxy sends a policy of its own.
+func TestContentSecurityPolicyCanBeTurnedOff(t *testing.T) {
+	h := newTestServer(t, config.Config{EventName: "X", DisableCSP: true})
+	res := get(t, h, "/", nil)
+	_ = res.Body.Close()
+
+	if got := res.Header.Get("Content-Security-Policy"); got != "" {
+		t.Errorf("Content-Security-Policy = %q, want none", got)
+	}
+	// The rest of the headers are not part of the bargain.
+	if got := res.Header.Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", got)
 	}
 }
 

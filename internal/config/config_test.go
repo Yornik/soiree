@@ -52,6 +52,38 @@ func TestLoadDefaults(t *testing.T) {
 	if c.MetricsAddr != ":9090" {
 		t.Errorf("MetricsAddr = %q, want :9090", c.MetricsAddr)
 	}
+	// The policy is a defence an operator should have to switch off on
+	// purpose, not one they have to know about to get.
+	if c.DisableCSP {
+		t.Error("DisableCSP should be off unless SOIREE_CSP says so")
+	}
+}
+
+// SOIREE_CSP=off is for a deployment whose proxy sends a policy of its own.
+func TestCSPCanBeTurnedOff(t *testing.T) {
+	for _, v := range []string{"off", "OFF", "  off  "} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("SOIREE_CSP", v)
+			c, err := Load()
+			if err != nil {
+				t.Fatalf("Load(): %v", err)
+			}
+			if !c.DisableCSP {
+				t.Errorf("SOIREE_CSP=%q still sends the policy", v)
+			}
+		})
+	}
+
+	t.Run("on", func(t *testing.T) {
+		t.Setenv("SOIREE_CSP", "on")
+		c, err := Load()
+		if err != nil {
+			t.Fatalf("Load(): %v", err)
+		}
+		if c.DisableCSP {
+			t.Error("SOIREE_CSP=on sends no policy")
+		}
+	})
 }
 
 func TestMetricsAddrIsSeparateFromTheListenAddr(t *testing.T) {
@@ -148,6 +180,7 @@ func TestInvalidValuesRejected(t *testing.T) {
 		{"ceiling negative", "SOIREE_BUDGET_CEILING", "-5"},
 		{"demo data not a bool", "SOIREE_DEMO_DATA", "yes please"},
 		{"date unparseable", "SOIREE_EVENT_DATE", "next spring"},
+		{"csp neither on nor off", "SOIREE_CSP", "report-only"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
