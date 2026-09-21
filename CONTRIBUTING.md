@@ -85,8 +85,14 @@ docs(security): add a disclosure policy
 
 A wrong type is not cosmetic: `feat:` on a documentation-only change mints a
 release nobody meant to cut. Whatever subject lands on `main` is what
-release-please reads, so if your pull request is squashed, its title is the
-thing that matters.
+release-please reads.
+
+Pull requests are squashed rather than merged, so one commit per pull request
+lands on `main` and the pull request title is the subject that matters. That is
+a rule rather than a preference: GitHub writes the title of a merged pull
+request into the merge commit's body, release-please reads that body as a
+commit of its own, and the change is then listed in `CHANGELOG.md` twice, once
+under the branch commit and once under the merge.
 
 Branches follow `feat/<scope>`, `fix/<scope>` and so on, branched from current
 `main`.
