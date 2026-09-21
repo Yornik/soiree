@@ -773,9 +773,14 @@ Done:
     since been taught about one of the tables added after it, `change_log`
     (0007), which held every name, owner cell, sentence and address the rows
     ever carried: erasure strikes the person out of those entries and the
-    purge strikes the plan out of them, both through the one exception
-    migration 0013 makes to the append-only trigger. The others it still does
-    not know about: `sessions` and `password_tokens` (0008),
+    purge strikes every name in the plan out of them, both through the one
+    exception migration 0013 makes to the append-only trigger. Names, not
+    figures. The redaction reaches the text fields and leaves the rest of the
+    entry as it was written, so every recorded amount, quantity, date,
+    position and row id survives a purge and the shape of a purged plan is
+    still readable in its history, with nobody in it named. Whether those go
+    too is a retention decision nobody has taken. The tables `privacy.go`
+    still does not know about: `sessions` and `password_tokens` (0008),
     `push_subscriptions` (0010), `passkey_credentials` (0011) and
     `attachments` (0012). So the export is short by all of them and says so in
     its caveats, an erasure that anonymises rather than deletes leaves the
@@ -821,7 +826,12 @@ Open, in the order they matter:
   is the rest of the list under item 10, none of which needs a decision: the
   export has to read the tables it admits it does not, and an anonymising
   erasure has to take the account's sessions, passkeys and push subscriptions
-  with it rather than leaving them disabled in place.
+  with it rather than leaving them disabled in place. One question there does
+  need a decision, and it is not in the way of a route: a purge strikes the
+  names out of the history and leaves every amount, quantity and date
+  standing, so what a purged plan cost is still readable even though nobody
+  in it is named. That is either retention working as intended or a second
+  thing to strike out, and it is a policy call rather than a defect.
 - **Restore drill.** Backups that have never been restored are not backups.
   Restore into a scratch namespace, confirm the data, write down the steps.
 - **The budget table's sizing pass.** `fitBudgetText()` forces two layouts per

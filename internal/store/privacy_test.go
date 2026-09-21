@@ -1083,6 +1083,17 @@ func TestPurgeStrikesTheNamesOutOfTheChangeLog(t *testing.T) {
 		}
 	}
 
+	// And the half a purge does not reach, asserted rather than left to the
+	// comment on PurgeEvent: the redaction takes the text and nothing else, so
+	// a unit price and a quantity are still there to be read. What this test
+	// pins is that the documented limit is the real one, whichever way a later
+	// change moves it.
+	for _, word := range []string{"250000", "40.5"} {
+		if !logHolds(t, ctx, s, word) {
+			t.Errorf("the change log no longer holds %q, so a purge now reaches the figures as well", word)
+		}
+	}
+
 	// The entries themselves stay, and have to: whether a plan has ever been
 	// written to is read from this table, and a purged plan that answered "no"
 	// would be filled back in by the first browser to reload.

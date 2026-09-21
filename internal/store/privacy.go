@@ -591,14 +591,24 @@ type PurgeResult struct {
 // asks this table whether the plan has ever been written to, so a purge that
 // emptied it would leave the plan reading as one nobody had filled in yet, and
 // the first browser still holding a copy would put every purged row back. So
-// the entries stay and their values go, which is what migration 0013 permits.
+// the entries stay and the words in them go, which is what migration 0013
+// permits.
+//
+// The words and not the figures, which is the limit worth knowing before
+// anybody calls this a clean slate. A purge strikes out the fields that can
+// name a person, meaning the two lists in redactLog and nothing else in the
+// entry, so every recorded amount, quantity, date, position and row id
+// survives it exactly as it was written. The financial shape of a purged plan
+// is therefore still readable in its history; what is no longer there is
+// anybody's name. That is the same restraint the live columns are given, and
+// taking the figures as well is a retention decision of its own rather than
+// something this function should do quietly.
 //
 // Attachments do go, by cascade from the budget line or task they hang on, and
 // that cascade queues each object key in `attachment_garbage` for the sweep
 // that deletes it from the bucket. PurgeResult does not count them, and what a
 // file was called stays in its `attachments` entries as a stage of the evening
-// stays in its `phases` ones: the redaction covers the fields that can name a
-// person, which is where the two lists in redactLog come from.
+// stays in its `phases` ones: neither entity is one redactLog opens.
 //
 // The `settings` singleton is reset rather than deleted: its CHECK (id) allows
 // exactly one row and Settings() documents a missing one as a tampered schema,
