@@ -280,6 +280,7 @@
       'd.gone': 'Someone else removed the line you were editing. Your changes to it are gone with it.',
       'd.offline': 'Your changes are not reaching the server. Still trying — they are safe in this browser meanwhile.',
       'd.online': 'Back in touch with the server. Everything is saved.',
+      'd.carried': 'Changes made in this browser that had not reached the server: {n}. They are going up now.',
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
       'd.session': 'Your session has ended. Sign in again — what you changed is safe in this browser and is sent as soon as you are back.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
@@ -438,6 +439,7 @@
       'd.gone': 'Iemand anders heeft de regel die jij aan het bewerken was verwijderd. Jouw wijzigingen daaraan zijn ermee weg.',
       'd.offline': 'Je wijzigingen bereiken de server niet. Er wordt opnieuw geprobeerd — ondertussen staan ze veilig in deze browser.',
       'd.online': 'Weer verbinding met de server. Alles is opgeslagen.',
+      'd.carried': 'Wijzigingen in deze browser die de server niet hadden bereikt: {n}. Ze worden nu verstuurd.',
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
       'd.session': 'Je sessie is verlopen. Meld je opnieuw aan — je wijzigingen staan veilig in deze browser en worden verstuurd zodra je terug bent.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
@@ -595,6 +597,7 @@
       'd.gone': 'Orang lain menghapus baris yang sedang kamu ubah. Perubahanmu pada baris itu ikut hilang.',
       'd.offline': 'Perubahanmu belum sampai ke server. Masih dicoba lagi — sementara ini aman tersimpan di browser.',
       'd.online': 'Terhubung lagi dengan server. Semuanya tersimpan.',
+      'd.carried': 'Perubahan di browser ini yang belum sampai ke server: {n}. Semuanya dikirim sekarang.',
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
       'd.session': 'Sesimu sudah berakhir. Masuk lagi — perubahanmu aman tersimpan di browser ini dan dikirim begitu kamu kembali.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
@@ -2181,7 +2184,17 @@
     // reload as it was before one. Asked before the base is replaced, because
     // the base is what those edits are a difference from.
     var base = shadow;
-    if (base && planOps().length) dirty = true;
+    var carried = base ? planOps().length : 0;
+    if (carried) {
+      dirty = true;
+      // Counted out loud, because the page that typed this work is not always
+      // the page sending it and the account sending it is not always the one
+      // that typed it: a base that outlives its page carries whatever was left
+      // unsent into the next sign-in, and the change feed will name whoever
+      // signed in. The ordinary case reads the same way: an outage that
+      // ended while the tab was closed sent its edits with nothing said.
+      flash(t('d.carried', { n: carried }));
+    }
 
     shadow = shadowFromPlan(plan);
     apiMode = true;

@@ -1593,6 +1593,46 @@ test('a reopened tab that was edited while signed out does not overwrite a week 
 });
 
 /*
+ * The same reopened tab, from the point of view of whoever signs in on it.
+ *
+ * The base that lets an unsent edit be recognised now outlives the page it
+ * was typed on, which is what keeps a participant's own work through a
+ * restart. It also means work typed by whoever had the keyboard waits in this
+ * browser for as long as it takes, and goes up under the next editor or admin
+ * to sign in, named as theirs in the change feed. So the number is put to
+ * them: they are publishing it, and they should know they are.
+ */
+test('signing in says how much waiting work this browser is about to publish', async ({ page, request }) => {
+  const cookie = await openWithOwnSession(page, request, 'iris');
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  // The tab is closed and the session ends behind it, so the planner comes
+  // back on the copy this browser kept, with nobody signed in and nothing
+  // stopping anyone typing into it.
+  await page.goto('about:blank');
+  await endSession(request, cookie);
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+  expect((await apiPlan(request)).budgetItems[0].paid, 'nobody to send it as').toBe('500.00');
+
+  await page.goto('/#/login');
+  await signInThroughTheForm(page, request, 'iris');
+
+  await expect(page.locator('#dataMsg')).toHaveText(
+    'Changes made in this browser that had not reached the server: 1. They are going up now.',
+  );
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.paid))
+    .toEqual(['750.00']);
+});
+
+/*
  * Signing out takes this browser's copy of the plan with it.
  *
  * That copy is what lets the page paint at once and work offline, and it is
