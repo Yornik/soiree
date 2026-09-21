@@ -144,11 +144,20 @@ jobs:
       # digest-pinning the action pins cosign too.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Sign the index digest, which is what the tags above resolve to.
+      # Sign the index digest, which is what the tags above resolve to. The
+      # annotations name the release inside what the signature covers, for the
+      # reason written beside the same step in release-please.yaml: a
+      # certificate identity says which workflow built an image, never which
+      # version, so a moved tag verifies as whatever it now points at.
       - name: Sign the image (keyless, GitHub OIDC)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+          TAG: ${{ github.ref_name }}
+        run: |
+          cosign sign --yes \
+            -a "version=${TAG}" \
+            -a "commit=${GITHUB_SHA}" \
+            "${IMAGE}@${DIGEST}"
 
       # Run the exact command docs/verifying-releases.md tells third parties to
       # run. github.workflow_ref expands to the documented certificate identity
@@ -161,12 +170,17 @@ jobs:
           IDENTITY: https://github.com/${{ github.workflow_ref }}
         run: |
           set -euo pipefail
+          # -a is what turns "built by this workflow" into "built by this
+          # workflow as this release": cosign answers `missing or incorrect
+          # annotation` for any other version, so asking for it on the tag is
+          # what a moved tag fails.
           for ref in "${IMAGE}@${DIGEST}" "${IMAGE}:${TAG}"; do
             cosign verify \
               --certificate-identity "${IDENTITY}" \
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              -a "version=${TAG}" \
               "$ref" > /dev/null
-            echo "verified (exact identity): $ref"
+            echo "verified (exact identity and version): $ref"
           done
           # The regexp form is what a reader who does not know which workflow
           # cut the release will paste. Kept byte-identical to the doc so this
@@ -175,6 +189,7 @@ jobs:
             --certificate-identity-regexp '^https://github\.com/Yornik/soiree/\.github/workflows/(release-please|ci)\.yaml@refs/(heads/main|tags/v.+)$' \
             --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
             --certificate-github-workflow-repository 'Yornik/soiree' \
+            -a "version=${TAG}" \
             "${IMAGE}@${DIGEST}" > /dev/null
           echo "verified (documented regexp form): ${IMAGE}@${DIGEST}"
 

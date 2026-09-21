@@ -36,9 +36,10 @@ type workflowJob struct {
 }
 
 type workflowStep struct {
-	Uses string         `yaml:"uses"`
-	Run  string         `yaml:"run"`
-	With map[string]any `yaml:"with"`
+	Uses string            `yaml:"uses"`
+	Run  string            `yaml:"run"`
+	With map[string]any    `yaml:"with"`
+	Env  map[string]string `yaml:"env"`
 }
 
 // jobNames reads `needs:` in either form GitHub accepts: one job name, or a
@@ -330,6 +331,83 @@ func TestTwoReleasesDoNotPublishAtOnce(t *testing.T) {
 		t.Errorf("the publishing jobs are spread over %d concurrency groups (%v), and a group serialises only against itself, so the two release paths can still publish at once",
 			len(groups), groups)
 	}
+}
+
+// A signature says which workflow in which repository built an image. It does
+// not say which release the image is: release-please signs every build under
+// the same `@refs/heads/main` identity, so `cosign verify` on `:vX.Y.Z`
+// succeeds for any image that workflow has ever signed. Whoever can move a tag
+// in the registry can point it at an older release and the documented
+// verification still passes, which matters because everything below v1.0.0 is
+// signed and serves `/api/v1` with no authorisation at all. The version
+// annotation closes that: it is covered by the signature, and a command that
+// asks for it by name gets `missing or incorrect annotation` on anything else.
+// Both halves are asserted, since an annotation nothing requires is not a
+// check.
+func TestASignatureNamesTheVersionItSigns(t *testing.T) {
+	// One spelling, shared by both workflows and by the commands in
+	// docs/verifying-releases.md, so what a reader pastes is what a release
+	// runs against itself.
+	const annotation = `-a "version=${TAG}"`
+
+	signed, required := 0, 0
+	for name, jobs := range releaseJobs(t) {
+		for id, j := range jobs {
+			for _, s := range j.Steps {
+				code := withoutComments(s.Run)
+				signs := strings.Contains(code, "cosign sign")
+				verifies := strings.Count(code, "cosign verify")
+				if !signs && verifies == 0 {
+					continue
+				}
+
+				// The version has to arrive from the release being cut. A
+				// literal would go on naming whichever release was current on
+				// the day somebody typed it, and would verify just as well.
+				if tag := s.Env["TAG"]; !strings.Contains(tag, "tag_name") && !strings.Contains(tag, "ref_name") {
+					t.Errorf(".github/workflows/%s: job %q runs cosign in a step whose TAG is %q, so the version in the signature is not the one being released",
+						name, id, tag)
+				}
+
+				if signs {
+					signed++
+					if !strings.Contains(code, annotation) {
+						t.Errorf(".github/workflows/%s: job %q signs without %s, so the signature names no version and a tag moved onto an older release verifies as that release",
+							name, id, annotation)
+					}
+				}
+				if verifies == 0 {
+					continue
+				}
+				// Every verify call, not just one: the self-check exists to
+				// fail a release here rather than in somebody else's admission
+				// controller, and a call that drops the annotation is a
+				// documented command nobody is exercising.
+				if got := strings.Count(code, annotation); got < verifies {
+					t.Errorf(".github/workflows/%s: job %q makes %d cosign verify calls and asks for %s in %d of them",
+						name, id, verifies, annotation, got)
+					continue
+				}
+				required++
+			}
+		}
+	}
+	if signed == 0 || required == 0 {
+		t.Fatalf("read %d signing steps and %d verifying steps, so this test is not looking at the release path", signed, required)
+	}
+}
+
+// withoutComments drops the comment lines from a run block. The comments in
+// these steps name the commands they explain, and a comment counted as a call
+// would fail the step for a sentence somebody wrote about it.
+func withoutComments(run string) string {
+	var code []string
+	for _, line := range strings.Split(run, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			code = append(code, line)
+		}
+	}
+	return strings.Join(code, "\n")
 }
 
 // Renovate merges most of its own pull requests here, so for those the only
