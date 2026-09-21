@@ -2905,3 +2905,102 @@ test('a viewer is not offered the button that unlocks a closed ledger', async ({
   await expect(page.locator('#reopenPlanner')).toBeHidden();
   await expect(page.locator('.settlement')).toBeVisible();
 });
+
+/*
+ * The order of the lines is everybody's.
+ *
+ * `position` is the column the server reads every collection by, and until now
+ * the page only ever wrote it once, on the create. Moving a line is therefore
+ * an ordinary PATCH of an ordinary field, which is the whole reason to do it
+ * this way: it merges, it carries a revision, and it reaches the next person
+ * through the same feed as a price.
+ */
+test('a line moved up the grid is moved for everybody', async ({ page, request, browser }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await addBudgetLine(page, { item: 'Catering', unit: 45, qty: 40 });
+
+  const onTheServer = async () => (await apiPlan(request)).budgetItems.map((i) => i.item);
+  // Both lines have to be on the server before the move, or the order under
+  // test is the order the creates were sent in.
+  await expect.poll(onTheServer).toEqual(['Venue deposit', 'Catering']);
+
+  await budgetRow(page, 1).moveUp.click();
+  await expect.poll(onTheServer, {
+    message: 'a move should reach the server as a patch of the lines that moved',
+  }).toEqual(['Catering', 'Venue deposit']);
+
+  const elsewhere = await browser.newContext({ baseURL: API_URL, serviceWorkers: 'block' });
+  const other = await elsewhere.newPage();
+  try {
+    await openSharedPlanner(other);
+    await gotoTab(other, 'budget');
+    await expect(budgetRow(other, 0).item).toHaveValue('Catering');
+    await expect(budgetRow(other, 1).item).toHaveValue('Venue deposit');
+  } finally {
+    await elsewhere.close();
+  }
+});
+
+/*
+ * And the release that gave the page the order must not reorder anybody by
+ * arriving.
+ *
+ * A browser that saved its planner before this release holds rows with no
+ * position of their own, while the base beside them holds the number the
+ * server gave each one. Numbering those rows by where they sit in the list
+ * would be a move of every line after a deleted one, sent to everybody by a
+ * page nobody had touched.
+ */
+test('a plan saved before the order was a field of its own arrives unmoved', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await addBudgetLine(page, { item: 'Catering', unit: 45, qty: 40 });
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.position))
+    .toEqual([0, 1, 2]);
+
+  // Removed from outside this browser, which leaves the two that are left at
+  // 0 and 2. The gap is the point: where they sit and what they are numbered
+  // are no longer the same thing.
+  const gone = (await apiPlan(request)).budgetItems[1];
+  const res = await request.delete(`${API_URL}/api/v1/budget-items/${gone.id}?revision=${gone.revision}`, {
+    headers: await apiAuth(request),
+  });
+  expect(res.status()).toBe(204);
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(2);
+  // On this screen before it counts: a rebuild is held back while somebody's
+  // caret is in the table, and the caret is in it from typing the last line.
+  await page.locator('#ceilingInput').click();
+  await expect(page.locator('#budgetBody tr')).toHaveCount(2);
+
+  await flushToStorage(page);
+  // What the release before this one saved: no position on any row, and an
+  // edit on the first that never reached the server. The unsent edit is the
+  // half that matters, because it is what makes the page merge what it holds
+  // against the plan on arrival rather than take the plan whole, which is the
+  // only way in that reads those rows at all.
+  await page.evaluate((k) => {
+    const held = JSON.parse(localStorage.getItem(k));
+    held.state.budgetItems.forEach((row) => { delete row.position; });
+    held.state.budgetItems[0].item = 'Venue deposit (final)';
+    localStorage.setItem(k, JSON.stringify(held));
+  }, STORAGE_KEY);
+
+  await reloadSharedPlanner(page);
+  // What this browser now holds is where a move would come from: a number that
+  // disagrees with the base is a patch on the next pass, so the answer has to
+  // be settled here rather than raced against the write that follows.
+  await expect
+    .poll(async () => (await readStored(page)).state.budgetItems.map((i) => [i.item, i.position]))
+    .toEqual([['Venue deposit (final)', 0], ['Flowers', 2]]);
+
+  // And the carried edit arriving is the witness that the write pass has been
+  // and gone: anything queued beside it went out with it.
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.position]))
+    .toEqual([['Venue deposit (final)', 0], ['Flowers', 2]]);
+});

@@ -294,6 +294,20 @@
       <button class="add-row-btn" type="button" id="addSponsor" data-i18n="sp.add">Add sponsor</button>
     </section>
 
+    <!-- Two ways around a grid that has grown past a screenful: the order the
+         lines are in, which is the pair of arrows on every row, and a search
+         over what is written on them. The names already on the lines are
+         offered rather than typed out again: that is the list below, filled
+         in app.js from the callsigns and the vendors the plan holds. -->
+    <div class="grid-tools">
+      <div class="field">
+        <label for="budgetSearch" data-i18n="b.search">Search lines</label>
+        <input type="search" id="budgetSearch" list="budgetNames" autocomplete="off">
+        <datalist id="budgetNames"></datalist>
+      </div>
+      <p class="grid-count" id="budgetShown" role="status"></p>
+    </div>
+
     <div class="table-wrap">
       <table class="budget" id="budgetTable">
         <colgroup id="budgetCols"></colgroup>
@@ -307,7 +321,7 @@
             <th scope="col" class="right" data-i18n="f.outstanding">Outstanding</th>
             <th scope="col" data-i18n="c.by">Cost by</th>
             <th scope="col" data-i18n="c.remarks">Remarks</th>
-            <th scope="col"><span class="sr-only" data-i18n="c.remove">Remove</span></th>
+            <th scope="col"><span class="sr-only" data-i18n="c.rowtools">Order and remove</span></th>
           </tr>
         </thead>
         <tbody id="budgetBody"></tbody>

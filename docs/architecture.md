@@ -498,6 +498,33 @@ the first cell instead, which also carries the mark for a line whose decide-by
 date has gone by with nothing paid against it, which is the same rule the
 reminder digest reads the column by.
 
+`position` is a field of a budget line like any other, and of no other
+collection: this is the one table with an interface for it, which is a pair of
+arrows in the last cell of every row. A move renumbers the whole list from zero
+rather than swapping two numbers with each other, because two rows may hold the
+same one (the column has no unique constraint, and a row the API created
+without a position sits at 0), so a swap of a pair of equal numbers would move
+nothing. Only the rows whose number really changed become a patch, which for a
+move of one line is two of them. The grid draws by `position, id`, the order the
+server reads every collection in, so a duplicate between two browsers is still
+drawn the same way in both. A row saved by a release that had no such field
+takes the number the merge base holds for it rather than the place it sits in
+the list: the two part company the moment a line is deleted, and numbering by
+the list would be a move of everybody's rows, made by a page nobody had
+touched.
+
+The search above the grid is in none of that. It is a variable beside `state`
+and deliberately not in it, because everything in `state` is saved, sent and
+merged, and one person looking for the caterer must not narrow the grid for
+everybody else. It reads the item, the remark, the vendor and the callsigns
+covering the line, which is what makes "everything I am paying for" a name
+typed into one box; the names already on the lines are offered as a
+`<datalist>` so that a vendor written once is not written a second, slightly
+different way. The totals are the plan's throughout: a search is a way of
+reading the ledger, never a way of changing what it comes to. Moving a line
+while one is on moves it past the neighbour that can be seen, and the lines it
+is hiding keep their places.
+
 ### The one case where the browser wins
 
 Normally the server is simply right and what is on screen is a cached copy. Two
@@ -1024,7 +1051,9 @@ Three decisions worth stating explicitly:
   float64 and back exactly at every value it can hold. `inflationPct` and
   `fxRate` are numbers for the same reason.
 - **`position` replaces array order.** Order is meaningful in the UI and JSON
-  array order does not survive a relational round trip.
+  array order does not survive a relational round trip. The page writes it on
+  budget lines as an ordinary field, so moving one merges and carries a
+  revision exactly as a price does; see *State shape*.
 - **`revision` is per row**, bumped on every write. That is what makes conflict
   detection possible, and since migration 0009 every shared table has one —
   `phases` was the last exception, and two people renaming the same stage of
