@@ -22,7 +22,10 @@ SOIREE_DEMO_DATA=true go run ./cmd/soiree  # with obviously fake sample data
 ```
 
 The image is built with Go 1.27 and CI tests on the same version; `go.mod`
-declares 1.26 as the floor.
+declares that same release line as its floor, so the commands above compile
+with a toolchain this project tests rather than with an older one it does not.
+The floor used to sit a line behind, which is why a `govulncheck` run here
+found two dozen standard-library vulnerabilities that CI did not.
 
 ## Tests
 
