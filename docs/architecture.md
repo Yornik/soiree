@@ -238,6 +238,26 @@ never asked about twice.
 has no time to wait on a promise, and the whole point of a deferred write is
 that the round trip is not on the interaction path.
 
+### A tab that was left open
+
+The page asks to be installed, and a reminder tapped on the home screen focuses
+the window that is already there rather than loading a new one, so a planner
+open for days is the ordinary case. Nothing between renders reads the clock: a
+tab open across midnight kept yesterday's "days to go", and the day after the
+event it did not close the ledger. So `visibilitychange` to visible, a
+`pageshow` from the back/forward cache and the browser's `online` all call
+`applyMode()`, which re-reckons the day, the run-up and the archive lock
+together and is the same call every plan merge already makes.
+
+Where there is a database they also catch the page up. A pending write retry is
+brought forward — cleared first, because the resync defers itself for as long
+as that timer is booked, and without resetting the failure count, so the wait
+resumes if the origin is still away — and after an absence of more than 45
+seconds the plan is re-read. Most sleeps and network changes end with the
+browser noticing the dead socket and reconnecting, and every connection opens
+with a `resync`; the case this covers is the socket that is half-open, where
+`onerror` never fires and the heartbeat is a comment no script can see.
+
 ### Signing out forgets the plan
 
 The copy in `localStorage` is a ledger of people's names against money, on

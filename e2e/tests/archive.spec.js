@@ -195,6 +195,32 @@ test('a planner saved before this existed opens as a planner, not an archive', a
   expect(await readStored(page)).not.toBeNull();
 });
 
+/*
+ * Nothing between renders reads the clock, and a planner that is left open is
+ * the ordinary case rather than the odd one: the page asks to be installed,
+ * and a reminder tapped on the home screen focuses the window that is already
+ * there instead of loading a new one. So the day has to be reckoned again when
+ * somebody comes back to the tab, or the evening of the event is still "1 day
+ * to go" the morning after and the ledger never closes.
+ */
+test('a tab left open across the day closes the ledger when it is looked at again', async ({ page }) => {
+  await openAt(page, EVENT_DAY);
+  await expect(page.locator('#daysNum')).toHaveText('0');
+  await expect(page.locator('body')).not.toHaveClass(/is-archived/);
+
+  // Midnight passes with the tab in the background. Only the clock moves:
+  // nothing renders, exactly as nothing would.
+  await page.clock.setFixedTime(new Date(DAY_AFTER));
+  await expect(page.locator('body')).not.toHaveClass(/is-archived/);
+
+  // And it is looked at again.
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+
+  await expect(page.locator('body')).toHaveClass(/is-archived/);
+  await expect(page.locator('#daysLabel')).toHaveText('the ledger is closed');
+  await expect(page.locator('#archiveNote')).toBeVisible();
+});
+
 // The assertions below read Dutch, which this instance speaks because it is
 // served with SOIREE_LOCALE=nl-NL. The page asks the browser first, so the
 // browser here asks for a language there is no translation for — which is the

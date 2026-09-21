@@ -2749,10 +2749,50 @@
     if (saveTimer) flushSave();
   }
 
+  /* Coming back to a tab that was left open.
+   *
+   * Nothing between renders reads the clock, and a planner left open is the
+   * ordinary case here rather than the odd one: the page asks to be installed,
+   * and a reminder tapped on the home screen focuses the window that is
+   * already there instead of loading a new one. applyMode() re-reckons the
+   * day, the run-up and the archive lock together, and it is the same call
+   * every plan merge already makes, so nothing new can come of it.
+   *
+   * `now` is for the cases where the absence cannot be measured: the browser's
+   * word that the network is back, and a page restored from the back/forward
+   * cache.
+   */
+  var RESUME_RESYNC_MS = 45000;
+  var hiddenAt = 0;
+
+  function resumed(now) {
+    var away = hiddenAt ? Date.now() - hiddenAt : 0;
+    hiddenAt = 0;
+    applyMode();
+    if (!apiMode || sessionGone) return;
+    // A retry is waiting out a backoff measured against an origin that may
+    // well be reachable again, and runResync() defers itself for as long as
+    // that timer is booked. Cleared rather than reset: the failure count
+    // stays where it is, so the wait resumes if the origin is still away.
+    if (Sync.timer) { clearTimeout(Sync.timer); Sync.timer = null; Sync.run(); }
+    // Only after a real absence. A sleep or a network change can leave the
+    // event stream half-open with no error either side sees, and then this is
+    // the only thing that asks; an alt-tab has no such gap to close, and would
+    // cost a whole-plan read from wherever the origin is.
+    if (now || away > RESUME_RESYNC_MS) scheduleResync();
+  }
+
   window.addEventListener('pagehide', leaving);
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'hidden') leaving();
+    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); leaving(); return; }
+    resumed(false);
   });
+  // Restored from the back/forward cache: the document was never torn down, so
+  // it is as far behind as one that was merely hidden, and further.
+  window.addEventListener('pageshow', function (e) { if (e && e.persisted) resumed(true); });
+  // connect() has an 'online' listener of its own for the probe it is still
+  // waiting on. This is the other half: a planner that is already running.
+  window.addEventListener('online', function () { resumed(true); });
 
   /* ---------- Money formatting ----------
    * Formatters are built once. Intl.NumberFormat construction is expensive
