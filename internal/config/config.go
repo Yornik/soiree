@@ -646,6 +646,7 @@ func (c *Config) loadAccounts() error {
 		for _, f := range []struct{ name, value string }{
 			{"SOIREE_SMTP_FROM", c.SMTP.From},
 			{"SOIREE_SMTP_USER", c.SMTP.Username},
+			{"SOIREE_SMTP_PASSWORD", c.SMTP.Password},
 		} {
 			if f.value != "" {
 				return fmt.Errorf("%s is set but SOIREE_SMTP_HOST is not, so no mail can be sent", f.name)
