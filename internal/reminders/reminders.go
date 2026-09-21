@@ -10,11 +10,13 @@
 //
 // # Off unless asked for
 //
-// The scheduler does not run unless SOIREE_REMINDER_ENABLED is true, there are
-// recipients, and SMTP is configured. Missing SMTP is not a startup failure:
-// most ways of running this application do not send mail at all, and an
-// application that refuses to boot without a mail server is an application
-// that cannot be run locally.
+// The scheduler does not run unless SOIREE_REMINDER_ENABLED is true and at
+// least one channel is configured; SMTP or Web Push alone is enough. A
+// recipient is not a precondition, because the admins a digest goes to are
+// resolved per send and there may be none until somebody is made one. Missing
+// SMTP is not a startup failure: most ways of running this application do not
+// send mail at all, and an application that refuses to boot without a mail
+// server is an application that cannot be run locally.
 //
 // # Sending exactly once
 //

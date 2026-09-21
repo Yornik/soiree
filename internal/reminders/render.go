@@ -111,11 +111,22 @@ func build(d Digest) digestView {
 		Subject: subject(d),
 		Heading: heading(d),
 		Summary: summary(d),
+		// The footer names both reasons an address receives the digest and
+		// both of the things that stop it, rather than the one that applies,
+		// because a single body reaches every active admin and everything
+		// SOIREE_REMINDER_TO names, as well as somebody who is both, for whom
+		// either wording alone would be false. It used to describe a list
+		// that nothing has read since admins became recipients, and asked for
+		// the address to be taken off it, which neither the reader nor the
+		// person they asked could do.
 		Footer: fmt.Sprintf(
 			"Dates are the days recorded against each line, shown exactly as stored. "+
-				"Today is %s in %s.\nThis digest goes to the addresses on the reminder list; "+
-				"to stop receiving it, ask for this address to be taken off it.",
-			d.Today.Format(dayFormat), d.Zone),
+				"Today is %s in %s.\nYou receive this because you are an active admin "+
+				"of %s, or because whoever runs it added your address. There is no "+
+				"per-person off switch: the digest stops when that address is removed "+
+				"from the reminder settings, or when the account is no longer an "+
+				"active admin.",
+			d.Today.Format(dayFormat), d.Zone, orPlaceholder(d.EventName, "this event")),
 	}
 
 	if len(d.Deadlines) > 0 {

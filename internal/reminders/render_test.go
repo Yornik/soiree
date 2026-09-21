@@ -155,6 +155,9 @@ func TestRenderEscapesContent(t *testing.T) {
 
 func TestRenderHandlesBlankFields(t *testing.T) {
 	cfg := testConfig(t, "UTC", 14)
+	// A deployment that never set SOIREE_EVENT_NAME still sends a digest, and
+	// the footer names the event to say why the mail arrived.
+	cfg.EventName = ""
 	d := Compose(cfg, at(t, "2030-01-17T09:00:00Z"), []store.BudgetItem{
 		{LockBy: day(t, "2030-01-18")},
 	}, []store.Task{
@@ -171,6 +174,40 @@ func TestRenderHandlesBlankFields(t *testing.T) {
 	// No price and no vendor means no dangling separator.
 	if strings.Contains(msg.Text, "— ·") || strings.Contains(msg.Text, "· ·") {
 		t.Errorf("empty fields left a separator behind:\n%s", msg.Text)
+	}
+	if !strings.Contains(msg.Text, "active admin of this event") {
+		t.Errorf("an unnamed event left a gap where the footer says why this arrived:\n%s", msg.Text)
+	}
+}
+
+// The footer is the only part of a digest that says anything about the digest
+// itself, so what it says has to be true of the recipients this version has.
+// It used to describe a "reminder list" and ask the reader to have the address
+// taken off it; an active admin is on no such list, so neither they nor the
+// person they asked could act on that.
+func TestFooterSaysWhyItArrivedAndHowItStops(t *testing.T) {
+	_, text, html := renderFixture(t, "UTC")
+
+	for _, body := range []struct{ part, got string }{{"text", text}, {"html", html}} {
+		for _, gone := range []string{"reminder list", "taken off"} {
+			if strings.Contains(body.got, gone) {
+				t.Errorf("%s footer still points at a list nobody is on (%q):\n%s", body.part, gone, body.got)
+			}
+		}
+		// Both reasons an address receives the digest, and both of the things
+		// that stop it. One body says this to an admin and to a configured
+		// address alike, so leaving either half out makes it false for one of
+		// them.
+		for _, want := range []string{
+			"active admin of Ada's Leaving Do",
+			"added your address",
+			"reminder settings",
+			"no longer an active admin",
+		} {
+			if !strings.Contains(body.got, want) && !strings.Contains(body.got, htmlish(want)) {
+				t.Errorf("%s footer is missing %q:\n%s", body.part, want, body.got)
+			}
+		}
 	}
 }
 
