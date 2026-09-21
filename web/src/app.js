@@ -216,7 +216,9 @@
       'c.qty': 'Qty',
       'c.by': 'Cost by',
       'c.vendor': 'Vendor',
-      'c.lockby': 'Decide by',
+      'c.lockBy': 'Decide by',
+      'c.details': 'Vendor and decide-by date',
+      'c.lockhint': 'The date the decision has to be made, not the date the money moves.',
       'c.remarks': 'Remarks',
       'c.remove': 'Remove',
       't.totals': 'Totals',
@@ -378,7 +380,9 @@
       'c.qty': 'Aantal',
       'c.by': 'Rekening van',
       'c.vendor': 'Leverancier',
-      'c.lockby': 'Beslissen voor',
+      'c.lockBy': 'Beslissen voor',
+      'c.details': 'Leverancier en beslisdatum',
+      'c.lockhint': 'De datum waarop de knoop doorgehakt moet zijn, niet de datum waarop er betaald wordt.',
       'c.remarks': 'Opmerkingen',
       'c.remove': 'Verwijderen',
       't.totals': 'Totaal',
@@ -539,7 +543,9 @@
       'c.qty': 'Jumlah',
       'c.by': 'Ditanggung',
       'c.vendor': 'Vendor',
-      'c.lockby': 'Putuskan sebelum',
+      'c.lockBy': 'Putuskan sebelum',
+      'c.details': 'Vendor dan tanggal keputusan',
+      'c.lockhint': 'Tanggal keputusan harus diambil, bukan tanggal uangnya keluar.',
       'c.remarks': 'Catatan',
       'c.remove': 'Hapus',
       't.totals': 'Total',
@@ -727,13 +733,12 @@
   // They add up to 1240, which is the page (--page in styles.css, 1280) less
   // its gutters: the whole table, Remarks and the remove button included, is on
   // screen at once on a desktop. Widen one without narrowing another and the
-  // last columns go back to being reachable only by scrolling sideways.
-  // Vendor and the decide-by date were paid for out of the columns that wrap
-  // or hold a figure narrower than themselves, for the same reason: eleven
-  // columns still have to add up to 1240. The date is the one width here that
-  // was measured rather than chosen, because an <input type="date"> draws the
-  // whole of a date or clips it.
-  var DEFAULT_COL_WIDTHS = [152, 140, 70, 112, 96, 112, 135, 115, 104, 164, 40];
+  // last columns go back to being reachable only by scrolling sideways. That
+  // is also why the vendor and the decide-by date are behind a button in the
+  // first cell rather than in columns of their own: two more of these, paid
+  // for out of Remarks and the money, cost a five-word remark three lines and
+  // clipped a five-figure amount.
+  var DEFAULT_COL_WIDTHS = [230, 140, 70, 135, 110, 135, 135, 245, 40];
 
   function emptyState() {
     return {
@@ -985,10 +990,7 @@
     if (typeof state.fxRate !== 'number') state.fxRate = 0;
     if (typeof state.splitEvenly !== 'boolean') state.splitEvenly = false;
     if (typeof state.reopened !== 'boolean') state.reopened = false;
-    // Counted against the defaults rather than a number written out here: a
-    // saved copy from before a column existed has widths for a grid that is
-    // no longer this one, and dropping them costs one drag.
-    if (!Array.isArray(state.colWidths) || state.colWidths.length !== DEFAULT_COL_WIDTHS.length) {
+    if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) {
       state.colWidths = DEFAULT_COL_WIDTHS.slice();
     }
     if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
@@ -3832,7 +3834,11 @@
       if (el.tagName === 'SELECT' || el.type === 'checkbox') el.disabled = on;
       else el.readOnly = on;
     });
-    Array.prototype.forEach.call(wrap.querySelectorAll('.by-btn'), function (b) { b.disabled = on; });
+    // The two popups are the exception to readOnly: their fields are built on
+    // the body when the button is pressed, so there is nothing here to mark,
+    // and a browser's own calendar ignores readOnly on a date anyway. The way
+    // to leave a closed ledger alone is not to open them.
+    Array.prototype.forEach.call(wrap.querySelectorAll('.by-btn, .det-btn'), function (b) { b.disabled = on; });
     // Export stays open — an archive nobody can take a copy of is a worse
     // archive. Import does not: replacing the planner is an edit.
     var imp = document.getElementById('importData');
@@ -3981,6 +3987,135 @@
     // reaches the button by what is written on it.
     btn.setAttribute('aria-label', t('c.by') + ': ' + btn.textContent);
     btn.classList.toggle('none', !codes.length);
+  }
+
+  /* ---------- Vendor and decide-by ----------
+   * Who a line is with, and the date the decision has to be made: the two
+   * fields internal/reminders builds its "Decisions to lock in" section from,
+   * and the two the grid had nowhere to put. Nowhere is the operative word:
+   * DEFAULT_COL_WIDTHS adds up to the page, so a tenth and an eleventh column
+   * come out of the nine that are there, and the ones with room to give are
+   * the remark and the money.
+   *
+   * So they sit behind a button in the first cell, beside the paperclip and
+   * for the same reason: that column is frozen, so whatever has scrolled away
+   * a line still says whether a decision is waiting on it.
+   */
+  function detailsIcon() {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '15');
+    svg.setAttribute('height', '15');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    [6, 12, 18].forEach(function (x) {
+      var dot = document.createElementNS(NS, 'circle');
+      dot.setAttribute('cx', String(x));
+      dot.setAttribute('cy', '12');
+      dot.setAttribute('r', '1.9');
+      dot.setAttribute('fill', 'currentColor');
+      svg.appendChild(dot);
+    });
+    return svg;
+  }
+
+  function addDetailsButton(td, item, tr) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'det-btn';
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.appendChild(detailsIcon());
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      openDetails(btn, item, tr);
+    });
+    td.appendChild(btn);
+    setDetailsLabel(btn, item);
+  }
+
+  // What the button says about the line it is on, which is all the row says
+  // about these two fields: whether either is filled in, and whether the date
+  // has gone by. A colour alone would say it to nobody using a reader.
+  function setDetailsLabel(btn, item) {
+    if (!btn) return;
+    var late = isLate(item);
+    btn.classList.toggle('has-some', !!(item.vendor || item.lockBy));
+    btn.setAttribute('aria-label', late ? t('c.details') + ' (' + t('k.late') + ')' : t('c.details'));
+    btn.title = btn.getAttribute('aria-label');
+  }
+
+  function openDetails(btn, item, tr) {
+    closePop();
+    var pop = document.createElement('div');
+    pop.className = 'sp-pop det-pop';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', t('c.details'));
+
+    function field(key, type, read, write) {
+      var wrap = document.createElement('label');
+      wrap.className = 'det-field';
+      var name = document.createElement('span');
+      name.textContent = t(key);
+      var inp = document.createElement('input');
+      inp.type = type;
+      inp.value = read();
+      inp.addEventListener('input', function () {
+        write(inp.value);
+        save();
+        // The date decides whether the line is late and the vendor whether
+        // the button is lit, and both are read off `item` rather than passed
+        // in, so one call covers either field.
+        refreshRow(tr, item);
+      });
+      wrap.appendChild(name);
+      wrap.appendChild(inp);
+      pop.appendChild(wrap);
+      return inp;
+    }
+
+    var vendor = field('c.vendor', 'text',
+      function () { return item.vendor || ''; },
+      function (v) { item.vendor = v; });
+    // An emptied date is stored as '' and goes to the API as null, which is
+    // how a decision is told it no longer has a deadline (dateField).
+    field('c.lockBy', 'date',
+      function () { return item.lockBy || ''; },
+      function (v) { item.lockBy = v; });
+
+    var note = document.createElement('div');
+    note.className = 'pop-note';
+    note.textContent = t('c.lockhint');
+    pop.appendChild(note);
+
+    pop.tabIndex = -1;
+    pop.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.stopPropagation(); closePop(true); }
+    });
+    pop.addEventListener('focusout', function (e) {
+      if (pop.contains(e.relatedTarget)) return;
+      // A browser opens its own calendar for a date field, and while that is
+      // up the page holds no focus at all. Closing on that would take the
+      // calendar with it, so only focus landing somewhere else on the page
+      // dismisses this.
+      if (!e.relatedTarget) return;
+      closePop(false);
+    });
+
+    document.body.appendChild(pop);
+    var r = btn.getBoundingClientRect();
+    var top = r.bottom + 4;
+    if (top + pop.offsetHeight > window.innerHeight - 8) {
+      top = Math.max(8, r.top - pop.offsetHeight - 4);
+    }
+    var left = Math.min(r.left, window.innerWidth - pop.offsetWidth - 8);
+    pop.style.top = top + 'px';
+    pop.style.left = Math.max(8, left) + 'px';
+    openPop = pop;
+    openBtn = btn;
+    btn.setAttribute('aria-expanded', 'true');
+    vendor.focus();
   }
 
 
@@ -4578,7 +4713,7 @@
     var body = document.getElementById('budgetBody');
     body.innerHTML = '';
     if (!state.budgetItems.length) {
-      emptyRow(body, 11, t('b.empty'));
+      emptyRow(body, 9, t('b.empty'));
     }
     state.budgetItems.forEach(function (item) {
       var tr = document.createElement('tr');
@@ -4663,27 +4798,6 @@
 
       var tdNote = textCell('note', 'c.remarks', 'note-cell');
 
-      var tdVendor = textCell('vendor', 'c.vendor', 'vendor-cell');
-
-      /* The date a decision has to be made, which is not the date the money
-       * moves: a quote expires or a slot goes. It is the column the reminder
-       * digest is built from (every line with a date, nothing paid against it
-       * and the date inside the window, internal/reminders/digest.go), so
-       * until there was a field here that half of the digest had no way of
-       * ever filling. */
-      var tdLock = document.createElement('td');
-      tdLock.className = 'lock-cell';
-      var lockInput = document.createElement('input');
-      lockInput.type = 'date';
-      lockInput.setAttribute('aria-label', t('c.lockby'));
-      lockInput.value = item.lockBy || '';
-      lockInput.addEventListener('input', function () {
-        item.lockBy = lockInput.value;
-        save();
-        refreshRow(tr, item);
-      });
-      tdLock.appendChild(lockInput);
-
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
       // The column heading travels with the cell. A phone stacks this row into
@@ -4696,8 +4810,6 @@
       label(tdOwing, 'f.outstanding');
       label(tdBy, 'c.by');
       label(tdNote, 'c.remarks');
-      label(tdVendor, 'c.vendor');
-      label(tdLock, 'c.lockby');
       label(tdDel, 'c.remove');
       tdDel.appendChild(delButton(t('b.del'), function () {
         // The row's files go with it, out of the plan and then out of the
@@ -4718,6 +4830,7 @@
         focusAfterRemove(at, '#budgetBody tr', 'textarea', 'addBudgetRow');
       }));
 
+      addDetailsButton(tdItem, item, tr);
       addFilesButton(tdItem, 'budget', item);
 
       tr.appendChild(tdItem);
@@ -4728,8 +4841,6 @@
       tr.appendChild(tdOwing);
       tr.appendChild(tdBy);
       tr.appendChild(tdNote);
-      tr.appendChild(tdVendor);
-      tr.appendChild(tdLock);
       tr.appendChild(tdDel);
       body.appendChild(tr);
 
@@ -4755,9 +4866,15 @@
     tr.classList.toggle('settled', tot > 0 && owing <= 0);
     // A decide-by date that has gone by with nothing paid against the line,
     // which is the reminder digest's own rule: money against a line is the
-    // decision having been made, so a paid line is never late for it.
-    tr.classList.toggle('late',
-      !!item.lockBy && !(Number(item.paid) || 0) && String(item.lockBy) < todayISO());
+    // decision having been made, so a paid line is never late for it. Paying
+    // it is one of the things that happens in this row, which is why the
+    // marker is settled here and not only where the date is typed.
+    tr.classList.toggle('late', isLate(item));
+    setDetailsLabel(tr.querySelector('.det-btn'), item);
+  }
+
+  function isLate(item) {
+    return !!item.lockBy && !(Number(item.paid) || 0) && String(item.lockBy) < todayISO();
   }
 
   document.getElementById('addBudgetRow').addEventListener('click', function () {
@@ -5137,7 +5254,7 @@
         state = incoming;
         if (!Array.isArray(state.sponsors)) state.sponsors = [];
         if (!Array.isArray(state.notes)) state.notes = [];
-        if (!Array.isArray(state.colWidths) || state.colWidths.length !== DEFAULT_COL_WIDTHS.length) state.colWidths = DEFAULT_COL_WIDTHS.slice();
+        if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) state.colWidths = DEFAULT_COL_WIDTHS.slice();
         if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
         if (typeof state.fxRate !== 'number') state.fxRate = Number(state.eurRate) || 0;
         if (typeof state.reopened !== 'boolean') state.reopened = false;

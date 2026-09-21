@@ -358,7 +358,7 @@ units as integers and converts once at the end.
 ```
 {
   ceiling, inflationPct, fxRate, splitEvenly, reopened,
-  colWidths: [11 numbers], rowHeights: { itemId: px },
+  colWidths: [9 numbers], rowHeights: { itemId: px },
   sponsors:    [ { id, code, name } ],
   budgetItems: [ { id, item, vendor, unit, qty, paid,
                    sponsors: [sponsorId], note, lockBy } ],
@@ -374,6 +374,13 @@ breakdown divides it between them or reports it as a shared bucket.
 `colWidths`, `rowHeights` and `reopened` have no column behind them and survive
 an adopted plan untouched — one person dragging a column must not resize it for
 everybody.
+
+`vendor` and `lockBy` are fields of the line with no column of their own: the
+nine widths above are measured against the width of the page, so two more can
+only be paid for out of the remark and the money. They sit behind a button in
+the first cell instead, which also carries the mark for a line whose decide-by
+date has gone by with nothing paid against it, which is the same rule the
+reminder digest reads the column by.
 
 ### The one case where the browser wins
 

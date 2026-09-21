@@ -63,6 +63,7 @@ const {
   flushToStorage,
   gotoTab,
   readStored,
+  openLineDetails,
   openSharedPlanner,
   reloadSharedPlanner,
   resetPlan,
@@ -1847,29 +1848,30 @@ test('an import made after signing out and back in reaches the server', async ({
  * internal/reminders since the plan tables were written, and the grid drew
  * neither: the digest's "Decisions to lock in" section could only be filled by
  * somebody writing to /api/v1 by hand, which is nobody. This is the round trip
- * from the column to the server and back to null.
+ * from the field to the server and back to null.
  */
-test('a vendor and a decide-by date typed into the grid reach the server', async ({ page, request }) => {
+test('a vendor and a decide-by date typed into the line reach the server', async ({ page, request }) => {
   await openSharedPlanner(page);
   await gotoTab(page, 'budget');
   const row = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 0 });
 
-  await row.vendor.fill('The Orangery');
-  await row.lockBy.fill('2030-05-01');
+  const details = await openLineDetails(row);
+  await details.vendor.fill('The Orangery');
+  await details.lockBy.fill('2030-05-01');
 
   await expect
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.vendor, i.lockBy]), {
-      message: 'the two columns should travel like every other field on the line',
+      message: 'the two fields should travel like every other field on the line',
     })
     .toEqual([['Venue deposit', 'The Orangery', '2030-05-01']]);
 
   // An emptied date goes as null, which is how the API is told a decision no
   // longer has a deadline. "" is not a date and is a 400 that would park the
   // whole line.
-  await row.lockBy.fill('');
+  await details.lockBy.fill('');
   await expect
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.lockBy), {
-      message: 'clearing the date should clear the column, not refuse the write',
+      message: 'clearing the date should clear the field, not refuse the write',
     })
     .toEqual([null]);
 });
