@@ -136,3 +136,17 @@ func TestThePublishedImageCarriesTheLicencesItRedistributes(t *testing.T) {
 		}
 	}
 }
+
+// Every job here runs because somebody pushed, and the advisory database does
+// not wait for a commit: main becomes vulnerable on the day a report is
+// published against a module it already depends on. Private vulnerability
+// alerts are off, so with nothing running on a clock, a quiet week is
+// indistinguishable from a safe one.
+func TestVulnerabilitiesAreScannedOnASchedule(t *testing.T) {
+	for _, text := range workflowSources(t) {
+		if strings.Contains(text, "cron:") && strings.Contains(text, "govulncheck") {
+			return
+		}
+	}
+	t.Fatal("no workflow runs govulncheck on a schedule, so a vulnerability published between two pushes is reported by nothing until somebody happens to open a pull request")
+}
