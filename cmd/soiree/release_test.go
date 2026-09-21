@@ -27,10 +27,11 @@ type workflowFile struct {
 }
 
 type workflowJob struct {
-	Needs jobNames       `yaml:"needs"`
-	If    string         `yaml:"if"`
-	Uses  string         `yaml:"uses"`
-	Steps []workflowStep `yaml:"steps"`
+	Needs       jobNames         `yaml:"needs"`
+	If          string           `yaml:"if"`
+	Uses        string           `yaml:"uses"`
+	Concurrency concurrencyGroup `yaml:"concurrency"`
+	Steps       []workflowStep   `yaml:"steps"`
 }
 
 type workflowStep struct {
@@ -54,6 +55,30 @@ func (n *jobNames) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	*n = many
+	return nil
+}
+
+// concurrencyGroup reads `concurrency:` in either form GitHub accepts: the
+// group name on its own, or a mapping that also says what happens to a run
+// already in flight.
+type concurrencyGroup struct {
+	Group            string `yaml:"group"`
+	CancelInProgress any    `yaml:"cancel-in-progress"`
+}
+
+func (c *concurrencyGroup) UnmarshalYAML(value *yaml.Node) error {
+	var name string
+	if err := value.Decode(&name); err == nil {
+		c.Group = name
+		return nil
+	}
+	// A named type, so decoding the mapping does not call this method again.
+	type mapping concurrencyGroup
+	var m mapping
+	if err := value.Decode(&m); err != nil {
+		return err
+	}
+	*c = concurrencyGroup(m)
 	return nil
 }
 
@@ -231,5 +256,45 @@ func TestATagOffMainIsNotReleased(t *testing.T) {
 	}
 	if gated == 0 {
 		t.Fatal("no publishing job is gated on a tag ref, so this test read nothing")
+	}
+}
+
+// Both publishing jobs write `:latest` and nothing orders them. Two releases
+// cut close together, which is how this project releases, run their checks in
+// parallel and finish in whichever order the runners take, so the floating tag
+// can end up on the earlier digest while the release notes name the later one.
+// Both runs are green and both signatures verify, since each verifies its own
+// digest, so nothing reports it: the symptom is what somebody who followed
+// README.md and pulled `:latest` is running, which SECURITY.md defines as the
+// supported version.
+func TestTwoReleasesDoNotRaceForTheFloatingTag(t *testing.T) {
+	groups := make(map[string]int)
+	for name, jobs := range releaseJobs(t) {
+		for id, j := range jobs {
+			switch {
+			case j.Concurrency.Group == "":
+				t.Errorf(".github/workflows/%s: job %q publishes :latest in no concurrency group, so a release that started later can overtake it and leave the floating tag on the older digest",
+					name, id)
+			case strings.Contains(j.Concurrency.Group, "${{"):
+				t.Errorf(".github/workflows/%s: job %q is in concurrency group %q, which expands to something different in every run, so it serialises nothing",
+					name, id, j.Concurrency.Group)
+			default:
+				groups[j.Concurrency.Group]++
+			}
+			// The queue has to wait rather than replace: cancelling a release
+			// between the push and the signature leaves an unsigned image in
+			// the registry under a tag that says it is a release.
+			if truthy(j.Concurrency.CancelInProgress) {
+				t.Errorf(".github/workflows/%s: job %q cancels a release that is already publishing, which can stop it between pushing the image and signing it",
+					name, id)
+			}
+		}
+	}
+	// Groups are repository-wide, so one name shared by both files is what
+	// makes a hand-pushed tag and a release-please release wait for each other
+	// rather than each only for itself.
+	if len(groups) > 1 {
+		t.Errorf("the publishing jobs are spread over %d concurrency groups (%v), and a group serialises only against itself, so the two release paths still race",
+			len(groups), groups)
 	}
 }

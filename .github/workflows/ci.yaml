@@ -34,6 +34,20 @@ jobs:
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     needs: checks
     runs-on: ubuntu-latest
+    # Both release paths move the same floating tag and nothing else orders
+    # them, so two releases cut minutes apart finish in whichever order their
+    # runners take and `:latest` keeps whichever landed last. Both runs are
+    # green and both signatures verify, since each verifies its own digest, so
+    # nothing reports it. The group name is shared with release-please.yaml,
+    # because a group serialises only against itself. It sits on the job rather
+    # than on the workflow so that what queues is the push and the signature, a
+    # couple of minutes, instead of the whole check suite: a job joins its group
+    # only once `needs` is satisfied. cancel-in-progress stays false, since
+    # stopping a release between pushing the image and signing it is worse than
+    # the race.
+    concurrency:
+      group: release-image
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write

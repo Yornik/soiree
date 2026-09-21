@@ -50,6 +50,12 @@ jobs:
     needs: [release-please, checks]
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
+    # The group ci.yaml's release-image job is in, for the reason written
+    # there: both jobs move `:latest`, and a group serialises only against
+    # itself, so the name has to be the same one in both files.
+    concurrency:
+      group: release-image
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
