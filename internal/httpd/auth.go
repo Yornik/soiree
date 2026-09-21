@@ -1110,7 +1110,10 @@ func (a *Auth) handleRevokeCredentials(w http.ResponseWriter, r *http.Request) {
 		a.userError(w, err, "read user")
 		return
 	}
-	if err := a.store.RevokeCredentials(r.Context(), id); err != nil {
+	// Named as the actor of the entry the revocation records. There is always
+	// one: the route is registered behind RequireRole(admin), which is also
+	// what the self-check above already relies on.
+	if err := a.store.RevokeCredentials(r.Context(), id, &actor.ID); err != nil {
 		a.log.Error("could not revoke credentials", "user", id, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "")
 		return

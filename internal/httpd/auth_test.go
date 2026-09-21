@@ -992,6 +992,37 @@ func TestRevokingCredentialsIsAdminOnlyAndNotOnOneself(t *testing.T) {
 	}
 }
 
+// The store records who revoked, and the session making the request is the
+// only place that answer exists. This route is not under withActor, the
+// accounts surface being mounted on the main mux, so the handler is what
+// carries it and one that stopped would leave an entry naming nobody.
+func TestRevokingCredentialsRecordsTheAdminWhoDidIt(t *testing.T) {
+	f := newFixture(t, false)
+	ada := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	grace := f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/revoke-credentials", nil, admin)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke: status %d, body %s", rec.Code, rec.Body)
+	}
+
+	entries, err := f.store.ChangeHistory(t.Context(), store.EntityUsers, grace.ID, store.HistoryPage{})
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("the revocation left nothing in the change log")
+	}
+	entry := entries[0]
+	if _, recorded := entry.Changes["credentials"]; !recorded {
+		t.Fatalf("the newest entry is not the revocation: %v", entry.Changes)
+	}
+	if entry.ActorID == nil || *entry.ActorID != ada.ID {
+		t.Errorf("actor = %v, want the admin who called it", entry.ActorID)
+	}
+}
+
 func TestAnAdminCannotLockThemselvesOut(t *testing.T) {
 	f := newFixture(t, false)
 	ada := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
