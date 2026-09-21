@@ -223,6 +223,7 @@
       'b.reset': 'Reset column & row sizes',
       'b.del': 'Remove budget line',
       'b.confirmdel': 'Files on this line: {n}. They go with it and cannot be recovered. Remove the line?',
+      'b.confirmdelunknown': 'The files on this line cannot be counted until this browser has the planner from the server. Any there are go with it, for everyone, and cannot be recovered. Remove the line?',
       'b.gripcol': 'Drag to resize column',
       'b.griprow': 'Drag to resize row',
       'sl.title': 'Who’s covering what',
@@ -240,6 +241,7 @@
       'k.nofilter': 'No tasks with that status.',
       'k.del': 'Remove task',
       'k.confirmdel': 'Files on this task: {n}. They go with it and cannot be recovered. Remove the task?',
+      'k.confirmdelunknown': 'The files on this task cannot be counted until this browser has the planner from the server. Any there are go with it, for everyone, and cannot be recovered. Remove the task?',
       'f.open': 'Files on this row: {n}',
       'f.title': 'Files',
       'f.none': 'No files yet.',
@@ -278,6 +280,7 @@
       'd.gone': 'Someone else removed the line you were editing. Your changes to it are gone with it.',
       'd.offline': 'Your changes are not reaching the server. Still trying — they are safe in this browser meanwhile.',
       'd.online': 'Back in touch with the server. Everything is saved.',
+      'd.carried': 'Changes made in this browser that had not reached the server: {n}. They are going up now.',
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
       'd.session': 'Your session has ended. Sign in again — what you changed is safe in this browser and is sent as soon as you are back.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
@@ -379,6 +382,7 @@
       'b.reset': 'Kolom- en rijafmetingen herstellen',
       'b.del': 'Post verwijderen',
       'b.confirmdel': 'Bestanden bij deze post: {n}. Die gaan mee en zijn niet terug te halen. Post verwijderen?',
+      'b.confirmdelunknown': 'De bestanden bij deze post zijn niet te tellen zolang deze browser de planner niet van de server heeft. Wat er staat gaat mee, voor iedereen, en is niet terug te halen. Post verwijderen?',
       'b.gripcol': 'Sleep om de kolom breder te maken',
       'b.griprow': 'Sleep om de rij hoger te maken',
       'sl.title': 'Wie betaalt wat',
@@ -396,6 +400,7 @@
       'k.nofilter': 'Geen taken met die status.',
       'k.del': 'Taak verwijderen',
       'k.confirmdel': 'Bestanden bij deze taak: {n}. Die gaan mee en zijn niet terug te halen. Taak verwijderen?',
+      'k.confirmdelunknown': 'De bestanden bij deze taak zijn niet te tellen zolang deze browser de planner niet van de server heeft. Wat er staat gaat mee, voor iedereen, en is niet terug te halen. Taak verwijderen?',
       'f.open': 'Bestanden bij deze regel: {n}',
       'f.title': 'Bestanden',
       'f.none': 'Nog geen bestanden.',
@@ -434,6 +439,7 @@
       'd.gone': 'Iemand anders heeft de regel die jij aan het bewerken was verwijderd. Jouw wijzigingen daaraan zijn ermee weg.',
       'd.offline': 'Je wijzigingen bereiken de server niet. Er wordt opnieuw geprobeerd — ondertussen staan ze veilig in deze browser.',
       'd.online': 'Weer verbinding met de server. Alles is opgeslagen.',
+      'd.carried': 'Wijzigingen in deze browser die de server niet hadden bereikt: {n}. Ze worden nu verstuurd.',
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
       'd.session': 'Je sessie is verlopen. Meld je opnieuw aan — je wijzigingen staan veilig in deze browser en worden verstuurd zodra je terug bent.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
@@ -534,6 +540,7 @@
       'b.reset': 'Atur ulang ukuran kolom & baris',
       'b.del': 'Hapus baris anggaran',
       'b.confirmdel': 'Berkas di baris ini: {n}. Semuanya ikut terhapus dan tidak bisa dikembalikan. Hapus baris ini?',
+      'b.confirmdelunknown': 'Berkas di baris ini belum bisa dihitung selama browser ini belum mengambil perencana dari server. Yang ada ikut terhapus, untuk semua orang, dan tidak bisa dikembalikan. Hapus baris ini?',
       'b.gripcol': 'Seret untuk mengubah lebar kolom',
       'b.griprow': 'Seret untuk mengubah tinggi baris',
       'sl.title': 'Siapa menanggung apa',
@@ -551,6 +558,7 @@
       'k.nofilter': 'Tidak ada tugas dengan status itu.',
       'k.del': 'Hapus tugas',
       'k.confirmdel': 'Berkas di tugas ini: {n}. Semuanya ikut terhapus dan tidak bisa dikembalikan. Hapus tugas ini?',
+      'k.confirmdelunknown': 'Berkas di tugas ini belum bisa dihitung selama browser ini belum mengambil perencana dari server. Yang ada ikut terhapus, untuk semua orang, dan tidak bisa dikembalikan. Hapus tugas ini?',
       'f.open': 'Berkas di baris ini: {n}',
       'f.title': 'Berkas',
       'f.none': 'Belum ada berkas.',
@@ -589,6 +597,7 @@
       'd.gone': 'Orang lain menghapus baris yang sedang kamu ubah. Perubahanmu pada baris itu ikut hilang.',
       'd.offline': 'Perubahanmu belum sampai ke server. Masih dicoba lagi — sementara ini aman tersimpan di browser.',
       'd.online': 'Terhubung lagi dengan server. Semuanya tersimpan.',
+      'd.carried': 'Perubahan di browser ini yang belum sampai ke server: {n}. Semuanya dikirim sekarang.',
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
       'd.session': 'Sesimu sudah berakhir. Masuk lagi — perubahanmu aman tersimpan di browser ini dan dikirim begitu kamu kembali.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
@@ -909,7 +918,9 @@
       // The base travels with the state or not at all: with no database there
       // is no base, and a bare state is also what every save before this one
       // looks like, which Store.read has to go on accepting.
-      var value = shadow ? { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys } : s;
+      var value = shadow
+        ? { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys, createBodies: createBodies }
+        : s;
       try { localStorage.setItem(this.key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
     },
     clear: function () {
@@ -924,13 +935,14 @@
   // copy in existence", and adopt() has to know which it is looking at.
   var hadSavedCopy = false;
   // The merge base the last page left behind, the ids it had adopted by then,
-  // and the names it had given the creates it had not sent. All three are
-  // installed further down, where the shadow they belong to is declared; what
-  // matters here is that they are taken out of the same value as the state, so
-  // they cannot be from different moments.
+  // and the names and bodies it had given the creates it had not sent. All
+  // four are installed further down, where the shadow they belong to is
+  // declared; what matters here is that they are taken out of the same value
+  // as the state, so they cannot be from different moments.
   var savedBase = null;
   var savedIdMap = null;
   var savedCreateKeys = null;
+  var savedCreateBodies = null;
   try {
     var saved = Store.read();
     hadSavedCopy = saved !== null;
@@ -938,6 +950,7 @@
       savedBase = saved.shadow;
       savedIdMap = saved.idMap;
       savedCreateKeys = saved.createKeys;
+      savedCreateBodies = saved.createBodies;
       saved = saved.state;
     }
     state = saved || (CONFIG.demoData ? demoState() : emptyState());
@@ -1002,6 +1015,12 @@
   var shadow = null;       // rows as the server last confirmed them (restored below)
   var idMap = {};          // this browser's optimistic ids -> the server's uuids
   var createKeys = {};     // and the uuid each unsent create names itself by
+  // The row each unsent create posted the first time, which is the row the
+  // server holds if that POST committed and its answer was lost. Kept apart
+  // from `state`, which is the row as it stands now: the difference between
+  // the two is exactly what somebody typed while the answer was not arriving,
+  // and sendCreate needs both to tell it from somebody else's write.
+  var createBodies = {};
   var blocked = {};        // writes the server refused, parked until they change
 
   // Backoff for a write that got no answer. Doubling from a second, capped,
@@ -1049,6 +1068,41 @@
       canon: function (r) { return Number(r[name]) || 0; },
       wire: function (r) { return Number(r[name]) || 0; },
       read: function (v) { return Number(v) || 0; },
+      copy: function (v) { return v; }
+    };
+  }
+  /* A quantity, held to the column that stores it.
+   *
+   * `numeric(12,3)` keeps three decimals, and the server refuses a fourth
+   * rather than rounding it away: a figure it rounded would come back as one
+   * this page never sent, and the difference between them is one no further
+   * write can close. That refusal parks the whole row until something in it
+   * changes, so a third of a case divided out by hand (0.3333) costs the
+   * line its create and everything typed on it, not merely the decimal.
+   *
+   * So the rounding happens here instead, the way money's does: canon, wire
+   * and the cell that writes the figure all hold the same rounded value, and
+   * the difference converges rather than going again on every pass.
+   */
+  var QTY_SCALE = 1000;
+  var QTY_LIMIT = 999999999.999;
+  function toQty(v) {
+    var n = Number(v) || 0;
+    if (n > QTY_LIMIT) n = QTY_LIMIT;
+    if (n < -QTY_LIMIT) n = -QTY_LIMIT;
+    // Exact over the whole range: under the bound above, n * 1000 is below
+    // 2^53, so the product of a quantity the column can hold is the integer
+    // itself. The two settings rates are bounded the same way and are not:
+    // maxFxRate times its scale is past 2^53, which is why the server counts
+    // their decimals instead of multiplying.
+    return Math.round(n * QTY_SCALE) / QTY_SCALE;
+  }
+  function qtyField(name) {
+    return {
+      name: name,
+      canon: function (r) { return toQty(r[name]); },
+      wire: function (r) { return toQty(r[name]); },
+      read: function (v) { return toQty(v); },
       copy: function (v) { return v; }
     };
   }
@@ -1128,7 +1182,7 @@
     {
       key: 'budgetItems', route: 'budget-items', entity: 'budget_items', container: 'budgetBody',
       fields: [
-        textField('item'), moneyField('unit'), numberField('qty'),
+        textField('item'), moneyField('unit'), qtyField('qty'),
         moneyField('paid'), textField('note'), idsField('sponsors')
       ],
       render: function () { renderBudgetTable(); renderBudgetTotals(); renderOverview(); }
@@ -1289,6 +1343,7 @@
   shadow = baseFromStored(savedBase);
   if (shadow && savedIdMap) idMap = savedIdMap;
   if (shadow && savedCreateKeys) createKeys = savedCreateKeys;
+  if (shadow && savedCreateBodies) createBodies = savedCreateBodies;
 
   // The server's answer to a write is the row as it now stands, so it is also
   // the new agreed version. Stored as its own object: a shadow that shared
@@ -1467,23 +1522,72 @@
     // the server, so there is nothing to create and nothing to delete either.
     if (!row) {
       delete createKeys[op.id];
+      delete createBodies[op.id];
       return Promise.resolve(true);
     }
 
+    // The row as it stands now, and that is what goes on the wire every time.
+    // Freezing it would be the shorter way to the base kept below, and it
+    // would strand every create the server refuses: planOps lets a parked
+    // write go again once the row changes (opSignature), and a body that
+    // could not change would carry the refused values up again for ever.
     var body = {};
     c.fields.forEach(function (f) { body[f.name] = f.wire(row); });
     body.position = nextPosition(c);
     body.id = createKeyFor(op.id);
 
+    // The row as it was posted the first time, kept because a retry's body
+    // cannot stand in for it: anything typed since is already in that one.
+    var posted = createBodies[op.id];
+    if (!posted) {
+      posted = createBodies[op.id] = body;
+      // Kept before the request goes, for the reason createKeyFor keeps the
+      // name: the retry that needs it may be on the other side of a reload.
+      Store.keep();
+    }
+
     return api('POST', '/' + c.route, body).then(function (res) {
       // 200 is this same create answered a second time: the first attempt
       // committed and its answer was lost, so what comes back is the row as
-      // stored rather than a second one. Anything typed since is a difference
-      // from it, and goes up as the next pass's patch.
+      // stored rather than a second one.
+      //
+      // Whether the row as stored is still the row this browser posted is its
+      // revision. At 1 nobody has written it since, so the answer and the
+      // first POST say the same thing, and anything typed here since is a
+      // difference from both that goes up as the next pass's patch.
+      //
+      // Above 1 somebody else wrote the line while the answer was not
+      // arriving, and taking their row as the agreed version is what makes
+      // that difference dangerous: this browser's copy, untouched since it was
+      // typed, becomes a difference against the revision that now stands, so
+      // the patch that follows puts the values of a row nobody has looked at
+      // since over theirs and cannot 409. It is the one place the resync gate
+      // cannot cover, because this is the write pass. So their row is
+      // reconciled against the row as posted, the way a 409 is: a field only
+      // they changed stays theirs, a field changed here since goes again, and
+      // they are told rather than quietly overwritten.
       if ((res.status === 201 || res.status === 200) && res.body && res.body.id) {
         adoptServerId(c, op.id, res.body.id);
         delete createKeys[op.id];
-        shadowPut(c, res.body);
+        delete createBodies[op.id];
+        if (res.status === 200 && (Number(res.body.revision) || 0) > 1) {
+          // The version both edits started from is the row as it was posted
+          // the first time, since that is the one the server stored, so that
+          // is what the merge is given as the agreed one. Not this attempt's
+          // body: a correction typed while the answer was not arriving is in
+          // that one already, and the merge would read it as nobody's change
+          // and put the committed value back over it. Its revision is never
+          // read: reconcile replaces it with the one that came back.
+          shadow[c.key][res.body.id] = { row: rowFromWire(c, posted), revision: 0 };
+          reconcile({ kind: 'update', coll: c, id: res.body.id, fields: [] }, res.body);
+          // What shadowPut keeps for a create that landed, and for the same
+          // reason: the row is in the state and the shadow under the server's
+          // id, and a page that came back holding only the state would post it
+          // all over again.
+          Store.keep();
+        } else {
+          shadowPut(c, res.body);
+        }
         return true;
       }
       return writeFailed(op, res);
@@ -2043,6 +2147,7 @@
     blocked = {};
     idMap = {};
     createKeys = {};
+    createBodies = {};
     pendingRefresh = {};
     loaded = JSON.parse(JSON.stringify(state));
     Sync.queued = false;
@@ -2147,7 +2252,17 @@
     // reload as it was before one. Asked before the base is replaced, because
     // the base is what those edits are a difference from.
     var base = shadow;
-    if (base && planOps().length) dirty = true;
+    var carried = base ? planOps().length : 0;
+    if (carried) {
+      dirty = true;
+      // Counted out loud, because the page that typed this work is not always
+      // the page sending it and the account sending it is not always the one
+      // that typed it: a base that outlives its page carries whatever was left
+      // unsent into the next sign-in, and the change feed will name whoever
+      // signed in. The ordinary case reads the same way: an outage that
+      // ended while the tab was closed sent its edits with nothing said.
+      flash(t('d.carried', { n: carried }));
+    }
 
     shadow = shadowFromPlan(plan);
     apiMode = true;
@@ -3851,6 +3966,17 @@
   // Only once the plan has come from the server: before that this browser does
   // not know whether there is a server, and afterwards it may have lost it.
   function filesOffered() { return !!FILES && apiMode && !sessionGone; }
+
+  // Whether a count of zero on this row is an answer or only ignorance. The
+  // list arrives with the plan and with nothing else, so on a page painted
+  // from this browser's copy, with the origin away, or a session that ended
+  // before the reload, or simply the gap before the first read lands, it is
+  // empty because nothing has filled it. A row under an id this browser
+  // minted has never been sent and can have no files whatever the page knows,
+  // which is the one case where the empty list is the truth.
+  function filesUncounted(id) {
+    return !!FILES && !apiMode && SERVER_ID.test(String(id));
+  }
   function canChangeFiles() {
     return (sessionRole === 'admin' || sessionRole === 'editor') &&
       !document.body.classList.contains('is-archived');
@@ -4389,7 +4515,10 @@
         return td;
       }
 
-      function numCell(key, step) {
+      // `hold` is the column's own limit, for the one figure here that is
+      // neither money nor read back through a money parser: without it the
+      // total on this screen is computed from a number the plan cannot store.
+      function numCell(key, step, hold) {
         var td = document.createElement('td');
         td.className = 'num-cell';
         var inp = document.createElement('input');
@@ -4398,7 +4527,7 @@
         if (step) inp.step = step;
         inp.value = Number(item[key]) || 0;
         inp.addEventListener('input', function () {
-          item[key] = Number(inp.value) || 0;
+          item[key] = hold ? hold(inp.value) : (Number(inp.value) || 0);
           save();
           refreshRow(tr, item);
           renderBudgetTotals();
@@ -4410,7 +4539,10 @@
 
       var tdItem = textCell('item', 'item-cell');
       var tdUnit = numCell('unit', '1');
-      var tdQty = numCell('qty', '1');
+      // Three decimals rather than whole cases: a third of a case and a
+      // per-head figure divided out are both ordinary, and the column keeps
+      // them.
+      var tdQty = numCell('qty', '0.001', toQty);
 
       var tdTotal = document.createElement('td');
       tdTotal.className = 'calc strong';
@@ -4450,9 +4582,14 @@
       label(tdDel, 'c.remove');
       tdDel.appendChild(delButton(t('b.del'), function () {
         // The row's files go with it, out of the plan and then out of the
-        // bucket, and they are in neither the export nor the backup.
+        // bucket, and they are in neither the export nor the backup. Asked
+        // either way where they cannot be counted: the delete is queued
+        // against the copy on the screen and takes them when the origin is
+        // back, which is the moment the loss is least visible.
         var files = filesOf('budget', item.id).length;
-        if (files && !confirmLoss(t('b.confirmdel', { n: files }))) return;
+        if (filesUncounted(item.id)) {
+          if (!confirmLoss(t('b.confirmdelunknown'))) return;
+        } else if (files && !confirmLoss(t('b.confirmdel', { n: files }))) return;
         dropRow(state.budgetItems, item);
         save();
         renderBudgetTable();
@@ -4619,7 +4756,9 @@
       tdDel.className = 'del-cell';
       tdDel.appendChild(delButton(t('k.del'), function () {
         var files = filesOf('task', task.id).length;
-        if (files && !confirmLoss(t('k.confirmdel', { n: files }))) return;
+        if (filesUncounted(task.id)) {
+          if (!confirmLoss(t('k.confirmdelunknown'))) return;
+        } else if (files && !confirmLoss(t('k.confirmdel', { n: files }))) return;
         dropRow(state.tasks, task);
         save();
         renderTasksTable();
@@ -4827,7 +4966,13 @@
         if (keepCopy) parts.push(t('d.confirmcopy'));
         parts.push(t('d.confirm'));
         if (!confirmLoss(parts.join(' '))) return;
-        if (keepCopy) downloadPlan();
+        // The copy is the way back from a replacement the server keeps no undo
+        // of, and the dialog they have just agreed to says it was taken. A
+        // browser that would not make the blob has not taken it, so the
+        // replacement stops here rather than proceeding on a promise nobody
+        // kept. Reported in the words the export button uses, because the
+        // fallback is the same one: the planner is in the console.
+        if (keepCopy && !downloadPlan()) { flash(t('d.exportfail')); return; }
 
         // `forgotten` is cleared here because this path calls flushSave()
         // directly and save() is the only other place that clears it. On a

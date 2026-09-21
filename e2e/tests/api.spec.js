@@ -202,6 +202,41 @@ test('money crosses the wire as a decimal string in major units', async ({ page,
   await expect.poll(async () => (await apiPlan(request)).settings.ceiling).toBe('10000.00');
 });
 
+/*
+ * The quantity column is `numeric(12,3)` and the server refuses a fourth
+ * decimal rather than rounding it away, because a figure it rounded would come
+ * back as one the client never sent and be written again on every pass. The
+ * page had no such limit: a third of a case, divided out by hand, went up as
+ * typed and was refused, and a refusal parks the whole row until something in
+ * it changes. On a line still being created that is the line itself, name and
+ * amounts and all, never reaching the plan; on one the server has, it is a
+ * total on this screen computed from a number the plan does not hold.
+ */
+test('a quantity with more decimals than the column keeps is held to it, not refused', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  // Typed into a line that does not exist yet, which is the ordinary way a row
+  // is filled in: a refused create takes the whole line with it.
+  const line = await addBudgetLine(page, { item: 'Wine', unit: 10000, qty: 0.3333, paid: 0 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.qty]))
+    .toEqual([['Wine', 0.333]]);
+
+  // And again on the line as the server now has it, which is the patch rather
+  // than the create.
+  await line.qty.fill('12.7777');
+  await line.qty.blur();
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.qty]))
+    .toEqual([['Wine', 12.778]]);
+
+  // The money on this screen is the money the plan holds: 10,000 x 12.778,
+  // and not the 127,777 that a quantity nobody else can see works out at.
+  await expectFigures(page, { committed: 127780, paid: 0, outstanding: 127780, forecast: 127780 });
+  await expect(page.locator('#dataMsg')).not.toHaveText(/would not accept/);
+});
+
 test('a row created here and the row the server made are one row', async ({ page, request }) => {
   await openSharedPlanner(page);
   await gotoTab(page, 'budget');
@@ -880,6 +915,152 @@ test('a create whose answer is lost does not leave two rows under one id', async
 });
 
 /*
+ * The same lost answer, with somebody else at the other end of it.
+ *
+ * The create commits, the answer does not arrive, and before the retry goes a
+ * second participant corrects the figure on the line it made: 2,500 was typed
+ * from memory and the invoice says 250. The retry is then answered with the
+ * row as stored, at the revision their correction gave it, so this browser's
+ * copy of the line, untouched since it was typed, becomes a difference
+ * against a revision that is current, and the patch that follows lands with
+ * no conflict to stop it. The correction is gone, nobody is asked and nobody
+ * is told: the committed figure everybody reads goes back to the wrong number.
+ */
+test('a create answered a second time keeps the correction somebody else made meanwhile', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  // The origin hears the create and the browser hears nothing back, for as
+  // long as `offline` says so, which is the staging the two specs above use.
+  let plays = 0;
+  let committed = 0;
+  let offline = true;
+  await page.route('**/api/v1/budget-items', async (route) => {
+    if (!offline || route.request().method() !== 'POST') return route.continue();
+    if (plays === 0) {
+      plays = 1;
+      const upstream = await request.post(`${API_URL}/api/v1/budget-items`, {
+        headers: await apiAuth(request),
+        data: JSON.parse(route.request().postData() || '{}'),
+      });
+      committed = upstream.status();
+    }
+    return route.abort('internetdisconnected');
+  });
+
+  const line = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await expect.poll(() => committed, { message: 'the first create should have committed' }).toBe(201);
+
+  // Somebody else has the invoice in front of them and corrects the deposit on
+  // the row this browser is still trying to create.
+  const stored = (await apiPlan(request)).budgetItems[0];
+  expect((await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
+    data: { revision: stored.revision, unit: '250.00' },
+  })).status(), 'the correction lands').toBe(200);
+
+  // Nothing is typed here meanwhile, and the caret leaves the table: a table
+  // somebody is inside is redrawn when they are not.
+  await line.paid.blur();
+
+  const answered = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && r.url().endsWith('/api/v1/budget-items'),
+    { timeout: 30_000 },
+  );
+  offline = false;
+  expect((await answered).status(), 'a create this server has already done').toBe(200);
+
+  // The correction stands, here as well as there, and the person whose create
+  // was answered late is told their line was written by somebody else rather
+  // than left to notice it in the total.
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
+  await expect(budgetRow(page, 0).unit).toHaveValue('250');
+  await expect(page.locator('#dataMsg')).toHaveText(/Both sets of changes have been kept/);
+  await expectFigures(page, { committed: 250, paid: 0, outstanding: 250, forecast: 250 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.unit]), { timeout: 20_000 })
+    .toEqual([['Venue deposit', '250.00']]);
+});
+
+/*
+ * The same lost answer again, with both people typing this time, which is the
+ * case the merge exists for: they correct the deposit here while the create is
+ * still going again, and somebody else writes a different column of the same
+ * line meanwhile.
+ *
+ * Neither of them touched what the other did, so both changes belong in the
+ * row that comes out. The version both edits started from is the row as it was
+ * first posted, and only that: a retry carries the row as it stands now, so
+ * measuring against it reads the correction typed since as nobody's change and
+ * takes the value that was already committed back over it. The figure reverts
+ * on the screen of the person who typed it, under a notice saying both sets of
+ * changes have been kept.
+ */
+test('a create answered a second time also keeps what was typed here while it waited', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  // The staging of the two specs above: the origin hears the create once and
+  // the browser hears nothing back until `offline` says otherwise.
+  let plays = 0;
+  let committed = 0;
+  let offline = true;
+  await page.route('**/api/v1/budget-items', async (route) => {
+    if (!offline || route.request().method() !== 'POST') return route.continue();
+    if (plays === 0) {
+      plays = 1;
+      const upstream = await request.post(`${API_URL}/api/v1/budget-items`, {
+        headers: await apiAuth(request),
+        data: JSON.parse(route.request().postData() || '{}'),
+      });
+      committed = upstream.status();
+    }
+    return route.abort('internetdisconnected');
+  });
+
+  const line = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await expect.poll(() => committed, { message: 'the first create should have committed' }).toBe(201);
+
+  // The deposit was typed from memory and the invoice says 2,600, so they
+  // correct it while the answer is still not arriving.
+  await line.unit.fill('2600');
+
+  // Somebody else adds the reference to the same line, in a column nobody here
+  // has touched. Polled rather than assumed: the retry backs off, so the order
+  // of the two is not ours to decide.
+  const stored = (await apiPlan(request)).budgetItems[0];
+  expect((await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
+    data: { revision: stored.revision, note: 'invoice attached' },
+  })).status(), 'their note lands').toBe(200);
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems[0].revision)
+    .toBe(2);
+
+  // The caret leaves the table, which is the cell the correction was typed
+  // into: a table somebody is inside is redrawn when they are not.
+  await line.unit.blur();
+
+  const answered = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && r.url().endsWith('/api/v1/budget-items'),
+    { timeout: 30_000 },
+  );
+  offline = false;
+  expect((await answered).status(), 'a create this server has already done').toBe(200);
+
+  // Their note is here and the correction typed here is still the correction,
+  // on the screen and then on the plan: the correction goes up as the patch
+  // that follows, at the revision their note gave the line.
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
+  await expect(budgetRow(page, 0).unit).toHaveValue('2600');
+  await expect(budgetRow(page, 0).note).toHaveValue('invoice attached');
+  await expectFigures(page, { committed: 2600, paid: 0, outstanding: 2600, forecast: 2600 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.unit, i.note]), { timeout: 20_000 })
+    .toEqual([['2600.00', 'invoice attached']]);
+});
+
+/*
  * The same outage, met from the other end: the origin is already away when the
  * page opens. That is the ordinary start for an installed planner, because the
  * service worker paints the shell with no network at all, and it is also a pod
@@ -1522,6 +1703,46 @@ test('a reopened tab that was edited while signed out does not overwrite a week 
     })
     .toEqual([['Venue deposit', '750.00', 'The Orangery', '2600.00']]);
   await expect(budgetRow(page, 0).unit).toHaveValue('2600');
+});
+
+/*
+ * The same reopened tab, from the point of view of whoever signs in on it.
+ *
+ * The base that lets an unsent edit be recognised now outlives the page it
+ * was typed on, which is what keeps a participant's own work through a
+ * restart. It also means work typed by whoever had the keyboard waits in this
+ * browser for as long as it takes, and goes up under the next editor or admin
+ * to sign in, named as theirs in the change feed. So the number is put to
+ * them: they are publishing it, and they should know they are.
+ */
+test('signing in says how much waiting work this browser is about to publish', async ({ page, request }) => {
+  const cookie = await openWithOwnSession(page, request, 'iris');
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
+
+  // The tab is closed and the session ends behind it, so the planner comes
+  // back on the copy this browser kept, with nobody signed in and nothing
+  // stopping anyone typing into it.
+  await page.goto('about:blank');
+  await endSession(request, cookie);
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+
+  await budgetRow(page, 0).paid.fill('750');
+  await budgetRow(page, 0).paid.blur();
+  expect((await apiPlan(request)).budgetItems[0].paid, 'nobody to send it as').toBe('500.00');
+
+  await page.goto('/#/login');
+  await signInThroughTheForm(page, request, 'iris');
+
+  await expect(page.locator('#dataMsg')).toHaveText(
+    'Changes made in this browser that had not reached the server: 1. They are going up now.',
+  );
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.paid))
+    .toEqual(['750.00']);
 });
 
 /*
@@ -2285,6 +2506,50 @@ test('a file can be removed, and removing a line takes its files with it', async
     const plan = await apiPlan(request);
     return [plan.budgetItems.length, plan.attachments.length];
   }).toEqual([0, 0]);
+});
+
+/*
+ * The same loss, on a page that has not managed to read the plan.
+ *
+ * The list of what is attached arrives with the plan and with nothing else, so
+ * on a page painted from the copy this browser keeps, with the origin away
+ * or a session that ended before the reload, it is empty because nothing has
+ * filled it, not because the row has no files. A count of zero is ignorance
+ * rather than an answer there, and the delete queued against that copy takes
+ * the receipts on the line out of the plan and then out of the bucket the
+ * moment the origin is back.
+ */
+test('a delete asks about the files on the row when the plan has not been read', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await savedLine(page, request, 'Catering');
+
+  await openFiles(page);
+  await page.setInputFiles('body > input[type=file]', { name: 'quote.pdf', mimeType: 'application/pdf', buffer: QUOTE });
+  await expect(page.locator('#budgetBody .files-count')).toHaveText('1');
+  await page.keyboard.press('Escape');
+  await flushToStorage(page);
+
+  // The tab comes back to an origin that is away: the planner paints from the
+  // copy this browser keeps, and the plan read that would say what is
+  // attached never lands. What is attached is in neither.
+  await page.route('**/api/v1/**', (route) => route.abort('internetdisconnected'));
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).item).toHaveValue('Catering');
+
+  const asked = [];
+  page.once('dialog', (dialog) => { asked.push(dialog.message()); dialog.dismiss().catch(() => {}); });
+  await page.locator('#budgetBody .del-cell .del-btn').first().click();
+  await expect.poll(() => asked, { message: 'a delete that cannot count the files must still ask' }).toEqual([
+    'The files on this line cannot be counted until this browser has the planner from the server. '
+    + 'Any there are go with it, for everyone, and cannot be recovered. Remove the line?',
+  ]);
+
+  // Answered with no, so the line is still on the page and the quote is still
+  // on the line.
+  await expect(budgetRow(page, 0).item).toHaveValue('Catering');
+  expect((await apiPlan(request)).attachments.map((a) => a.name)).toEqual(['quote.pdf']);
 });
 
 test('an import counts the files it would destroy before anything is replaced', async ({ page, request }, testInfo) => {
