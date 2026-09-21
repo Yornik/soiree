@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Yornik/soiree/internal/auth"
 	"github.com/Yornik/soiree/internal/config"
@@ -1192,4 +1193,39 @@ func TestSetPasswordDoesNotChargeForAWeakPassword(t *testing.T) {
 		t.Fatalf("after a run of weak passwords, setting a good one = %d, body %s", rec.Code, rec.Body)
 	}
 	f.login(t, "linus@example.test", otherPassword)
+}
+
+// A floor is a number and a way of counting it, and the way of counting is the
+// half that drifts unnoticed. This route is where everybody who is not the
+// operator meets the floor, so what it refuses has to be what the environment
+// refuses at startup.
+func TestTheSetPasswordFloorCountsCharactersNotBytes(t *testing.T) {
+	// Four characters in a script that takes three bytes each. Checked rather
+	// than assumed: edited to something else, the case would stop telling the
+	// two measures apart and would pass whichever one the code used.
+	const twelveBytes = "秘密の鍵"
+	if len(twelveBytes) != config.MinPasswordLen ||
+		utf8.RuneCountInString(twelveBytes) >= config.MinPasswordLen {
+		t.Fatalf("%q is %d bytes and %d characters; the case no longer tells the two apart",
+			twelveBytes, len(twelveBytes), utf8.RuneCountInString(twelveBytes))
+	}
+
+	for _, tc := range []struct {
+		name string
+		pass string
+		ok   bool
+	}{
+		{"twelve ascii characters", "twelve chars", true},
+		{"eleven ascii characters", "eleven char", false},
+		{"four three-byte characters", twelveBytes, false},
+		{"twelve accented characters", strings.Repeat("é", config.MinPasswordLen), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, ok := checkPassword(tc.pass)
+			if ok != tc.ok {
+				t.Errorf("checkPassword(%q) = %v (%q), want %v: %d bytes, %d characters",
+					tc.pass, ok, msg, tc.ok, len(tc.pass), utf8.RuneCountInString(tc.pass))
+			}
+		})
+	}
 }

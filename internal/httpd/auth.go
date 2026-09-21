@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Yornik/soiree/internal/auth"
+	"github.com/Yornik/soiree/internal/config"
 	"github.com/Yornik/soiree/internal/store"
 )
 
@@ -60,12 +61,13 @@ const (
 	// passwordTokenTTL is the life of a set-password link, from the design.
 	passwordTokenTTL = 24 * time.Hour
 
-	// minPasswordLen follows the modern advice: length, not composition rules.
-	// Requiring a digit and a symbol produces Passw0rd! and a sticky note.
-	minPasswordLen = 12
 	// maxPasswordLen bounds what gets hashed. Argon2 does not truncate the way
 	// bcrypt does, so without a cap a megabyte of "a" is a request that costs
 	// the server real work.
+	//
+	// Bytes, unlike the floor, and deliberately: this one is a limit on the
+	// work asked of Argon2, which is handed bytes. The floor is a promise
+	// about how much somebody chose, which is counted the way they count it.
 	maxPasswordLen = 1024
 
 	// maxRequestBody bounds a JSON body. Every request here is a handful of
@@ -1323,10 +1325,15 @@ func parseStatus(s string) (store.UserStatus, bool) {
 // Composition rules — a capital, a digit, a symbol — measurably push people
 // towards Summer2026! and a sticky note. Length is the property that actually
 // costs an attacker something.
+//
+// The floor is config's, and asked for rather than measured here, because the
+// way of counting drifts as quietly as the number: twelve counted in bytes is
+// four characters to anybody writing in a script that takes three bytes each,
+// which is not the promise the operator was given.
 func checkPassword(p string) (string, bool) {
 	switch {
-	case len(p) < minPasswordLen:
-		return fmt.Sprintf("a password needs at least %d characters", minPasswordLen), false
+	case config.PasswordTooShort(p):
+		return fmt.Sprintf("a password needs at least %d characters", config.MinPasswordLen), false
 	case len(p) > maxPasswordLen:
 		return fmt.Sprintf("a password may be at most %d characters", maxPasswordLen), false
 	default:
