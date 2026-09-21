@@ -301,8 +301,8 @@ test('a large figure beside a sponsor keeps their remove button on the screen', 
  * its own whatever its column is told it may shrink to, so a column that
  * gives way entirely does not move the field out of the way: it leaves it
  * standing over whatever is beside it, which here is the figure that sponsor
- * is covering. Nothing above sees this — the page does not scroll sideways
- * and every control is still on the screen — so it is asserted directly.
+ * is covering. Nothing above sees this: the page does not scroll sideways
+ * and every control is still on the screen, so it is asserted directly.
  */
 test("a sponsor's name is never drawn over the figure beside it", async ({ page }) => {
   await addSponsor(page, { code: 'AB', name: 'Example Family' });
