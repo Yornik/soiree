@@ -553,7 +553,9 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		if user.Status == store.StatusInvited {
 			purpose = store.PurposeInvite
 		}
-		if _, err := a.issueToken(ctx, user, purpose, language); err != nil {
+		// Nobody to hand it to but the mailer: this is the anonymous route,
+		// and its link has no reader other than the address it is sent to.
+		if _, err := a.issueToken(ctx, user, purpose, language, false); err != nil {
 			a.log.Error("could not issue a reset link", "user", user.ID, "err", err)
 		}
 	})
@@ -678,14 +680,17 @@ type createUserRequest struct {
 	// admin typed once. Omitted or null, the mail is in the deployment's
 	// language.
 	Language *string `json:"language"`
+	// Deliver is who this one link is for. See chosenDelivery.
+	Deliver string `json:"deliver"`
 }
 
 // createUserResponse carries the new account, and the link when — and only
-// when — there is no mail to send it by.
+// when — the admin is the one who has to carry it.
 type createUserResponse struct {
 	User userDTO `json:"user"`
-	// SetPasswordURL is present only on a deployment with no SMTP. With a
-	// relay configured the link goes to the person it belongs to and nowhere
+	// SetPasswordURL is present on a deployment with no SMTP, and when an
+	// admin asked for the link instead of the mail. With a relay configured
+	// and nobody asking, it goes to the person it belongs to and nowhere
 	// else, because an admin who never sees it cannot use it.
 	SetPasswordURL string `json:"setPasswordUrl,omitempty"`
 	// MailSent says whether delivery was attempted, so the admin knows
@@ -721,6 +726,12 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Before the account exists, so that a misspelled delivery does not leave
+	// an address taken by a request that was refused.
+	toAdmin, ok := a.chosenDelivery(w, req.Deliver)
+	if !ok {
+		return
+	}
 
 	user, err := a.store.CreateUser(r.Context(), store.User{
 		Email:     email,
@@ -739,7 +750,7 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	a.log.Info("account created", "user", user.ID, "role", user.Role, "by", actor.ID)
 
-	a.respondWithInvite(w, r, user, store.PurposeInvite, language, http.StatusCreated)
+	a.respondWithInvite(w, r, user, store.PurposeInvite, language, toAdmin, http.StatusCreated)
 }
 
 // handleInvite issues a fresh link for an existing account: the first one
@@ -777,12 +788,18 @@ func (a *Auth) handleInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.respondWithInvite(w, r, user, purpose, language, http.StatusOK)
+	toAdmin, ok := a.chosenDelivery(w, req.Deliver)
+	if !ok {
+		return
+	}
+	a.respondWithInvite(w, r, user, purpose, language, toAdmin, http.StatusOK)
 }
 
 type inviteRequest struct {
 	// Language is the language of this one mail. See createUserRequest.
 	Language *string `json:"language"`
+	// Deliver is who this one link is for. See chosenDelivery.
+	Deliver string `json:"deliver"`
 }
 
 // chosenLanguage reads the language an admin picked for a mail. Nil and true
@@ -801,9 +818,44 @@ func (a *Auth) chosenLanguage(w http.ResponseWriter, asked *string) (*string, bo
 	return &l, true
 }
 
+// chosenDelivery reads who an admin asked the link to go to. "mail", or
+// nothing at all, is the default and the one that sends it. "link" holds the
+// mail back and returns the link for the admin to carry.
+//
+// It exists because a mail a relay drops is a dead end: the invited person has
+// nothing, re-inviting sends the same mail down the same pipe, and until this
+// no route handed the link over. An admin could already reach the same place
+// by pointing the account at a mailbox of their own and re-inviting, which
+// yields the same link and records nothing about how it was got. So this is
+// the honest version of something that was possible anyway: explicit, asked
+// for, and logged.
+func (a *Auth) chosenDelivery(w http.ResponseWriter, asked string) (toAdmin, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(asked)) {
+	case "", "mail":
+		return false, true
+	case "link":
+		return true, true
+	}
+	writeError(w, http.StatusBadRequest, "invalid_deliver", "deliver must be mail or link")
+	return false, false
+}
+
 // respondWithInvite mints the link and decides who gets to see it.
-func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user store.User, purpose store.TokenPurpose, language *string, status int) {
-	link, err := a.issueToken(r.Context(), user, purpose, language)
+func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user store.User, purpose store.TokenPurpose, language *string, toAdmin bool, status int) {
+	// The half of the rule that is worth keeping. An account somebody is
+	// already using has a password, a session and a history in the activity
+	// log to impersonate, so its link goes to its owner and to nobody else;
+	// otherwise taking over a live account, another admin's included, would be
+	// a button. An invited account has none of those and is where the dead end
+	// actually is. Nothing to weigh when there is no relay: every link already
+	// comes back to the admin there.
+	if toAdmin && a.mailer != nil && purpose != store.PurposeInvite {
+		writeError(w, http.StatusConflict, "account_active",
+			"a link for an account that has set a password goes to its owner by mail")
+		return
+	}
+
+	link, err := a.issueToken(r.Context(), user, purpose, language, toAdmin)
 	if err != nil {
 		a.log.Error("could not issue a set-password link", "user", user.ID, "err", err)
 		// The account exists; only the link failed. Say so rather than
@@ -813,23 +865,36 @@ func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user st
 		return
 	}
 
-	res := createUserResponse{User: toDTO(user), MailSent: a.mailer != nil}
-	if a.mailer == nil {
+	res := createUserResponse{User: toDTO(user), MailSent: a.mailer != nil && !toAdmin}
+	if a.mailer == nil || toAdmin {
 		// The documented degraded mode: no SMTP, so the admin passes the link
 		// on by hand. A deployment without mail is inconvenient, not broken.
+		// And the same by request, for the one case where the mail is the
+		// thing that failed.
 		res.SetPasswordURL = link
+	}
+	if toAdmin {
+		// The link itself is never logged. Who took one out is, because this
+		// is the one way a credential leaves here in somebody else's hands.
+		actor, _ := UserFrom(r.Context())
+		a.log.Info("account link issued to admin", "user", user.ID, "by", actor.ID)
 	}
 	writeJSON(w, status, res)
 }
 
 // issueToken records a single-use token and sends the link, returning it.
 //
-// The return value is a credential. It goes into a response only on the
-// no-SMTP path, and it is never logged anywhere.
+// The return value is a credential. It goes into a response on the no-SMTP
+// path and when an admin asked to carry it themselves, and it is never logged
+// anywhere.
+//
+// toAdmin holds the mail back: the caller is taking the link instead of
+// sending it, and two links where one was expected is one link nobody can
+// account for.
 //
 // language is whatever whoever asked for the mail said it should be in, or nil.
 // It shapes this mail and this link and is kept nowhere.
-func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.TokenPurpose, language *string) (string, error) {
+func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.TokenPurpose, language *string, toAdmin bool) (string, error) {
 	token, err := auth.NewToken()
 	if err != nil {
 		return "", err
@@ -844,7 +909,7 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 	}
 
 	link := a.setPasswordURL(token, language)
-	if a.mailer != nil {
+	if a.mailer != nil && !toAdmin {
 		subject, body := inviteMessage(purpose, link, a.mailLanguage(language), a.eventName, a.baseURL)
 		a.background(func(ctx context.Context) {
 			if err := a.mailer.Send(ctx, user.Email, subject, body); err != nil {

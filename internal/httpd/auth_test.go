@@ -583,6 +583,91 @@ func TestCreateUserMailsTheLinkAndDoesNotReturnIt(t *testing.T) {
 	}
 }
 
+// A mail the relay drops leaves an invited person with nothing and an admin
+// with no way to help: re-inviting sends the same mail down the same pipe, and
+// no route here hands the link over. So an admin can ask for the link instead
+// of the mail, and the asking is logged.
+func TestAnAdminCanAskForTheLinkInsteadOfTheMail(t *testing.T) {
+	f := newFixture(t, true) // a relay is configured, so the link is normally never returned
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users",
+		map[string]string{"email": "grace@example.test", "role": "editor", "deliver": "link"}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	created := decodeTestBody[createUserResponse](t, rec)
+	if created.SetPasswordURL == "" {
+		t.Fatalf("no link came back for an admin who asked to carry it: %s", rec.Body)
+	}
+	if created.MailSent {
+		t.Error("mailSent is true although the mail was the thing being skipped")
+	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Errorf("%d mails sent for a link the admin asked to pass on by hand", n)
+	}
+
+	// A real link, not a decoration: it is the account's one live token.
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/set-password",
+		map[string]string{"token": tokenFromLink(t, created.SetPasswordURL), "password": goodPassword}, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("the link the admin was given does not work: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The half of the rule that is worth keeping. An account somebody is already
+// using has a password and a history to impersonate, so its link goes to its
+// owner and nowhere else, and an admin cannot take it over in one click.
+func TestALinkToPassOnIsRefusedForAnAccountInUse(t *testing.T) {
+	f := newFixture(t, true)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	grace := f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/invite",
+		map[string]string{"deliver": "link"}, admin)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "account_active") {
+		t.Fatalf("status = %d, body %s; want 409 account_active", rec.Code, rec.Body)
+	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Errorf("a refused request sent %d mails", n)
+	}
+
+	// The same route still mails the account itself a reset, as it always did.
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/invite", nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("re-invite: status %d, body %s", rec.Code, rec.Body)
+	}
+	if sent := decodeTestBody[createUserResponse](t, rec); sent.SetPasswordURL != "" {
+		t.Error("the ordinary re-invite handed the admin the link")
+	}
+	if n := len(f.mail.messages()); n != 1 {
+		t.Errorf("%d mails sent, want 1", n)
+	}
+}
+
+// A delivery nobody implements is refused before the account it names exists,
+// or an admin correcting a typo finds the address already taken by the request
+// that was refused.
+func TestAnUnknownDeliveryLeavesNoAccountBehind(t *testing.T) {
+	f := newFixture(t, true)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users",
+		map[string]string{"email": "linus@example.test", "role": "viewer", "deliver": "carrier pigeon"}, admin)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_deliver") {
+		t.Fatalf("status = %d, body %s; want 400 invalid_deliver", rec.Code, rec.Body)
+	}
+	if _, err := f.store.UserByEmail(t.Context(), "linus@example.test"); err == nil {
+		t.Error("a refused request created the account anyway")
+	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Errorf("a refused request sent %d mails", n)
+	}
+}
+
 // What an invited person has to go on is this one mail, and it asks them to
 // type a password into a site they may never have heard of. So it names the
 // event it is an invitation to, and it names somewhere to go when the link has

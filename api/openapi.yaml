@@ -656,6 +656,9 @@ paths:
         person by another route. A deployment with mail omits the link, so it
         never reaches a log.
 
+        Send `deliver: link` to hold the mail back and be given the link
+        instead, for when the mail is the thing that failed.
+
         Send `language` to choose the language of the invitation. The link
         then carries `?lang=`, so the page it opens is in the same language.
         Omit `language` to use the language of the deployment.
@@ -677,6 +680,8 @@ paths:
                   $ref: '#/components/schemas/Role'
                 language:
                   $ref: '#/components/schemas/Language'
+                deliver:
+                  $ref: '#/components/schemas/Delivery'
       responses:
         '201':
           description: The account exists. The invitation is on its way.
@@ -817,6 +822,9 @@ paths:
         The body is optional. Send `language` to choose the language of this
         mail, as at `POST /users`. A request with no body uses the language of
         the deployment.
+
+        Send `deliver: link` to be given the link instead of sending the mail.
+        An account that has set a password refuses it.
       requestBody:
         required: false
         content:
@@ -826,6 +834,8 @@ paths:
               properties:
                 language:
                   $ref: '#/components/schemas/Language'
+                deliver:
+                  $ref: '#/components/schemas/Delivery'
       responses:
         '200':
           description: The invitation is on its way.
@@ -841,14 +851,19 @@ paths:
           $ref: '#/components/responses/NotFound'
         '400':
           description: |
-            The body does not parse (`invalid_json`), or the language has no
-            translation (`invalid_language`).
+            The body does not parse (`invalid_json`), the language has no
+            translation (`invalid_language`), or `deliver` is neither `mail`
+            nor `link` (`invalid_deliver`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
         '409':
-          description: The account is disabled (`account_disabled`). Enable it first.
+          description: |
+            The account is disabled (`account_disabled`). Enable it first.
+
+            Or `deliver: link` was asked for an account that has set a
+            password (`account_active`): its link goes to its owner.
           content:
             application/json:
               schema:
@@ -2166,6 +2181,24 @@ components:
       enum: [en, nl, id, null]
       examples: [nl]
 
+    Delivery:
+      type: string
+      description: |
+        Who the set-password link goes to. `mail`, or no field, is the
+        default: the server sends the mail and the answer holds no link.
+
+        `link` holds the mail back and returns `setPasswordUrl` for you to
+        pass on by another route. Use it when the mail is the thing that
+        failed. The server logs that a link was issued to an admin.
+
+        It is accepted only for an account whose status is `invited`. An
+        account that has set a password answers `409 account_active`: its
+        link goes to its owner. A deployment with no mail configured returns
+        the link either way.
+      enum: [mail, link]
+      default: mail
+      examples: [link]
+
     UserStatus:
       type: string
       enum: [invited, active, disabled]
@@ -2993,7 +3026,8 @@ components:
           type: boolean
           description: |
             `true` means the server sent the mail. `false` means the
-            deployment holds no mail configuration.
+            deployment holds no mail configuration, or the request asked for
+            `deliver: link`.
         setPasswordUrl:
           type: string
           format: uri
@@ -3003,8 +3037,8 @@ components:
 
             The link carries the token. It also carries `?lang=` when the
             request chose a language. Give it to the person by a private
-            route. A deployment with mail omits it, so the token never reaches
-            a log.
+            route. Unless it was asked for, a deployment with mail omits it,
+            so the token never reaches a log.
 
     Passkey:
       type: object
