@@ -94,9 +94,11 @@ module.exports = defineConfig({
   fullyParallel: true,
 
   // A test that fails randomly gets ignored and then deleted, so there is no
-  // retry budget to hide behind: every wait in this suite is on a condition,
-  // never on a clock. If something here is flaky it is a bug in the test (or
-  // in the app) and it should be visible as one.
+  // retry budget to hide behind. Waits are on a condition wherever there is
+  // one to wait for. The rest wait on a clock: a claim that something does
+  // not happen has no event to stand for it, and some of the sync specs let a
+  // merge settle afterwards. Those are where a flake would come from, and a
+  // flake is a bug in the test (or in the app) that should be visible as one.
   retries: 0,
   forbidOnly: !!process.env.CI,
   workers: process.env.CI ? 2 : undefined,

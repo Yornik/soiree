@@ -42,6 +42,31 @@ COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 COPY --from=build /out/soiree /soiree
 
+# A copy of the image is a copy of everything it redistributes, and the font it
+# carries is under the OFL, which asks for its notice to travel with each copy.
+# Whoever holds the image has no way back to this repository, so the texts come
+# along. /licenses is where a reader and a licence scanner look for them.
+COPY LICENSE /licenses/LICENSE
+COPY LICENSES/ /licenses/
+
+# An ARG does not cross a FROM, so the two the build stage took are declared
+# again here. Without this the labels below would not fail — they would expand
+# to empty strings, which is worse.
+ARG VERSION=dev
+ARG COMMIT=none
+
+# A pod carries no history. Without these a `docker inspect` on what is running
+# says nothing about where it came from, and Renovate cannot find the release
+# notes behind an image bump. The version matters twice over: the SBOM cannot
+# name it (the build context excludes .git, and -trimpath drops the ldflags
+# from the build info), so the release asset lists soiree itself as UNKNOWN and
+# the label is the only place the version of the whole thing survives.
+LABEL org.opencontainers.image.title="soiree" \
+      org.opencontainers.image.source="https://github.com/Yornik/soiree" \
+      org.opencontainers.image.licenses="MIT AND OFL-1.1" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}"
+
 # Unprivileged, and nothing in the image is writable — the whole site lives in
 # the binary and in memory.
 USER 65532:65532

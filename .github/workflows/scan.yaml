@@ -1,0 +1,46 @@
+name: scan
+
+# Every job in this repository runs because somebody pushed, so between two
+# pushes nothing here asks anything. The advisory database does not wait for a
+# commit: main becomes vulnerable on the day a report is published against a
+# module it already depends on, and with no push and no Dependabot alerts
+# enabled, nothing says so. This is also a planner that is deployed and then
+# left alone until the event, which is the period the silence covers.
+#
+# The run is the alert. GitHub notifies whoever last changed the cron line
+# below when a scheduled run fails; there is no dashboard to read instead.
+on:
+  schedule:
+    # Monday morning, off the hour: everybody's cron asks for a runner at :00.
+    - cron: '17 5 * * 1'
+  # So a Go security release can be answered the same day rather than on Monday.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Keep in step with the Dockerfile, like the check jobs. Renovate moves both
+  # in one pull request (see customManagers in renovate.json), and a test in
+  # cmd/soiree fails if two files ever name different toolchains.
+  GO_VERSION: '1.27.1'
+
+# Every action is pinned to a commit digest, not a tag: a tag is mutable and
+# whoever can move it can run arbitrary code with this workflow's token. The
+# trailing comment is the human-readable version, and is the exact format
+# Renovate reads and rewrites (helpers:pinGitHubActionDigests in renovate.json).
+
+jobs:
+  vuln:
+    name: Vulnerabilities in main (govulncheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # The same scan the pull requests run, on a week when nobody pushed, and
+      # pinned for the same reason it is there: the database is fetched when
+      # the scanner runs, so a fixed version still reports today's
+      # vulnerabilities.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
