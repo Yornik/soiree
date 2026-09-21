@@ -56,7 +56,7 @@ this line at the newest release so the page never advertises an old one:
 <!-- x-release-please-start-version -->
 
 ```sh
-TAG=v1.3.0   # or whichever release you are checking
+TAG=v1.4.0   # or whichever release you are checking
 ```
 
 <!-- x-release-please-end -->

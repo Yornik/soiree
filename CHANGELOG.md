@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/Yornik/soiree/compare/v1.3.0...v1.4.0) (2026-09-21)
+
+
+### Features
+
+* **web:** the budget grid can be read in the order of any column ([95b85a1](https://github.com/Yornik/soiree/commit/95b85a1bb335d3696099c80bf299a3743869f0b7))
+
+
+### Bug Fixes
+
+* **web:** a budget line spells its money the same way in every column ([acaf97c](https://github.com/Yornik/soiree/commit/acaf97c98c88ac21bbd8255f2590ad9e78a2f432))
+
 ## [1.3.0](https://github.com/Yornik/soiree/compare/v1.2.1...v1.3.0) (2026-09-21)
 
 
