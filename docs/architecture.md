@@ -572,7 +572,11 @@ constraint drives the design:
 2. **The service worker is the CDN.** Repeat visits are served from local
    cache, so load time stops scaling with distance. The shell uses
    stale-while-revalidate: the cached copy paints immediately and the update
-   lands on the next visit. Because asset URLs are content-addressed, an older
+   lands on the next visit. That next visit now announces itself rather than
+   waiting to be made: a page whose build the stream no longer names asks its
+   worker for the new one and says in the status line that there is something
+   to reload into. First paint is still served from the cache and nothing
+   reloads by itself. Because asset URLs are content-addressed, an older
    shell still references assets that are still cached, so the pairing is never
    inconsistent.
 3. **Local-first writes.** Edits apply to local state and paint immediately.
@@ -1675,11 +1679,15 @@ own, because that is the only identifier a page can compare against itself: it
 is written into the shell it loaded. Both values are already readable by a
 signed-in caller, through `GET /version` and the shell itself, and the stream
 is behind the same session guard, so the frame discloses nothing new. The page
-does not read the frame yet; a notice saying the site was updated, which leaves
-the reload to the reader, is the other half of it. A notice rather than a
-reload for the reason the `notificationclick` handler in `sw.js` gives: nothing
-here may take away the screen somebody is on, and whatever they were half way
-through typing with it.
+compares `build` with the URL of the script it is running. On a difference it
+asks its service worker to update, and says in the status line that a newer
+version is ready once the arriving worker has taken over, which is the point at
+which one reload is enough: that worker precaches the new shell before it
+activates, and activating deletes the cache the outgoing one was served from.
+A page no worker controls is told straight away, because there its reload
+fetches the shell itself. A notice rather than a reload for the reason the
+`notificationclick` handler in `sw.js` gives: nothing here may take away the
+screen somebody is on, and whatever they were half way through typing with it.
 
 Events are named (`change`, `resync`, `hello`) rather than default, so a client
 registers for each separately and an unknown future event name is ignored by an

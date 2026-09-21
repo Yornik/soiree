@@ -3004,3 +3004,41 @@ test('a plan saved before the order was a field of its own arrives unmoved', asy
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.position]))
     .toEqual([['Venue deposit (final)', 0], ['Flowers', 2]]);
 });
+
+/**
+ * A deploy, from the page's side of it.
+ *
+ * A tab left open for a week is the ordinary way this app is used, and until
+ * something tells it, it goes on running the JavaScript it started with. The
+ * stream is the one thing here that notices a deployment changing underneath
+ * it: it drops with the old process and is reopened against the new one, and
+ * it opens with a `hello` naming the build that is answering. Service workers
+ * are blocked in this context, as in most of this suite, which is also the
+ * case where a reload fetches the new shell itself.
+ */
+test('a planner open across a deploy is told there is something to reload into', async ({ page }) => {
+  // Waited for rather than assumed. An empty status line before the server
+  // has said anything is not an answer to the question this asks, which is
+  // what the real server's own hello does to a page running the build it
+  // names: the stream has to have been opened and answered first.
+  const greeted = page.waitForResponse((r) => r.url().includes('/api/v1/events'));
+  await openSharedPlanner(page);
+  await greeted;
+  await expect(page.locator('#dataMsg')).toHaveText('');
+
+  // The same stream as the deployment after this one would answer it: the
+  // three frames in the order the endpoint documents, and a build that is not
+  // this page's. Installed before the reload, so that it is the first hello
+  // this page hears rather than the second.
+  await page.route('**/api/v1/events', (route) => route.fulfill({
+    contentType: 'text/event-stream',
+    // The body is complete, so the browser sees the stream end. A retry of its
+    // own stops it reopening every three seconds for the rest of the test.
+    body: 'retry: 600000\n\n'
+      + 'event: hello\ndata: {"version":"9.9.9","build":"/assets/app.0000000000.js"}\n\n'
+      + 'event: resync\ndata: {}\n\n',
+  }));
+  await reloadSharedPlanner(page);
+
+  await expect(page.locator('#dataMsg')).toHaveText(/A newer version of the planner is ready/);
+});
