@@ -296,6 +296,40 @@ test('a large figure beside a sponsor keeps their remove button on the screen', 
   expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
 });
 
+/*
+ * Room taken from the name field is not room. A field is drawn at a width of
+ * its own whatever its column is told it may shrink to, so a column that
+ * gives way entirely does not move the field out of the way: it leaves it
+ * standing over whatever is beside it, which here is the figure that sponsor
+ * is covering. Nothing above sees this — the page does not scroll sideways
+ * and every control is still on the screen — so it is asserted directly.
+ */
+test("a sponsor's name is never drawn over the figure beside it", async ({ page }) => {
+  await addSponsor(page, { code: 'AB', name: 'Example Family' });
+  await tagLine(budgetRow(page, 0), ['AB']);
+
+  const name = page.locator('#sponsorGrid .name-input');
+  const figure = page.locator('#sponsorGrid .sp-amt');
+
+  // An ordinary seven-figure line, and one drawn with as many digits and
+  // separators as any currency and locale would ever put in front of a
+  // reader. What a figure costs the row is its width, so the longest of them
+  // is the case that has to hold.
+  for (const unit of [1250000, 125000000, 18014398543952]) {
+    await budgetRow(page, 0).unit.fill(String(unit));
+    await expect.poll(async () => money(await figure.textContent())).toBe(unit);
+
+    for (const width of [390, 375, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      const [over, under] = [await name.boundingBox(), await figure.boundingBox()];
+      const shared = over.x < under.x + under.width && under.x < over.x + over.width
+        && over.y < under.y + under.height && under.y < over.y + over.height;
+      expect(shared, `the name and ${unit} share pixels at ${width}px`).toBe(false);
+      expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
 test.describe('on a phone narrower still', () => {
   // 375px: the width of every iPhone up to the 8, and of an SE bought this
   // year. The list on the overview fits an owner's full name at 390 and not

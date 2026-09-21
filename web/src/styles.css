@@ -893,15 +893,21 @@ table.budget thead th:first-child { background: var(--tint); z-index: 3; }
 .sponsor-row {
   display: grid;
   /* The name gives way rather than the figure beside it: a floor of 110px
-     under it left about 60px for the amount on a phone, and a sponsor
+     under it left about 60px for the amount in a narrow window, and a sponsor
      covering a seven-figure line pushed their own remove button off the
-     screen. */
+     screen. Narrow enough to be a phone the figure takes a line of its own
+     instead, which is what the block further down does with this row. */
   grid-template-columns: minmax(90px, 150px) minmax(0, 1fr) auto auto;
   align-items: center;
   column-gap: 12px;
   padding: 5px 0;
   border-bottom: 1px solid var(--rule);
 }
+/* A field has a width of its own, and a column told it may go to nothing does
+   not take it away: without this the name went on being drawn 70px wide over
+   whatever stood beside it, which on a phone was the figure. Same declaration
+   and same reason as the unwound task row further down. */
+.sponsor-row input { min-width: 0; }
 .sponsor-row .code-input { font-weight: 600; }
 .sponsor-row .sp-amt {
   font-variant-numeric: tabular-nums;
@@ -1286,6 +1292,17 @@ body.is-archived .when-data { display: block; }
   table.tasks tbody tr[data-status="in-progress"] { box-shadow: inset 3px 0 0 var(--lamp); }
   table.tasks tbody tr[data-status="done"] { box-shadow: inset 3px 0 0 var(--paid); }
   table.tasks tbody tr[data-status] td:first-child { box-shadow: none; }
+
+  /* --- The sponsor row, unwound ---
+     Four things will not fit across a phone: a callsign, a name, the figure
+     that sponsor is covering and the button that removes them. The callsign
+     and the button are as wide as they are, and a figure is as wide as the
+     currency draws it, so the only one that can give is the name, and a name
+     field squeezed to nothing is not a field. The figure drops to a line of
+     its own instead, at the right-hand edge where every other figure in the
+     panel is read, and the two fields keep the line above it. */
+  .sponsor-row { grid-template-columns: minmax(0, 110px) minmax(0, 1fr) auto; row-gap: 2px; }
+  .sponsor-row .sp-amt { grid-row: 2; grid-column: 1 / -1; }
 }
 
 /* Touch, and anything narrow enough to be held: a 24px delete button is not
