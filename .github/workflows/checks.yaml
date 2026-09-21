@@ -65,7 +65,25 @@ jobs:
       # slow under -race is a separate question, and not the first guess:
       # a fresh database and its migrations cost 0.23 s a test, measured,
       # which is a twentieth of the total.
-      - run: go test -race -cover -timeout 25m ./...
+      - run: go test -race -cover -coverprofile=cover.out -timeout 25m ./...
+
+      # The percentages used to reach the log and nowhere else, so a drop
+      # between two runs was something nobody could see. The total goes in the
+      # run summary and the profile is kept, so two runs can be compared
+      # function by function. Deliberately no floor: a threshold on a number
+      # that legitimately untestable wiring moves fails on the day somebody
+      # adds such wiring, and a deleted test is caught in review like the other
+      # house rules.
+      - name: Record the coverage total
+        run: |
+          set -euo pipefail
+          go tool cover -func=cover.out | tail -1 >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: cover.out
+          retention-days: 7
 
   # The Go tests prove the right bytes are served. They cannot prove the page
   # works, and soiree is mostly frontend — so this drives the real binary in a
@@ -81,7 +99,11 @@ jobs:
   # papering over it with retries.
   #
   # A failing `playwright install` is infrastructure, not test logic: re-run
-  # the job rather than treating it as a finding.
+  # the job rather than treating it as a finding. The same now goes for the
+  # database and the bucket the launcher requires here: if one does not come
+  # up the run fails, and that is a registry or runner problem to re-run
+  # rather than something to investigate in the suite. What it no longer does
+  # is carry on with a third of the specs skipping themselves.
   browser:
     name: Browser tests (Playwright)
     runs-on: ubuntu-latest
@@ -110,8 +132,23 @@ jobs:
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
+      # Seconds, no browser, and it is what guards the step below: the rule
+      # that a missing backend fails this job is itself a few lines of the
+      # launcher, and nothing in the browser suite can reach them.
+      - name: Test the API launcher
+        working-directory: e2e
+        run: node --test scripts/api-server.test.js
+
       - name: Run the browser tests
         working-directory: e2e
+        env:
+          # Without this, a database that did not come up means the specs that
+          # need one skip themselves, about a third of the suite, and the job
+          # is still green, because Playwright counts a skip as a pass: sign-in,
+          # live sync, conflicts and attachments would stop being covered with
+          # nobody told. The launcher fails the run instead. Unset on a laptop,
+          # where a machine with no Docker is meant to run the smaller suite.
+          SOIREE_E2E_REQUIRE_BACKENDS: '1'
         run: npm test
 
       # Traces are kept only for failures, so this is usually a near-empty

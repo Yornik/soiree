@@ -16,6 +16,9 @@
  * see a 404 from /api/v1/plan and skip themselves. A machine without Docker
  * runs a smaller suite rather than a failing one.
  *
+ * That is for a laptop. Set SOIREE_E2E_REQUIRE_BACKENDS, as CI does, and a
+ * backend that did not come up fails the run instead. See requireOrExit.
+ *
  * Set SOIREE_E2E_DATABASE_URL to point at a PostgreSQL you already have and no
  * container is started at all.
  *
@@ -53,6 +56,12 @@ const S3_BUCKET = 'soiree-e2e';
 // Generous: the first run on a machine may be pulling the image. The Playwright
 // webServer timeout for this entry has to be at least this much again.
 const READY_TIMEOUT_MS = 180_000;
+
+// Set by CI, unset on a laptop. An explicit variable rather than process.env.CI
+// so that the two questions stay separate: whether this is an automated run,
+// and whether the machine is one where a missing backend is a fault.
+const REQUIRE_BACKENDS = !['', '0', 'false'].includes(
+  (process.env.SOIREE_E2E_REQUIRE_BACKENDS || '').trim().toLowerCase());
 
 const note = (msg) => console.error(`api-server: ${msg}`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -199,8 +208,26 @@ async function resolveDatabase() {
   return { dsn: dsn || '', container: !!dsn };
 }
 
+/**
+ * Ends the run, loudly, leaving nothing behind.
+ *
+ * The fallback above is right for a machine without Docker and wrong for CI:
+ * there a pull that failed or a container that was slow turns the specs which
+ * need a database into skips, and Playwright counts a skip as a pass. The job
+ * stays green while a third of the suite has stopped running. Exiting before
+ * the binary is spawned is what makes Playwright report the webServer as
+ * having exited early rather than start the tests.
+ */
+function requireOrExit(what) {
+  note(`${what}, and SOIREE_E2E_REQUIRE_BACKENDS is set: failing the run rather than skipping the specs that need it`);
+  removeContainer();
+  removeBucket();
+  process.exit(1);
+}
+
 async function main() {
   const { dsn, container } = await resolveDatabase();
+  if (REQUIRE_BACKENDS && !dsn) requireOrExit('there is no database');
 
   const env = Object.assign({}, process.env);
   // Explicit either way: an inherited DATABASE_URL must not turn the
@@ -212,6 +239,10 @@ async function main() {
   // All five or none: soiree refuses to start on a half-configured bucket.
   for (const name of Object.keys(env)) if (name.startsWith('SOIREE_S3_')) delete env[name];
   const bucket = !!dsn && container && (await startBucket());
+  // Only on the container path: with SOIREE_E2E_DATABASE_URL the caller
+  // brought their own database and no bucket is started for it by design, so
+  // requiring one would fail a run that is configured exactly as intended.
+  if (REQUIRE_BACKENDS && container && !bucket) requireOrExit('there is no bucket');
   if (bucket) {
     env.SOIREE_S3_ENDPOINT = S3_URL;
     env.SOIREE_S3_REGION = 'us-east-1';
