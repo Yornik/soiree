@@ -311,30 +311,57 @@ func TestTwoReleasesDoNotRaceForTheFloatingTag(t *testing.T) {
 // image and the tool versions the workflows pin inline free to merge
 // themselves the day they were published.
 func TestNoDependencyMergesItselfTheDayItIsPublished(t *testing.T) {
+	// Rules are read as raw values keyed by name, because the way to switch
+	// the wait off is to set it to null — what vulnerabilityAlerts does by
+	// default — and a null decoded into any typed field is the same nil as a
+	// rule that never mentioned the field at all.
 	var cfg struct {
-		MinimumReleaseAge string `json:"minimumReleaseAge"`
-		PackageRules      []struct {
-			MinimumReleaseAge *json.RawMessage `json:"minimumReleaseAge"`
-		} `json:"packageRules"`
+		MinimumReleaseAge json.RawMessage              `json:"minimumReleaseAge"`
+		PackageRules      []map[string]json.RawMessage `json:"packageRules"`
 	}
 	if err := json.Unmarshal([]byte(repoFile(t, "renovate.json")), &cfg); err != nil {
 		t.Fatalf("parse renovate.json: %v", err)
 	}
 
-	if cfg.MinimumReleaseAge == "" || strings.HasPrefix(cfg.MinimumReleaseAge, "0") {
-		t.Errorf("renovate.json sets minimumReleaseAge to %q at the top level, so an update automerges as soon as CI is green and a compromised release reaches main on the day it is published",
-			cfg.MinimumReleaseAge)
+	if len(cfg.MinimumReleaseAge) == 0 || mergesOnPublicationDay(cfg.MinimumReleaseAge) {
+		t.Errorf("renovate.json sets minimumReleaseAge to %s at the top level, so an update automerges as soon as CI is green and a compromised release reaches main on the day it is published",
+			orNothing(cfg.MinimumReleaseAge))
 	}
 
 	// A rule may lengthen the wait; nothing may switch it off, which is how
 	// the previous one came to cover two of the managers in use.
 	for i, r := range cfg.PackageRules {
-		if r.MinimumReleaseAge == nil {
+		age, set := r["minimumReleaseAge"]
+		if !set {
 			continue
 		}
-		switch string(*r.MinimumReleaseAge) {
-		case "null", "0", `""`, `"0"`:
-			t.Errorf("renovate.json packageRules[%d] turns the wait off for what it matches, so those updates merge themselves unreviewed", i)
+		if mergesOnPublicationDay(age) {
+			t.Errorf("renovate.json packageRules[%d] sets minimumReleaseAge to %s, which turns the wait off for what it matches, so those updates merge themselves unreviewed",
+				i, orNothing(age))
 		}
 	}
+}
+
+// mergesOnPublicationDay reports whether a minimumReleaseAge value lets an
+// update merge the day it was published: an explicit null, which clears an
+// inherited wait, a zero, or a duration counted from zero. A duration arrives
+// quoted, so the leading zero is found in the decoded string rather than in
+// the raw bytes.
+func mergesOnPublicationDay(age json.RawMessage) bool {
+	switch strings.TrimSpace(string(age)) {
+	case "null", "0":
+		return true
+	}
+	var wait string
+	if err := json.Unmarshal(age, &wait); err != nil {
+		return false
+	}
+	return wait == "" || strings.HasPrefix(wait, "0")
+}
+
+func orNothing(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "nothing"
+	}
+	return string(raw)
 }
