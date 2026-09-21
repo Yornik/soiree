@@ -1209,6 +1209,54 @@ body.is-archived .when-data { display: block; }
   }
   table.budget tfoot th { display: block; min-height: 0; padding: 0 0 4px; }
   table.budget tfoot td:not([data-label]) { display: none; }
+
+  /* --- The task list, unwound ---
+     Five columns hold 560px whatever the screen is, so on a phone the name
+     field came out 70px wide, eight characters of a task called "Confirm
+     final guest count", and the status and the remove button sat past the
+     right-hand edge with nothing on the page to say they were there. Each
+     task becomes an entry the way a budget line does: the name at the head,
+     then the two small facts about it side by side, then what state it is in
+     and the one control that throws it away.
+
+     The header row goes with the columns, and the screen-reader-only
+     "Remove" it carries goes with it: that span is positioned absolutely
+     inside a cell nothing positions, so it escaped the clip on the region
+     around the table and panned the whole document 160px sideways, with no
+     tasks in the list at all. */
+  table.tasks { display: block; min-width: 0; }
+  table.tasks thead { display: none; }
+  table.tasks tbody { display: block; }
+
+  /* minmax(0,…) again, and the date's own column sized to it: a date field is
+     drawn by the browser and has a width of its own, and a bare 1fr will not
+     shrink below it, so at 320px the entry would push the page sideways
+     instead. */
+  table.tasks tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 16px;
+    padding: 6px 0 14px;
+    border-top: 1px solid var(--rule-ink);
+  }
+  table.tasks tbody tr:first-child { border-top: 0; }
+  table.tasks tbody td { display: block; border: 0; padding: 2px 0; }
+  table.tasks tbody td input, table.tasks tbody td select { min-width: 0; }
+  /* The name says which task this is, so it leads the entry across both
+     columns and is set to be read first. Owner and due date fall either side
+     of the line under it, status and remove on the line under that. */
+  table.tasks tbody td:first-child { grid-column: 1 / -1; }
+  table.tasks tbody td:first-child input { font-size: 18px; font-weight: 600; }
+  table.tasks tbody td.del-cell { width: auto; text-align: right; }
+  table.tasks tbody td.empty-cell { padding: 18px 0; }
+
+  /* The status edge marks the entry now that the row is one. Left where it
+     was it would run down the name alone, which reads as a mark on the name
+     rather than on the task. */
+  table.tasks tbody tr[data-status] { box-shadow: inset 3px 0 0 var(--rule-mid); padding-left: 13px; }
+  table.tasks tbody tr[data-status="in-progress"] { box-shadow: inset 3px 0 0 var(--lamp); }
+  table.tasks tbody tr[data-status="done"] { box-shadow: inset 3px 0 0 var(--paid); }
+  table.tasks tbody tr[data-status] td:first-child { box-shadow: none; }
 }
 
 /* Touch, and anything narrow enough to be held: a 24px delete button is not

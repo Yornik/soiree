@@ -1,18 +1,26 @@
 // @ts-check
 /*
- * The budget grid on a phone.
+ * The budget grid and the task list on a phone.
  *
  * Nine columns, a frozen first column and drag handles on the header are a
- * desk interaction. Below the breakpoint the same markup has to become a
- * stack of entries — same DOM, same ids, same cell order, so everything else
- * in this suite still addresses it the same way — with the money still in one
- * right-aligned column that reconciles against the totals.
+ * desk interaction, and so are the five columns of the task list. Below the
+ * breakpoint the same markup has to become a stack of entries — same DOM,
+ * same ids, same cell order, so everything else in this suite still addresses
+ * it the same way — with the money still in one right-aligned column that
+ * reconciles against the totals.
  *
  * These tests assert the layout, not the styling: what scrolls, what is
  * reachable, how big a target is, and whether the arithmetic still lines up.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, budgetRow, gotoTab, money, openPlanner } = require('./helpers');
+const { addBudgetLine, addTask, budgetRow, gotoTab, money, openPlanner } = require('./helpers');
+
+/** How far the document itself can be scrolled sideways, in CSS pixels. */
+function documentOverflow(page) {
+  return page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+}
 
 // A small phone in portrait. Narrower than anything else this suite runs at,
 // which is the point: if it works here it works on the rest.
@@ -201,4 +209,62 @@ test('no field is small enough to make the browser zoom into it', async ({ page 
       .filter((f) => f.size < 16);
   });
   expect(small).toEqual([]);
+});
+
+/*
+ * The task list. Five columns is a desk layout too, and it was never given
+ * the treatment the budget grid got: at this width the name field was 70px
+ * wide, about eight characters of "Confirm final guest count", and the
+ * status and the remove button sat off the right-hand edge of the screen
+ * with nothing on the page to say they were there.
+ */
+test('a task becomes an entry instead of a row running off the screen', async ({ page }) => {
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Confirm final guest count', owner: 'Ada', due: '2030-05-01' });
+
+  // Nothing to scroll: not the region around the table, and not the page.
+  const wrap = page.locator('#panel-tasks .table-wrap');
+  expect(await wrap.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+
+  // The header row is the one part that cannot stack. It goes, and so does
+  // the off-screen "Remove" it carried for screen readers: that span is
+  // absolutely positioned inside a cell nothing positions, so it escaped the
+  // region's clip and panned the whole document sideways.
+  await expect(page.locator('#panel-tasks thead')).toBeHidden();
+
+  const row = page.locator('#tasksBody tr').first();
+  const rowBox = await row.boundingBox();
+
+  // The name leads the entry across its full width rather than being cut to
+  // a word and a half.
+  const name = await row.locator('td').nth(0).locator('input').boundingBox();
+  expect(name.width).toBeGreaterThan(rowBox.width * 0.8);
+
+  // And what used to be past the right edge is on the screen.
+  const viewport = page.viewportSize().width;
+  for (const [what, locator] of [
+    ['status', row.locator('select.status-select')],
+    ['remove', row.locator('td.del-cell button')],
+  ]) {
+    const box = await locator.boundingBox();
+    expect(box.x + box.width, `${what} is off the right edge`).toBeLessThanOrEqual(viewport);
+  }
+
+  // Reading order down the entry: what it is, then who has it and when, then
+  // what state it is in, with the destructive one last.
+  const owner = await row.locator('td').nth(1).locator('input').boundingBox();
+  const status = await row.locator('select.status-select').boundingBox();
+  const remove = await row.locator('td.del-cell button').boundingBox();
+  expect(name.y).toBeLessThan(owner.y);
+  expect(owner.y).toBeLessThan(status.y);
+  expect(remove.y).toBeGreaterThanOrEqual(status.y);
+});
+
+test('an empty task list does not pan the page sideways either', async ({ page }) => {
+  // The header row is drawn whether or not there is anything under it, so
+  // this was the state a phone met before adding a single task.
+  await gotoTab(page, 'tasks');
+  await expect(page.locator('#tasksBody td.empty-cell')).toBeVisible();
+  expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
 });
