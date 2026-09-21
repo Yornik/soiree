@@ -516,6 +516,34 @@
 
   <!-- YOUR ACCOUNT -->
   <section class="auth-panel" id="panelAccount" hidden>
+    <!-- The one way to replace a password without a link. It is the only way
+         at all on a deployment whose relay is not delivering, which is the
+         deployment the bootstrap password exists for. -->
+    <section class="auth-block" id="passwordSection">
+      <h2 data-i18n-auth="chpw.title">Password</h2>
+      <p class="auth-note-body" data-i18n-auth="chpw.body">Changing your password signs out every other device.
+         This one stays signed in.</p>
+      <form class="auth-form" id="passwordForm" novalidate>
+        <div class="auth-field">
+          <label for="currentPassword" data-i18n-auth="chpw.current">Current password</label>
+          <input type="password" id="currentPassword" autocomplete="current-password">
+        </div>
+        <div class="auth-field">
+          <label for="changedPassword" data-i18n-auth="setpw.new">New password</label>
+          <input type="password" id="changedPassword" autocomplete="new-password">
+          <p class="auth-hint" data-i18n-auth="setpw.hint">At least 12 characters. Length is what makes a password
+             hard to guess, so a short sentence beats a short scramble.</p>
+        </div>
+        <div class="auth-field">
+          <label for="changedPassword2" data-i18n-auth="setpw.again">Type it again</label>
+          <input type="password" id="changedPassword2" autocomplete="new-password">
+        </div>
+        <p class="auth-msg" id="passwordMsg" role="status" aria-live="polite"></p>
+        <div class="auth-acts">
+          <button class="solid-btn" type="submit" id="passwordSubmit" data-i18n-auth="chpw.submit">Change password</button>
+        </div>
+      </form>
+    </section>
     <section class="auth-block" id="passkeySection" hidden>
       <h2 data-i18n-auth="pk.title">Passkeys</h2>
       <p class="auth-note-body" data-i18n-auth="pk.body">A passkey signs you in with the fingerprint reader or

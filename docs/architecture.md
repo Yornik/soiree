@@ -1175,7 +1175,10 @@ account stays `invited` and the mailed link is the only way in — the better
 shape when mail works, since no credential is written down.
 
 The routes are `POST /api/v1/auth/login`, `logout`, `password-reset` and
-`set-password`; `GET /api/v1/auth/session` for "who am I"; and
+`set-password`; `GET /api/v1/auth/session` for "who am I";
+`POST /api/v1/auth/password` to change the password you already know, which is
+the only way that needs no mail and which ends every session the account had;
+and
 `GET|POST /api/v1/users`, `GET|PATCH|DELETE /api/v1/users/{id}`,
 `POST /api/v1/users/{id}/invite` and
 `POST /api/v1/users/{id}/revoke-credentials` for administration. Every one of
@@ -1187,7 +1190,8 @@ rather than part of it: a deployment with no database has no accounts at all,
 and `auth.js` is then a script that finds nothing and draws nothing. It draws
 five screens, routed in the URL fragment so they can be linked to — sign in,
 set a password (where an invitation link lands, with the token taken out of the
-address bar before anything else happens), your own account and its passkeys,
+address bar before anything else happens), your own account with its password
+and its passkeys,
 and, for an admin, the accounts screen and the activity screen. It enforces
 nothing; the server does.
 

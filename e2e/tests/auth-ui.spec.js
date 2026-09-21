@@ -110,6 +110,14 @@ async function mountAccounts(page, opts = {}) {
     // that before it looks at what was asked.
     if (!state.session) return json(route, 401, { error: 'unauthenticated' });
 
+    if (path === '/auth/password') {
+      // The real server reads the new password first, so a short one is
+      // refused without the current one being looked at.
+      if (!body || (body.newPassword || '').length < 12) return json(route, 400, { error: 'weak_password' });
+      if (body.currentPassword !== PASSWORD) return json(route, 401, { error: 'invalid_credentials' });
+      return json(route, 200, state.session);
+    }
+
     if (path === '/auth/passkeys') return json(route, 200, { passkeys: state.passkeys });
 
     if (path === '/activity') {
@@ -418,6 +426,74 @@ test('a link with no token in it says so rather than failing at the server', asy
 
   await expect(page.locator('#setPasswordMsg')).toContainText('incomplete');
   await expect(page.locator('#setPasswordSubmit')).toBeDisabled();
+});
+
+/* ------------------------------------------------------------------
+ * Changing the password you already know
+ * ------------------------------------------------------------------
+ * The other way to a new password is a link, and a link goes to the mailer.
+ * On a deployment whose relay is not delivering this form is the only way
+ * there is, which is the deployment the bootstrap password exists for.
+ * ------------------------------------------------------------------ */
+
+test('changing a password sends both halves and reports what it did to the other devices', async ({ page }) => {
+  const state = await mountAccounts(page, { session: ADA, users: [ADA] });
+  await open(page, '/#/account');
+
+  await page.fill('#currentPassword', PASSWORD);
+  await page.fill('#changedPassword', 'a longer one entirely');
+  await page.fill('#changedPassword2', 'a longer one entirely');
+  await page.click('#passwordSubmit');
+
+  await expect(page.locator('#passwordMsg')).toContainText('signed out');
+  const sent = state.calls.filter((c) => c.path === '/auth/password');
+  expect(sent).toHaveLength(1);
+  expect(sent[0].body).toEqual({ currentPassword: PASSWORD, newPassword: 'a longer one entirely' });
+
+  // Nothing left in the fields: a password still on screen is a password for
+  // whoever looks next, and the screen stays where it was.
+  for (const field of ['#currentPassword', '#changedPassword', '#changedPassword2']) {
+    await expect(page.locator(field)).toHaveValue('');
+  }
+  await expect(page.locator('#panelAccount')).toBeVisible();
+});
+
+test('a wrong current password is said so, and is not read as the session ending', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA] });
+  await open(page, '/#/account');
+
+  await page.fill('#currentPassword', 'not the password');
+  await page.fill('#changedPassword', 'a longer one entirely');
+  await page.fill('#changedPassword2', 'a longer one entirely');
+  await page.click('#passwordSubmit');
+
+  // The refusal is a 401, the same status the page reads as "you are signed
+  // out" everywhere else. Mistyping one field must not throw somebody out of
+  // the screen they are standing on.
+  await expect(page.locator('#passwordMsg')).toContainText('current password');
+  await expect(page.locator('#panelAccount')).toBeVisible();
+  await expect(page.locator('#panelLogin')).toBeHidden();
+});
+
+test('a new password that cannot work is refused before it costs a round trip', async ({ page }) => {
+  const state = await mountAccounts(page, { session: ADA, users: [ADA] });
+  await open(page, '/#/account');
+
+  await page.fill('#currentPassword', PASSWORD);
+  await page.fill('#changedPassword', 'a longer one entirely');
+  await page.fill('#changedPassword2', 'a longer one entirel');
+  await page.click('#passwordSubmit');
+  await expect(page.locator('#passwordMsg')).toContainText('not the same');
+
+  await page.fill('#changedPassword2', 'a longer one entirely');
+  await page.fill('#changedPassword', 'too short');
+  await page.fill('#changedPassword2', 'too short');
+  await page.click('#passwordSubmit');
+  await expect(page.locator('#passwordMsg')).toContainText('12');
+
+  // The route is charged to the same buckets as signing in, so an attempt
+  // that cannot succeed must not spend one.
+  expect(state.calls.filter((c) => c.path === '/auth/password')).toHaveLength(0);
 });
 
 /* ------------------------------------------------------------------

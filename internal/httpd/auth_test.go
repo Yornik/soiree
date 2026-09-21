@@ -1296,3 +1296,250 @@ func TestTheSetPasswordFloorCountsCharactersNotBytes(t *testing.T) {
 		})
 	}
 }
+
+// --- changing a password from inside ----------------------------------------
+
+// The bootstrap password is handed to an operator in an environment variable
+// and the boot log tells them to change it. This is the route that lets them,
+// and it is also this surface's "sign out everywhere else": the password that
+// ends is the one every session was minted against, so every session ends with
+// it and the browser that asked gets a new one.
+func TestChangingAPasswordEndsEverySessionAndKeepsTheCallerSignedIn(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+
+	phone := f.login(t, "ada@example.test", goodPassword)
+	laptop := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/password",
+		map[string]string{"currentPassword": goodPassword, "newPassword": otherPassword}, phone)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+
+	var rotated *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookieName && c.Value != "" {
+			rotated = c
+		}
+	}
+	if rotated == nil {
+		t.Fatal("no session cookie came back, so changing a password signs you out of the browser you did it in")
+	}
+	if rotated.Value == phone.Value {
+		t.Error("the session token did not change, so a cookie copied before the change still opens the account")
+	}
+
+	for _, c := range []struct {
+		what   string
+		cookie *http.Cookie
+	}{
+		{"the cookie that asked", phone},
+		{"the other device", laptop},
+	} {
+		if rec := f.do(t, http.MethodGet, "/api/v1/auth/session", nil, c.cookie); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s still resolves after the password changed: status %d", c.what, rec.Code)
+		}
+	}
+	if rec := f.do(t, http.MethodGet, "/api/v1/auth/session", nil, rotated); rec.Code != http.StatusOK {
+		t.Errorf("the session that came back = %d, want 200", rec.Code)
+	}
+
+	if rec := f.do(t, http.MethodPost, "/api/v1/auth/login",
+		map[string]string{"email": "ada@example.test", "password": goodPassword}, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("the old password still logs in: status %d", rec.Code)
+	}
+	f.login(t, "ada@example.test", otherPassword)
+}
+
+func TestChangingAPasswordRefusesWhatItShould(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	session := f.login(t, "ada@example.test", goodPassword)
+
+	// Signed out there is no account to change, and no current password to be
+	// told anything about.
+	if rec := f.do(t, http.MethodPost, "/api/v1/auth/password",
+		map[string]string{"currentPassword": goodPassword, "newPassword": otherPassword}, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("signed out = %d, want 401", rec.Code)
+	}
+
+	// The new password is read first, so a request that is wrong in both ways
+	// is refused for the reason that costs nothing to find.
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/password",
+		map[string]string{"currentPassword": "not the password", "newPassword": "short"}, session)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "weak_password") {
+		t.Errorf("a new password below the floor = %d %s, want 400 weak_password", rec.Code, rec.Body)
+	}
+
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/password",
+		map[string]string{"currentPassword": otherPassword, "newPassword": "a third long password"}, session)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "invalid_credentials") {
+		t.Errorf("a wrong current password = %d %s, want 401 invalid_credentials", rec.Code, rec.Body)
+	}
+	// A refusal changes nothing: not the password, and not the session that
+	// asked. Somebody who mistyped is still where they were.
+	if rec := f.do(t, http.MethodGet, "/api/v1/auth/session", nil, session); rec.Code != http.StatusOK {
+		t.Errorf("a refused change ended the caller's session: %d", rec.Code)
+	}
+	f.login(t, "ada@example.test", goodPassword)
+}
+
+// A password somebody changes because they think the old one leaked has to
+// take the outstanding link with it. A link that survives is a way back in for
+// whoever is holding it.
+func TestChangingAPasswordSpendsTheOutstandingLink(t *testing.T) {
+	f := newFixture(t, false) // no relay, so the link comes back in the body
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	grace := f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/invite", nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invite: status %d, body %s", rec.Code, rec.Body)
+	}
+	token := tokenFromLink(t, decodeTestBody[createUserResponse](t, rec).SetPasswordURL)
+
+	session := f.login(t, "grace@example.test", goodPassword)
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/password",
+		map[string]string{"currentPassword": goodPassword, "newPassword": otherPassword}, session)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("change: status %d, body %s", rec.Code, rec.Body)
+	}
+
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/set-password",
+		map[string]string{"token": token, "password": "a third long password"}, nil)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_token") {
+		t.Errorf("the link outstanding before the change = %d %s, want 400 invalid_token", rec.Code, rec.Body)
+	}
+}
+
+// The route is charged to the buckets that guard the sign-in screen, because
+// it asks for the same work from a caller who may be holding a session they
+// took. They share a key, so a run of guesses from inside a session spends the
+// sign-in allowance as well. That is deliberate: it is one account's worth of
+// guessing, not two.
+func TestChangingAPasswordIsChargedToTheLoginBuckets(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	session := f.login(t, "ada@example.test", goodPassword)
+
+	// Out of the way, or it fires first and this passes without ever
+	// exercising the per-account one. Every request below comes from the same
+	// test address.
+	f.a.loginIP = newLimiter(10_000, time.Minute)
+
+	var limited bool
+	for range loginAcctBurst + 2 {
+		rec := f.do(t, http.MethodPost, "/api/v1/auth/password",
+			map[string]string{"currentPassword": otherPassword, "newPassword": "a third long password"}, session)
+		if rec.Code == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Fatalf("a run of %d wrong current passwords was never rate-limited", loginAcctBurst+2)
+	}
+
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/login",
+		map[string]string{"email": "ada@example.test", "password": goodPassword}, nil)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("signing in after that run = %d, want 429: the two share one allowance", rec.Code)
+	}
+}
+
+// --- what an operator can read afterwards -----------------------------------
+
+// A passkey refusal has left a line since the day passkeys arrived
+// (logPasskeyRefusal), and a password refusal left none, so the one login
+// anybody can try from a script was the one nothing recorded.
+func TestARefusedPasswordLoginIsWrittenDown(t *testing.T) {
+	f := newFixture(t, false)
+	ada := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+
+	var logged bytes.Buffer
+	f.a.log = slog.New(slog.NewJSONHandler(&logged, nil))
+
+	const guess = "not the password at all"
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/login",
+		map[string]string{"email": "ada@example.test", "password": guess}, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	out := logged.String()
+	if !strings.Contains(out, "login refused") || !strings.Contains(out, ada.ID.String()) {
+		t.Errorf("a refused login left no line naming the account: %s", out)
+	}
+	// The address is what somebody typed and the password is a secret whoever
+	// typed it may use elsewhere. Neither belongs in a file more people read
+	// than read the database.
+	if strings.Contains(out, guess) || strings.Contains(out, "ada@example.test") {
+		t.Errorf("the log carries the address or the password that was submitted: %s", out)
+	}
+
+	logged.Reset()
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/login",
+		map[string]string{"email": "nobody@example.test", "password": guess}, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	out = logged.String()
+	if !strings.Contains(out, "login refused") {
+		t.Errorf("a refused login against an address with no account left no line: %s", out)
+	}
+	// Nothing to name, and naming the address would write down an address
+	// this deployment has no account for.
+	if strings.Contains(out, "nobody@example.test") {
+		t.Errorf("the log carries an address nobody here has an account for: %s", out)
+	}
+}
+
+// The link that goes out by mail is the one an admin can ask for on somebody
+// else's account, and it was the one path that left nothing behind: the reply
+// says nothing and the row carries no issuer.
+func TestALinkSentByMailSaysWhoAskedForIt(t *testing.T) {
+	f := newFixture(t, true) // a relay, so the link goes to its owner and the admin never sees it
+	ada := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	grace := f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	var logged bytes.Buffer
+	f.a.log = slog.New(slog.NewJSONHandler(&logged, nil))
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/invite", nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invite: status %d, body %s", rec.Code, rec.Body)
+	}
+	out := logged.String()
+	if !strings.Contains(out, "account link issued by mail") ||
+		!strings.Contains(out, grace.ID.String()) || !strings.Contains(out, ada.ID.String()) {
+		t.Errorf("the log does not say which admin had a link sent, and for whom: %s", out)
+	}
+	if !strings.Contains(out, string(store.PurposeReset)) {
+		t.Errorf("the log does not say what kind of link it was: %s", out)
+	}
+	sent := f.mail.messages()
+	if len(sent) != 1 {
+		t.Fatalf("%d mails sent, want 1", len(sent))
+	}
+	if strings.Contains(out, tokenFromLink(t, linkFromMail(t, sent[0].body))) {
+		t.Error("the link's token was logged with it")
+	}
+
+	// The same line for a reset nobody but the account asked for, naming the
+	// account twice rather than an admin who had nothing to do with it.
+	logged.Reset()
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/password-reset",
+		map[string]string{"email": "grace@example.test"}, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("reset: status %d, body %s", rec.Code, rec.Body)
+	}
+	out = logged.String()
+	if !strings.Contains(out, "account link issued by mail") || !strings.Contains(out, grace.ID.String()) {
+		t.Errorf("a reset somebody asked for themselves left no line: %s", out)
+	}
+	if strings.Contains(out, ada.ID.String()) {
+		t.Errorf("a reset nobody but the account asked for names an admin: %s", out)
+	}
+}

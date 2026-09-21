@@ -226,6 +226,12 @@
       'e.link_failed': 'The account was created but no link could be issued. Try sending one again.',
       'account.title': 'Your account',
       'account.lede': '{email}, signed in as {role}.',
+      'chpw.title': 'Password',
+      'chpw.body': 'Changing your password signs out every other device. This one stays signed in.',
+      'chpw.current': 'Current password',
+      'chpw.submit': 'Change password',
+      'chpw.done': 'Your password is changed. Every other device is signed out.',
+      'chpw.wrong': 'That is not your current password.',
       'pk.title': 'Passkeys',
       'pk.body': 'A passkey signs you in with the fingerprint reader or screen lock on a device you already have. It never leaves that device, and it cannot be phished or reused anywhere else.',
       'pk.empty': 'No passkeys on this account yet.',
@@ -431,6 +437,12 @@
       'e.link_failed': 'Het account is aangemaakt, maar er kon geen link worden gemaakt. Probeer er opnieuw een te sturen.',
       'account.title': 'Je account',
       'account.lede': '{email}, aangemeld als {role}.',
+      'chpw.title': 'Wachtwoord',
+      'chpw.body': 'Als je je wachtwoord wijzigt, worden alle andere apparaten afgemeld. Dit apparaat blijft aangemeld.',
+      'chpw.current': 'Huidig wachtwoord',
+      'chpw.submit': 'Wachtwoord wijzigen',
+      'chpw.done': 'Je wachtwoord is gewijzigd. Alle andere apparaten zijn afgemeld.',
+      'chpw.wrong': 'Dat is niet je huidige wachtwoord.',
       'pk.title': 'Passkeys',
       'pk.body': 'Met een passkey meld je je aan met de vingerafdruklezer of schermvergrendeling van een apparaat dat je al hebt. Hij verlaat dat apparaat nooit, en kan niet met phishing worden buitgemaakt of ergens anders worden hergebruikt.',
       'pk.empty': 'Nog geen passkeys bij dit account.',
@@ -636,6 +648,12 @@
       'e.link_failed': 'Akun sudah dibuat, tetapi tautan tidak bisa diterbitkan. Coba kirim lagi.',
       'account.title': 'Akunmu',
       'account.lede': '{email}, masuk sebagai {role}.',
+      'chpw.title': 'Kata sandi',
+      'chpw.body': 'Mengganti kata sandi akan mengeluarkan semua perangkat lain. Perangkat ini tetap masuk.',
+      'chpw.current': 'Kata sandi saat ini',
+      'chpw.submit': 'Ganti kata sandi',
+      'chpw.done': 'Kata sandimu sudah diganti. Semua perangkat lain sudah dikeluarkan.',
+      'chpw.wrong': 'Itu bukan kata sandimu saat ini.',
       'pk.title': 'Kunci sandi (passkey)',
       'pk.body': 'Dengan kunci sandi kamu masuk memakai pemindai sidik jari atau kunci layar di perangkat yang sudah kamu punya. Kunci itu tidak pernah keluar dari perangkat tersebut, tidak bisa dicuri lewat phishing, dan tidak bisa dipakai di tempat lain.',
       'pk.empty': 'Belum ada kunci sandi di akun ini.',
@@ -2312,11 +2330,82 @@
   function renderAccount() {
     showPanel('panelAccount', t('account.title'),
       user ? t('account.lede', { email: user.email, role: roleWord(user.role) }) : '');
+    renderPasswordChange();
     show(byId('passkeySection'), PASSKEYS_OFFERED);
     say(byId('passkeyMsg'), '');
     if (PASSKEYS_OFFERED) loadPasskeys();
     registerCeremony.warm();
     renderReminders();
+  }
+
+  /* Changing the password you already know.
+   *
+   * The other way to a new password is a link, and a link is handed to the
+   * mailer and never shown, so on a deployment whose relay is not delivering
+   * this is the only way there is - which is exactly the deployment the
+   * bootstrap password exists for.
+   *
+   * It is also "sign out everywhere else": the server ends every session the
+   * account had and sends this browser a new cookie with the answer, so the
+   * laptop somebody left signed in at a friend's house is signed out and this
+   * screen stays where it is.
+   */
+  function renderPasswordChange() {
+    // Emptied whenever the screen is drawn, the same rule the set-password
+    // screen follows: a password left in a field is a password on screen for
+    // whoever looks next.
+    clearPasswordFields();
+    say(byId('passwordMsg'), '');
+    var submit = byId('passwordSubmit');
+    if (submit) submit.disabled = false;
+  }
+
+  function clearPasswordFields() {
+    each(['currentPassword', 'changedPassword', 'changedPassword2'], function (id) {
+      var el = byId(id);
+      if (el) el.value = '';
+    });
+  }
+
+  function bindPasswordChange() {
+    var form = byId('passwordForm');
+    if (!form) return;
+    var msg = byId('passwordMsg');
+    var submit = byId('passwordSubmit');
+
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var current = byId('currentPassword').value || '';
+      var chosen = byId('changedPassword').value || '';
+      var again = byId('changedPassword2').value || '';
+      if (chosen !== again) {
+        say(msg, t('setpw.mismatch'), true);
+        return;
+      }
+      if (chosen.length < 12) {
+        // Here as well as at the server, so a password that cannot work is
+        // never sent: this route is charged to the same buckets as signing
+        // in, and a typo should not spend one of the attempts they hold.
+        say(msg, t('setpw.short'), true);
+        return;
+      }
+      submit.disabled = true;
+      say(msg, '');
+      request('POST', '/auth/password', { currentPassword: current, newPassword: chosen })
+        .then(function (res) {
+          submit.disabled = false;
+          if (res.status === 200) {
+            clearPasswordFields();
+            say(msg, t('chpw.done'));
+            return;
+          }
+          // A wrong current password is a 401 as well, so the session is only
+          // read out of the code: signedOut() answers false for the refusal
+          // this form can actually produce.
+          if (signedOut(res)) { sessionEnded(); return; }
+          say(msg, problem(res, { invalid_credentials: t('chpw.wrong') }), true);
+        });
+    });
   }
 
   /* Reminders on this device.
@@ -2897,6 +2986,7 @@
   fillLanguageChoice(byId('newUserLanguage'), null);
   bindLogin();
   bindSetPassword();
+  bindPasswordChange();
   bindAdmin();
   bindPasskeys();
   bindReminders();

@@ -187,6 +187,66 @@ func (s *Store) ConsumePasswordToken(ctx context.Context, tokenHash []byte, pass
 	})
 }
 
+// ChangePassword sets a new password for somebody who proved they know the
+// old one, and takes with it everything the old one stood for.
+//
+// The transaction above minus the link: there is no token to redeem, because
+// the caller presented the password itself. Everything else is the same, and
+// for the same reason. Setting a password is what somebody does when they
+// think the old one leaked, so the sessions it protected die with it and so
+// does any link still outstanding, which would otherwise be a way back in for
+// whoever is holding it.
+//
+// Every session goes, the caller's included. The caller gets a new one from
+// the handler, which is what makes this "sign out everywhere else" without a
+// second route: the browser that asked stays signed in, on a token nobody
+// copied, and every other device is signed out.
+//
+// The actor is the account itself, which is the plain truth: nothing else can
+// reach this. The entry records that the credential changed and never what it
+// changed to: password_hash is redacted like every other secret column.
+func (s *Store) ChangePassword(ctx context.Context, userID uuid.UUID, passwordHash string) (User, error) {
+	return inTx(ctx, s, func(tx pgx.Tx) (User, error) {
+		before, err := lockRow[User](ctx, tx, EntityUsers, userColumns, userID)
+		if err != nil {
+			return User{}, err
+		}
+
+		// The status is left alone. Only a link can move an invited account to
+		// active, because only a link proves the address was read; this proves
+		// a password, which an invited account does not have.
+		user, err := queryOne[User](ctx, tx, "users",
+			`UPDATE users
+			    SET password_hash = $1,
+			        revision = revision + 1,
+			        updated_at = now()
+			  WHERE id = $2 AND status <> 'disabled'
+			RETURNING `+userColumns,
+			passwordHash, userID)
+		if err != nil {
+			// Disabled between the session resolving and here, which the
+			// caller's next request would find for itself.
+			return User{}, err
+		}
+
+		if err := recordUpdate(ctx, tx, EntityUsers, userID, &user.Revision, before, user,
+			Actor{ID: &userID}); err != nil {
+			return User{}, err
+		}
+
+		if _, err := tx.Exec(ctx,
+			`UPDATE password_tokens SET consumed_at = now()
+			  WHERE user_id = $1 AND consumed_at IS NULL`, userID); err != nil {
+			return User{}, fmt.Errorf("password_tokens: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+			return User{}, fmt.Errorf("sessions: %w", err)
+		}
+
+		return user, nil
+	})
+}
+
 // DeleteExpiredPasswordTokens removes links that are spent or long past their
 // expiry, and reports how many went.
 //
