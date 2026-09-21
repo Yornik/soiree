@@ -405,6 +405,31 @@ Measured at 1.2.0, brotli, from a running server: shell 4.5 kB, stylesheet
 11 kB, planner script 46 kB, accounts script 25 kB, font 69 kB. Both scripts
 are `defer`, so first paint needs the shell and stylesheet only — about 16 kB.
 
+### Deliberately excluded
+
+- **HTTP/3.** Decided against, and worth recording why, because the naive
+  reading says it should help. QUIC completes a handshake in one round trip
+  where TCP + TLS 1.3 needs two, so on a 300 ms link it saves roughly 300 ms —
+  genuinely significant, not a rounding error.
+
+  It is still not worth it here, because the items above already removed the
+  cost it would address. The service worker means repeat visits make no network
+  request at all; reads are a single request; writes are deferred off the
+  interaction path; updates arrive over one long-lived SSE connection instead
+  of repeated handshakes. What is left for QUIC to improve is *connection
+  establishment*, which this design has deliberately made rare — a one-off on a
+  visitor's first load.
+
+  The price is not small: QUIC cannot be passed through at layer 4 the way TCP
+  is, so terminating it at the edge would put TLS private keys on the most
+  exposed hosts in the deployment. Paying that to speed up a once-per-device
+  event is the wrong trade. Browsers fall back via `Alt-Svc` with no
+  user-visible effect, so declining costs nothing.
+- **Edge PoPs.** Adding a server geographically closer does not help while the
+  proxy in front is a layer-4 TCP passthrough: TLS still terminates at the
+  origin, so the client's handshake round-trips the full distance anyway. It
+  would only pay if the edge terminated TLS and cached.
+
 ### The one stall that is not about distance
 
 Everything above is about the distance to the origin. The one measured stall in
@@ -446,41 +471,29 @@ The form to write instead: check once that the table is on screen, then set
 them all. Measured at two forced layouts whatever the size, and byte-identical
 `style.height` on every field at both widths. Hoisting that visibility check
 out of the loop is the half of it that is easy to miss: left per field it is
-itself a read after a write, which still costs n+1 layouts and gives back only
-half the time. `fitText(ta)` stays as it is for the one field being typed into.
+itself a read after a write, which still costs a layout per field plus one and
+gives back only half the time. `fitText(ta)` stays as it is for the one field
+being typed into.
+
+`renderAll()` pays for that pass twice. It calls `applyColWidths()`, which ends
+in a fit, and then `renderBudgetTable()`, which empties `#budgetBody`, builds
+the rows again and fits those, so the first pass sizes fields about to be
+thrown away. With the Budget tab on screen at 100 lines, a language switch,
+which is `renderAll()`, forces 827 layouts where a sponsor keystroke, which is
+`renderBudgetTable()` alone, forces 401. It is free only while that tab is
+hidden, which is where every page load starts: the panel is `display: none`, so
+`offsetParent` is null and the same switch forces 28. What is left to pay it is
+a language switch, an import, a sign-out and a plan arriving from a retried
+`connect()`, each with the Budget tab showing. Once the fit is O(n) the wasted
+pass is about 20 ms at 100 lines, which is not worth a flag on
+`applyColWidths()` to skip.
 
 Set aside on purpose: `field-sizing: content` behind `@supports` would be a
 second sizing path to keep in step with the `height: 100%` rule and with a row
 somebody has dragged taller, for no gain once the fit is O(n); rebuilding
-`<colgroup>` on every drag frame and the second fit pass in `renderAll` are too
-small to measure beside this; and browsers already coalesce `pointermove` to
-about one event per frame, so a `requestAnimationFrame` guard on the drag saves
-little.
-
-### Deliberately excluded
-
-- **HTTP/3.** Decided against, and worth recording why, because the naive
-  reading says it should help. QUIC completes a handshake in one round trip
-  where TCP + TLS 1.3 needs two, so on a 300 ms link it saves roughly 300 ms —
-  genuinely significant, not a rounding error.
-
-  It is still not worth it here, because the items above already removed the
-  cost it would address. The service worker means repeat visits make no network
-  request at all; reads are a single request; writes are deferred off the
-  interaction path; updates arrive over one long-lived SSE connection instead
-  of repeated handshakes. What is left for QUIC to improve is *connection
-  establishment*, which this design has deliberately made rare — a one-off on a
-  visitor's first load.
-
-  The price is not small: QUIC cannot be passed through at layer 4 the way TCP
-  is, so terminating it at the edge would put TLS private keys on the most
-  exposed hosts in the deployment. Paying that to speed up a once-per-device
-  event is the wrong trade. Browsers fall back via `Alt-Svc` with no
-  user-visible effect, so declining costs nothing.
-- **Edge PoPs.** Adding a server geographically closer does not help while the
-  proxy in front is a layer-4 TCP passthrough: TLS still terminates at the
-  origin, so the client's handshake round-trips the full distance anyway. It
-  would only pay if the edge terminated TLS and cached.
+`<colgroup>` on every drag frame is too small to measure beside this; and
+browsers already coalesce `pointermove` to about one event per frame, so a
+`requestAnimationFrame` guard on the drag saves little.
 
 ## Observability
 
@@ -617,6 +630,10 @@ Open, in the order they matter:
   met by hand-written SQL.
 - **Restore drill.** Backups that have never been restored are not backups.
   Restore into a scratch namespace, confirm the data, write down the steps.
+- **The budget table's sizing pass.** `fitBudgetText()` forces two layouts per
+  field on a fixed-layout table, so a large plan stalls on a tab switch, on a
+  keystroke and on every frame of a column drag. Measured, with the form to
+  write instead, under *The one stall that is not about distance*.
 
 Explicitly out of scope: multi-event tenancy, a plugin system, analytics, and a
 marketing site. This is a tool a dozen people use for one evening.
