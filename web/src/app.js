@@ -4231,14 +4231,17 @@
     function uploadRow(u) {
       var li = document.createElement('li');
       li.className = 'files-row files-pending';
+      u.ui = null;
       var name = document.createElement('span');
       name.className = 'files-name';
       name.textContent = u.name;
       li.appendChild(name);
 
+      // Deliberately not a live region. One inserted with its text already in
+      // it is announced by nothing, and one that stays put while the number
+      // climbs would read out every percent of a slow upload.
       var status = document.createElement('span');
       status.className = 'files-meta';
-      status.setAttribute('role', 'status');
       li.appendChild(status);
 
       if (u.phase === 'failed') {
@@ -4259,12 +4262,17 @@
       } else if (u.phase === 'checking') {
         status.textContent = t('f.checking');
       } else {
-        var pct = u.size ? Math.min(100, Math.floor((u.sent / u.size) * 100)) : 0;
+        var pct = pctOf(u);
         status.textContent = t('f.sending', { n: pct });
         var bar = document.createElement('progress');
         bar.max = 100;
         bar.value = pct;
+        // The name is in the span beside it, which is near the bar without
+        // naming it: unlabelled, this is a percentage of nothing.
+        bar.setAttribute('aria-label', u.name);
         li.appendChild(bar);
+        // Kept so the next tick can move the bar where it stands.
+        u.ui = { status: status, bar: bar, pct: pct };
       }
       return li;
     }
@@ -4295,6 +4303,30 @@
   }
 
   function redrawFiles() { if (filesView) filesView.draw(); }
+
+  function pctOf(u) { return u.size ? Math.min(100, Math.floor((u.sent / u.size) * 100)) : 0; }
+
+  /* A bar that moves moves one number, and moves it where it already is.
+   *
+   * draw() parks focus on the popup and replaces every row in it. That is
+   * right when a row appears or goes, and wrong twenty times a second: it
+   * takes the keyboard off whatever was tabbed to, so "Add files" and "Try
+   * again" on another row cannot be pressed at all, and a button replaced
+   * between mousedown and mouseup never fires its click. Progress is the one
+   * change that alters nothing but a figure, so it is written in place -
+   * which is also why it is written only when the whole percent has moved.
+   */
+  function showProgress(u) {
+    var ui = u.ui;
+    // Not on the screen: no popup open, one open on another row, or one
+    // redrawn since. There is nothing to write to and nothing to rebuild for.
+    if (!ui || !ui.bar.isConnected) return;
+    var pct = pctOf(u);
+    if (pct === ui.pct) return;
+    ui.pct = pct;
+    ui.bar.value = pct;
+    ui.status.textContent = t('f.sending', { n: pct });
+  }
 
   function startUpload(kind, row, file) {
     var u = { key: fileKey(kind, row.id), name: file.name, size: file.size, sent: 0,
@@ -4345,7 +4377,7 @@
       xhr.upload.onprogress = function (e) {
         if (!e.lengthComputable) return;
         u.sent = e.loaded;
-        redrawFiles();
+        showProgress(u);
       };
       xhr.onload = function () {
         if (xhr.status >= 200 && xhr.status < 300) { confirmUpload(u, 0); return; }
