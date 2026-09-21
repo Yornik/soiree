@@ -485,7 +485,7 @@ hidden, which is where every page load starts: the panel is `display: none`, so
 `offsetParent` is null and the same switch forces 28. What is left to pay it is
 a language switch, an import, a sign-out and a plan arriving from a retried
 `connect()`, each with the Budget tab showing. Once the fit is O(n) the wasted
-pass is about 20 ms at 100 lines, which is not worth a flag on
+pass is the table's 21.4 ms at 100 lines, which is not worth a flag on
 `applyColWidths()` to skip.
 
 Set aside on purpose: `field-sizing: content` behind `@supports` would be a
