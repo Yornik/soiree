@@ -15,18 +15,28 @@ import (
 // amounts of information to somebody deciding what to do this week, and the
 // year because a planning horizon crosses one.
 //
-// Not a locale-aware format. The browser owns localised formatting and has a
-// locale to do it with; a mail has one body for every reader, and an
-// unambiguous English date beats a date formatted for the wrong person.
+// This is the English spelling of that shape. The other languages write the
+// same four fields from their own name tables in language.go, never from the
+// machine's locale: which language a digest is in is the deployment's answer
+// and not the scheduler host's.
 const dayFormat = "Mon 2 Jan 2006"
 
-// Render builds the two bodies of the digest.
+// Render builds the two bodies of the digest, in the deployment's language.
 //
 // Both say the same thing. The HTML is a table with inline styles and nothing
-// else: no image, no stylesheet, no link, nothing that causes the reader's
+// else: no image, no stylesheet, no anchor, nothing that causes the reader's
 // client to fetch anything from anywhere. A digest that reported who opened it
 // would be surveillance of the people it is trying to help, and this project
 // forbids third-party requests in the browser for the same reason.
+//
+// The planner's own address is in the footer, as text rather than as a link.
+// The reader needs somewhere to go, because this is a list of decisions and
+// the place to make them is the planner, which is already where the
+// notification's click lands; a mail client turns a bare address into
+// something clickable by itself. An <a href> would not have been the same
+// offer: it is the one thing a relay's click tracking can rewrite into an
+// address that reports who followed it, which is precisely what nothing here
+// may do.
 func Render(d Digest) (mailer.Message, error) {
 	v := build(d)
 
@@ -107,39 +117,25 @@ type digestView struct {
 // templates lay out the same words rather than each deciding how a date or an
 // amount is written.
 func build(d Digest) digestView {
+	w := wordsFor(d.Lang)
 	v := digestView{
 		Subject: subject(d),
 		Heading: heading(d),
 		Summary: summary(d),
-		// The footer names both reasons an address receives the digest and
-		// both of the things that stop it, rather than the one that applies,
-		// because a single body reaches every active admin and everything
-		// SOIREE_REMINDER_TO names, as well as somebody who is both, for whom
-		// either wording alone would be false. It used to describe a list
-		// that nothing has read since admins became recipients, and asked for
-		// the address to be taken off it, which neither the reader nor the
-		// person they asked could do.
-		Footer: fmt.Sprintf(
-			"Dates are the days recorded against each line, shown exactly as stored. "+
-				"Today is %s in %s.\nYou receive this because you are an active admin "+
-				"of %s, or because whoever runs it added your address. There is no "+
-				"per-person off switch: the digest stops when that address is removed "+
-				"from the reminder settings, or when the account is no longer an "+
-				"active admin.",
-			d.Today.Format(dayFormat), d.Zone, orPlaceholder(d.EventName, "this event")),
+		Footer:  footer(d, w),
 	}
 
 	if len(d.Deadlines) > 0 {
 		s := sectionView{
-			Title: "Decisions to lock in",
-			Note:  fmt.Sprintf("lock-by dates up to %s", d.Horizon.Format(dayFormat)),
+			Title: w.deadlines,
+			Note:  fmt.Sprintf(w.deadlinesNote, w.day(d.Horizon)),
 		}
 		for _, it := range d.Deadlines {
 			s.Rows = append(s.Rows, rowView{
-				Date:    it.Date.Format(dayFormat),
-				Title:   orPlaceholder(it.Item, "(unnamed line)"),
+				Date:    w.day(it.Date),
+				Title:   orPlaceholder(it.Item, w.unnamedItem),
 				Detail:  join(it.Vendor, money(d.Currency, it.Amount)),
-				When:    relative(it.Days),
+				When:    w.relative(it.Days),
 				Overdue: it.Days < 0,
 			})
 		}
@@ -148,15 +144,15 @@ func build(d Digest) digestView {
 
 	if len(d.Tasks) > 0 {
 		s := sectionView{
-			Title: "Tasks",
-			Note:  fmt.Sprintf("due up to %s", d.Horizon.Format(dayFormat)),
+			Title: w.tasks,
+			Note:  fmt.Sprintf(w.tasksNote, w.day(d.Horizon)),
 		}
 		for _, t := range d.Tasks {
 			s.Rows = append(s.Rows, rowView{
-				Date:    t.Date.Format(dayFormat),
-				Title:   orPlaceholder(t.Name, "(unnamed task)"),
-				Detail:  join(t.Owner, statusWord(t.Status)),
-				When:    relative(t.Days),
+				Date:    w.day(t.Date),
+				Title:   orPlaceholder(t.Name, w.unnamedTask),
+				Detail:  join(t.Owner, statusWord(t.Status, w)),
+				When:    w.relative(t.Days),
 				Overdue: t.Days < 0,
 			})
 		}
@@ -166,13 +162,40 @@ func build(d Digest) digestView {
 	return v
 }
 
+// footer names both reasons an address receives the digest and both of the
+// things that stop it, rather than the one that applies, because a single body
+// reaches every active admin and everything SOIREE_REMINDER_TO names, as well
+// as somebody who is both, for whom either wording alone would be false. It
+// used to describe a list that nothing has read since admins became
+// recipients, and asked for the address to be taken off it, which neither the
+// reader nor the person they asked could do.
+//
+// It closes with the planner's address and with where an answer goes. Both are
+// things the reader has no other way to learn from a mail that asks them to
+// decide something: the digest is sent as a copy each, so a reply reaches the
+// address it came from and none of the other readers, which is worth knowing
+// before somebody types one.
+func footer(d Digest, w words) string {
+	parts := []string{
+		fmt.Sprintf(w.dates, w.day(d.Today), d.Zone),
+		fmt.Sprintf(w.whyItCame, orPlaceholder(d.EventName, w.thisEvent)),
+	}
+	// Absent only where there is no mailed link at all to be had: internal
+	// config refuses to start with SMTP configured and no SOIREE_BASE_URL, so
+	// a digest that is mailed always has one.
+	if d.BaseURL != "" {
+		parts = append(parts, fmt.Sprintf(w.openPlanner, openURL(d.BaseURL)))
+	}
+	return strings.Join(append(parts, w.replyGoes), "\n")
+}
+
 // subject says the whole story, because on a phone the subject is often the
 // only part that gets read.
 func subject(d Digest) string {
 	if d.EventName != "" {
 		return d.EventName + ": " + headline(d)
 	}
-	return "Deadlines: " + headline(d)
+	return wordsFor(d.Lang).title + ": " + headline(d)
 }
 
 // headline is the digest in one clause: what needs attention and how much of
@@ -184,33 +207,40 @@ func subject(d Digest) string {
 // attention — and keeping one function means neither can drift into describing
 // the digest differently from the other.
 func headline(d Digest) string {
+	w := wordsFor(d.Lang)
 	overdue := d.Overdue()
 	soon := d.Count() - overdue
 
 	switch {
 	case overdue > 0 && soon > 0:
-		return fmt.Sprintf("%d overdue, %d coming up", overdue, soon)
+		return fmt.Sprintf(w.overdueAndSoon, overdue, soon)
 	case overdue > 0:
-		return fmt.Sprintf("%d overdue", overdue)
+		return fmt.Sprintf(w.overdueOnly, overdue)
 	default:
-		return fmt.Sprintf("%s to decide in the next %s", count(soon, "item"), count(d.WindowDays, "day"))
+		return fmt.Sprintf(w.toDecide, w.items(soon), w.days(d.WindowDays))
 	}
 }
 
 func heading(d Digest) string {
+	w := wordsFor(d.Lang)
 	if d.EventName != "" {
-		return "Deadlines — " + d.EventName
+		return fmt.Sprintf(w.titleNamed, d.EventName)
 	}
-	return "Deadlines"
+	return w.title
 }
 
+// summary is the line under the heading, and it names the window only when the
+// window is the whole truth. A digest with something overdue in it used to say
+// "3 things in the next 14 days, of which 2 already past", which counts a date
+// that went by last month inside a fortnight it is not in and leaves the
+// reader to subtract to find out what is actually still coming.
 func summary(d Digest) string {
+	w := wordsFor(d.Lang)
 	overdue := d.Overdue()
 	if overdue == 0 {
-		return fmt.Sprintf("%s in the next %s.", count(d.Count(), "thing"), count(d.WindowDays, "day"))
+		return fmt.Sprintf(w.dueInWindow, w.things(d.Count()), w.days(d.WindowDays))
 	}
-	return fmt.Sprintf("%s in the next %s, of which %d already past.",
-		count(d.Count(), "thing"), count(d.WindowDays, "day"), overdue)
+	return fmt.Sprintf(w.dueOrOverdue, w.things(d.Count()), overdue)
 }
 
 // renderText writes the plain-text body, which is the one that has to work
@@ -278,27 +308,10 @@ func renderHTML(v digestView) (string, error) {
 	return b.String(), nil
 }
 
-// relative says how far off a date is in words, because "Fri 20 Feb" and "four
-// days late" are answers to different questions and the second is the one that
-// makes somebody act.
-func relative(days int) string {
-	switch {
-	case days < -1:
-		return fmt.Sprintf("overdue by %d days", -days)
-	case days == -1:
-		return "overdue since yesterday"
-	case days == 0:
-		return "today"
-	case days == 1:
-		return "tomorrow"
-	default:
-		return fmt.Sprintf("in %d days", days)
-	}
-}
-
 // money writes an amount as the machine-readable decimal plus its currency
 // code. No symbol and no thousands separator: the code is unambiguous where a
-// bare $ or a European decimal comma is not, and this mail has no locale.
+// bare $ or a European decimal comma is not, and a digest translated into the
+// deployment's language is still read by people who do not share it.
 func money(currency string, minor int64) string {
 	if minor == 0 {
 		return ""
@@ -306,9 +319,9 @@ func money(currency string, minor int64) string {
 	return currency + " " + store.FormatMajor(currency, minor)
 }
 
-func statusWord(s store.TaskStatus) string {
+func statusWord(s store.TaskStatus, w words) string {
 	if s == store.TaskInProgress {
-		return "in progress"
+		return w.inProgress
 	}
 	return ""
 }
@@ -328,12 +341,4 @@ func orPlaceholder(s, placeholder string) string {
 		return placeholder
 	}
 	return s
-}
-
-// count writes "1 item" and "3 items".
-func count(n int, noun string) string {
-	if n == 1 {
-		return "1 " + noun
-	}
-	return fmt.Sprintf("%d %ss", n, noun)
 }

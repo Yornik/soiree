@@ -807,11 +807,6 @@ struck only halfway.
 
 Open, in the order they matter:
 
-- **Translate the deadline digest.** The invitation and the reset mail are
-  written in a language chosen for that mail. The digest
-  (`internal/reminders/render.go`) is one English body composed once; each
-  recipient already gets a send of their own, so what is left is rendering
-  that body in a language chosen per recipient.
 - **What an expired session leaves behind.** Signing out removes this browser's
   copy of the plan. A session that ends by itself does not, because the unsent
   edits are in that copy — so a tab abandoned on a shared computer still shows
@@ -1413,8 +1408,10 @@ the mail then carries `?lang=`, so the screen it opens matches the mail; that is
 a query string, which is sent to the server, and harmless there — it is a
 language tag, and the token is still behind the `#`. With no language chosen the
 mail is in the deployment's and the link is bare, so the page decides for
-itself. Refusals are worded from the server's
-error *code*; its English `message` is shown only to somebody reading English.
+itself. The deadline digest has nobody to ask: it is composed once for every
+recipient, so it is always in the deployment's. Refusals are worded from the
+server's error *code*; its English `message` is shown only to somebody reading
+English.
 
 #### Sessions
 
@@ -1887,6 +1884,25 @@ relay's own answer is carried through as it came and can quote the mailbox back
 inside it. That copy leaves the claim standing: the others are out, so a retry
 would send them the same digest twice. Push goes to the devices of active
 admins by the same rule.
+
+Both channels are written in the deployment's language: the primary subtag of
+`SOIREE_LOCALE`, and English for a locale this binary has no words for, which
+is the rule an invitation follows when nobody chose a language for it. It is
+also the only rule available here. Nothing about language is stored against an
+account, and a digest is composed once for everybody it goes to, so there is
+nobody to ask. On a deployment whose readers do not all share that language it
+is still the one they all get, which is the price of the weekly mail matching
+the screens it talks about.
+
+The footer carries the planner's own address, as text rather than as an anchor.
+A mail that lists decisions has to say where they are made, and this is the
+address the notification's click already opens. Written as text, a mail client
+turns it into something clickable itself, while a relay's click tracking
+rewrites `<a href>` and nothing else, so there is nothing for it to turn into
+an address that would report who followed it. That is the same reason there is
+no image and no stylesheet in there either. The footer also says where an
+answer goes: one copy each means a reply reaches the address in
+`SOIREE_SMTP_FROM` and none of the other readers.
 
 The two channels get separate time budgets inside the run's two minutes. With
 one shared deadline a relay that stalls would spend the whole run before push
