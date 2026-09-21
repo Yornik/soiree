@@ -311,6 +311,19 @@ body {
   background: none;
   border: 2px solid var(--alarm);
 }
+/* Everything late is one mark and it stands at today, so a mark for work due
+   today stands on the same spot. The late one is drawn first, so the one that
+   can share the spot is the next. A lone dot is smaller than the lamp and
+   shows inside the ring, as it is meant to; a counted mark is stretched
+   rightwards to carry its number clear of the lamp, so it lies across the ring
+   and takes every press meant for it, the one in the middle included. The ring
+   is lifted over that mark rather than the mark sunk under the ring: a ring is
+   a line around an empty middle, so the mark reads through it either way, and
+   a mark sunk below the others would go under the day marker too, which is
+   filled and would swallow the number of a mark standing at the end of the
+   scale. Two and no higher, since the lamp is drawn after the marks and is
+   never covered. */
+.runup-mark.late:has(+ .runup-mark.many) { z-index: 2; }
 .runup-mark:focus-visible { outline-offset: 3px; }
 
 .runup-leader {
