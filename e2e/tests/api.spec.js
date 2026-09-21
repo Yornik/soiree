@@ -3016,9 +3016,13 @@ test('a plan saved before the order was a field of its own arrives unmoved', asy
  * case where a reload fetches the new shell itself.
  */
 test('a planner open across a deploy is told there is something to reload into', async ({ page }) => {
+  // Waited for rather than assumed. An empty status line before the server
+  // has said anything is not an answer to the question this asks, which is
+  // what the real server's own hello does to a page running the build it
+  // names: the stream has to have been opened and answered first.
+  const greeted = page.waitForResponse((r) => r.url().includes('/api/v1/events'));
   await openSharedPlanner(page);
-  // The stream the real server opened named the build this page is running,
-  // and a page running the current one is told nothing.
+  await greeted;
   await expect(page.locator('#dataMsg')).toHaveText('');
 
   // The same stream as the deployment after this one would answer it: the
