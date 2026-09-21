@@ -1433,8 +1433,54 @@
   function showPanel(id, title, lede) {
     each(PANEL_IDS, function (p) { show(byId(p), p === id); });
     setText(byId('authTitle'), title);
-    setText(byId('authLede'), lede || '');
+    // The lede is a live region, so it is written only when it has something
+    // else to say. render() is idempotent and runs again on every session
+    // probe and language switch; rewriting the same sentence would make a
+    // screen reader read it out each time.
+    var line = byId('authLede');
+    if (line && line.textContent !== (lede || '')) setText(line, lede || '');
     drawVersion();
+    enterScreen(id, title);
+  }
+
+  // What the tab is called with the planner on screen: the event's own name,
+  // as the server rendered it into the document. Read once, because from here
+  // on the title is this file's to set.
+  var EVENT_TITLE = document.title;
+
+  /* Arriving on a screen, for somebody who cannot see that it changed.
+   *
+   * Every button that swaps screens sits in the half the swap hides - the
+   * account bar is in the planner, "Back to the planner" is on the accounts
+   * screen - so the browser is left holding a focused element that is no
+   * longer there and drops focus on <body>: nothing is announced, and the
+   * next Tab starts at the top of the page. Focus goes to the heading of
+   * whatever is on screen now instead, which is what tells a screen reader,
+   * and a Tab key, that this is a different page.
+   *
+   * A screen that wants a field focused still gets it: renderLogin and
+   * renderSetPassword reach this through showPanel and focus afterwards.
+   *
+   * Only a real change counts, for the same reason the lede above is guarded:
+   * focus that moves under somebody mid-sentence is worse than focus that
+   * never moved.
+   */
+  var onScreen;   // undefined until the first render; null is the planner
+
+  function enterScreen(id, title) {
+    var named = id && title ? title + ' · ' + EVENT_TITLE : EVENT_TITLE;
+    // Guarded like the lede, and for the same reason: assigning the title it
+    // already has is still a change as far as a screen reader is concerned.
+    if (document.title !== named) document.title = named;
+    var moved = onScreen !== undefined && onScreen !== id;
+    onScreen = id;
+    if (!moved) return;
+    var head = id ? byId('authTitle') : document.querySelector('.masthead h1');
+    if (!head) return;
+    // A heading is not focusable on its own, and this one stays out of the
+    // tab order: it is somewhere to be sent, not a stop on the way through.
+    head.tabIndex = -1;
+    head.focus();
   }
 
   /* Which release this is, very small, under every screen somebody signed in
@@ -1493,6 +1539,7 @@
     show(byId('authScreen'), !!path);
     if (!path) {
       afterLogin = '';
+      enterScreen(null, '');
       return;
     }
 
@@ -1852,7 +1899,78 @@
     loadPeople();
   }
 
+  /* Focus across a redraw.
+   *
+   * Every action here ends in a rebuild of the whole list, which takes the
+   * control that was pressed with it - after disabling it for the round trip,
+   * which has already dropped focus on <body>. So what is remembered is not
+   * the node but which row and which of its controls, and the rebuilt list is
+   * asked for that pair again. Without it an admin changing three roles tabs
+   * in from the top of the page twice.
+   */
+  var heldFocus = null;
+
+  function holdFocus(p, control) {
+    heldFocus = control ? { id: p.id, act: control.getAttribute('data-act') || '' } : null;
+  }
+
+  /* A hold let go because nothing was redrawn.
+   *
+   * There is no rebuilt row to put focus back into, and a hold left standing
+   * is spent on the next redraw instead, whatever that redraw was for: a
+   * refused removal followed by an account created would land focus on the
+   * "Remove" of the row that was not removed. */
+  function forgetFocus() { heldFocus = null; }
+
+  function rowIndex(list, id) {
+    var rows = list.querySelectorAll('li[data-id]');
+    for (var i = 0; i < rows.length; i += 1) {
+      if (rows[i].getAttribute('data-id') === id) return i;
+    }
+    return -1;
+  }
+
+  /* Whether the round trip is what left focus nowhere.
+   *
+   * Giving focus back is only ever repair. An admin who changed a role and
+   * carried on typing somewhere else is holding focus of their own by the
+   * time the answer lands, and taking it off them would be worse than the
+   * thing this repairs: the control it is taken to is a role select, which
+   * reads the next letter as type-ahead and writes the role it reaches - "a"
+   * is Admin, granted with nothing asked and nothing said.
+   *
+   * By the time this is called the old list is gone, so the two ways focus
+   * can have been lost both answer here: disabling the control for the round
+   * trip dropped focus on <body>, or the rebuild detached the node still
+   * holding it.
+   */
+  function focusWasDropped() {
+    var at = document.activeElement;
+    return !at || at === document.body || !document.body.contains(at);
+  }
+
+  function restoreFocus(list, held, was) {
+    if (!focusWasDropped()) return;
+    var again = list.querySelector('li[data-id="' + held.id.replace(/["\\]/g, '\\$&')
+      + '"] [data-act="' + held.act + '"]');
+    if (again) { again.focus(); return; }
+    // The row is gone, so the control that was pressed is gone with it. Focus
+    // goes to the row that took its place, and to its first control rather
+    // than its "Remove": somebody who has just removed one person should not
+    // be one keystroke from removing the next.
+    var rows = list.querySelectorAll('li[data-id]');
+    var row = rows[was >= 0 && was < rows.length ? was : rows.length - 1];
+    var ctl = row ? row.querySelector('select, button:not(.danger)') : null;
+    if (ctl) { ctl.focus(); return; }
+    // Nobody left to point at: the heading over the list is where this screen
+    // begins.
+    var head = byId('authTitle');
+    if (head) { head.tabIndex = -1; head.focus(); }
+  }
+
   function loadPeople() {
+    // Built from scratch, so there is nothing to put focus back on.
+    forgetFocus();
     request('GET', '/users').then(function (res) {
       if (signedOut(res)) { sessionEnded(); return; }
       if (res.status !== 200 || !res.body) {
@@ -1867,9 +1985,13 @@
   function drawPeople() {
     var list = byId('peopleList');
     if (!list) return;
+    var held = heldFocus;
+    heldFocus = null;
+    var was = held ? rowIndex(list, held.id) : -1;
     while (list.firstChild) list.removeChild(list.firstChild);
     show(byId('peopleEmpty'), people.length === 0);
     people.forEach(function (p) { list.appendChild(personRow(p)); });
+    if (held) restoreFocus(list, held, was);
   }
 
   // Replaces one account in the list with the version the server just
@@ -1924,6 +2046,9 @@
   function personRow(p) {
     var self = !!(user && user.id === p.id);
     var li = make('li', 'person');
+    // Which row this is. The node a person pressed does not survive the
+    // redraw that follows; this pair, with the data-act below, does.
+    li.setAttribute('data-id', p.id);
 
     var head = make('div', 'person-head');
     head.appendChild(make('span', 'person-email', p.email));
@@ -1948,6 +2073,7 @@
     } else {
       var sel = make('select', 'person-role');
       sel.setAttribute('aria-label', t('person.role.aria', { email: p.email }));
+      sel.setAttribute('data-act', 'role');
       ['viewer', 'editor', 'admin'].forEach(function (role) {
         var o = document.createElement('option');
         o.value = role;
@@ -1973,6 +2099,7 @@
       fillLanguageChoice(lang, null);
       acts.appendChild(lang);
       acts.appendChild(actButton(
+        'invite',
         t(p.status === 'invited' ? 'person.resend' : 'person.sendlink'),
         'link-btn',
         function (btn) { invite(p, btn, lang.value); }
@@ -1981,13 +2108,14 @@
 
     if (!self) {
       acts.appendChild(actButton(
+        'access',
         t(p.status === 'disabled' ? 'person.access.on' : 'person.access.off'),
         'link-btn',
         function (btn) {
           patchPerson(p, { status: p.status === 'disabled' ? 'active' : 'disabled' }, btn);
         }
       ));
-      acts.appendChild(actButton(t('remove'), 'link-btn danger', function (btn) {
+      acts.appendChild(actButton('remove', t('remove'), 'link-btn danger', function (btn) {
         if (!window.confirm(t('person.confirm', { email: p.email }))) return;
         removePerson(p, btn);
       }));
@@ -1997,9 +2125,10 @@
     return li;
   }
 
-  function actButton(label, cls, fn) {
+  function actButton(act, label, cls, fn) {
     var b = make('button', cls, label);
     b.type = 'button';
+    b.setAttribute('data-act', act);
     b.addEventListener('click', function () { fn(b); });
     return b;
   }
@@ -2012,6 +2141,7 @@
   function patchPerson(p, change, control) {
     var body = { revision: p.revision };
     for (var k in change) if (Object.prototype.hasOwnProperty.call(change, k)) body[k] = change[k];
+    holdFocus(p, control);
     if (control) control.disabled = true;
     adminSays('');
     request('PATCH', '/users/' + p.id, body).then(function (res) {
@@ -2037,6 +2167,7 @@
   }
 
   function removePerson(p, control) {
+    holdFocus(p, control);
     if (control) control.disabled = true;
     adminSays('');
     request('DELETE', '/users/' + p.id + '?revision=' + encodeURIComponent(p.revision))
@@ -2058,17 +2189,20 @@
           adminSays(t('person.gone'), true);
           return;
         }
+        forgetFocus();
         adminSays(problem(res, {}), true);
       });
   }
 
   function invite(p, control, language) {
+    holdFocus(p, control);
     if (control) control.disabled = true;
     adminSays('');
     request('POST', '/users/' + p.id + '/invite', language ? { language: language } : {}).then(function (res) {
       if (control) control.disabled = false;
       if (res.status === 200 && res.body) {
         if (res.body.user) adoptPerson(res.body.user);
+        else forgetFocus();
         afterInvite(res.body, p.email);
         return;
       }
@@ -2078,6 +2212,7 @@
         adminSays(t('person.gone'), true);
         return;
       }
+      forgetFocus();
       adminSays(problem(res, {}), true);
     });
   }
@@ -2317,7 +2452,7 @@
       li.appendChild(make('span', 'passkey-used',
         k.lastUsedAt ? t('pk.lastused', { date: day(k.lastUsedAt) }) : t('pk.unused')));
 
-      li.appendChild(actButton(t('remove'), 'link-btn danger', function (btn) {
+      li.appendChild(actButton('remove', t('remove'), 'link-btn danger', function (btn) {
         if (!window.confirm(t('pk.confirm', { label: k.label || t('pk.this') }))) return;
         btn.disabled = true;
         request('DELETE', '/auth/passkeys/' + k.id).then(function (res) {
@@ -2328,6 +2463,15 @@
           if (res.status === 204 || gone(res)) {
             passkeys = passkeys.filter(function (x) { return x.id !== k.id; });
             drawPasskeys();
+            // A row here has one control and it is the one that just removed
+            // it, so there is nothing of the row to go back to. "Add a
+            // passkey" is the next thing anybody does on this screen, and it
+            // is not a way to remove another one by mistake. Only if the
+            // round trip is what left focus nowhere: it is a submit button,
+            // and taking focus off somebody mid-sentence would put a later
+            // Space or Enter into a registration nobody asked for.
+            var add = focusWasDropped() ? byId('passkeyAdd') : null;
+            if (add) add.focus();
             // The options in hand still tell this device not to make a second
             // key, for a key the server has just forgotten.
             registerCeremony.renew();
@@ -2766,6 +2910,36 @@
   each(document.querySelectorAll('[data-auth-goto]'), function (el) {
     el.addEventListener('click', function () { goto(el.getAttribute('data-auth-goto')); });
   });
+
+  /* Landmarks, and the live region the swap needs.
+   *
+   * The page has two halves and shows one of them: the planner, or the
+   * accounts screens. Whichever is up is the main content of the page while
+   * it is up, and the other is out of the accessibility tree either way -
+   * hidden, or display:none - so marking both leaves exactly one main
+   * landmark at any moment, and jumping to it lands past the language
+   * switcher whichever half that is. The masthead is inside one of them and
+   * therefore no longer a banner landmark of its own; a page that says where
+   * its content begins is worth more here than one that says where its name
+   * is.
+   *
+   * The lede under the auth heading is the sentence a screen leads with, and
+   * the one after a link is redeemed says the password is saved: the first
+   * thing an invited person is told, on a screen where focus belongs in the
+   * email field. So it is announced, not only drawn.
+   *
+   * Markup would carry all three more plainly. They are set from here because
+   * this is the file that swaps the halves and writes that sentence.
+   */
+  each(['plannerWrap', 'authScreen'], function (id) {
+    var half = byId(id);
+    if (half) half.setAttribute('role', 'main');
+  });
+  var authLede = byId('authLede');
+  if (authLede) {
+    // role=status is already a polite live region, so it is the whole of it.
+    authLede.setAttribute('role', 'status');
+  }
 
   render();
   probeSession();

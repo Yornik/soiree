@@ -65,6 +65,8 @@ async function mountAccounts(page, opts = {}) {
     // How many /activity requests are refused before one is answered. The
     // screen's own retry is what is being tested, so the failure has to stop.
     activityFails: opts.activityFails || 0,
+    // The same, for removals: a refusal that leaves the row where it was.
+    removeFails: opts.removeFails || 0,
     calls: [],
   };
 
@@ -173,6 +175,10 @@ async function mountAccounts(page, opts = {}) {
       return json(route, 200, who);
     }
     if (one && req.method() === 'DELETE') {
+      if (state.removeFails > 0) {
+        state.removeFails -= 1;
+        return json(route, 500, { error: 'internal' });
+      }
       state.users = state.users.filter((u) => u.id !== one[1]);
       return route.fulfill({ status: 204, body: '' });
     }
@@ -927,4 +933,167 @@ test('the switcher is there on the sign-in screen, and turns it too', async ({ p
   await expect(page.locator('label[for="loginPassword"]')).toHaveText('Kata sandi');
   await expect(page.locator('#loginSubmit')).toHaveText('Masuk');
   await expect(page.locator('#accountActs button')).toHaveText(['Masuk']);
+});
+
+/* ------------------------------------------------------------------
+ * Where focus is left
+ * ------------------------------------------------------------------
+ * The list is rebuilt wholesale rather than patched, and a rebuild takes the
+ * focused element with it: the browser then has nowhere to put focus and
+ * drops it on <body>, where a screen reader loses its place and the next Tab
+ * starts at the language flags. Both cases below are keyboard journeys that
+ * ended there.
+ * ------------------------------------------------------------------ */
+
+test('changing a role leaves focus on the select that changed it', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS] });
+  await open(page, '/#/admin');
+
+  const role = page.locator('.person', { hasText: GRACE.email }).locator('select.person-role');
+  await role.focus();
+  await role.selectOption('admin');
+
+  // The write went out and the list has been rebuilt with the answer, so the
+  // select being asked about is the new node rather than the one pressed.
+  await expect.poll(() => server.calls.filter((c) => c.method === 'PATCH').length).toBe(1);
+  await expect(role).toHaveValue('admin');
+  await expect(role).toBeFocused();
+});
+
+test('removing somebody lands on the row that took their place, never on a Remove', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS] });
+  await open(page, '/#/admin');
+  page.on('dialog', (d) => d.accept().catch(() => {}));
+
+  await page.locator('.person', { hasText: GRACE.email }).getByRole('button', { name: 'Remove' }).click();
+  await expect(page.locator('#peopleList .person')).toHaveCount(2);
+
+  // Grace was the second row, so Linus is now. His first control, not his
+  // last: somebody who has just removed one person should not be one
+  // keystroke from removing the next.
+  await expect(page.locator('.person', { hasText: LINUS.email }).locator('select.person-role')).toBeFocused();
+  expect(await page.evaluate(() => document.activeElement.className)).not.toContain('danger');
+});
+
+test('a refused action leaves no focus owed to a row that is still there', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA, GRACE], removeFails: 1, mailSent: true });
+  await open(page, '/#/admin');
+  page.on('dialog', (d) => d.accept().catch(() => {}));
+
+  // Refused, so nothing is redrawn and there is no rebuilt row to go back to.
+  await page.locator('.person', { hasText: GRACE.email }).getByRole('button', { name: 'Remove' }).click();
+  await expect(page.locator('#adminMsg')).not.toBeEmpty();
+  await expect(page.locator('#peopleList .person')).toHaveCount(2);
+
+  // The next redraw is for something else entirely, and must not spend what
+  // the refusal left behind: that would put focus on the "Remove" of a row
+  // this person had just failed to remove.
+  await page.fill('#newUserEmail', 'linus@example.test');
+  await page.click('#createUserSubmit');
+  await expect(page.locator('#peopleList .person')).toHaveCount(3);
+
+  // Focus stays where the create form itself left it, which is nowhere in
+  // this list and in particular not on a "Remove".
+  expect(await page.evaluate(() => {
+    const at = document.activeElement;
+    return {
+      danger: at.className.indexOf('danger') >= 0,
+      inList: document.getElementById('peopleList').contains(at),
+    };
+  })).toEqual({ danger: false, inList: false });
+});
+
+test('a write still in flight does not take focus back from where somebody moved on to', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS] });
+
+  // The answer is held until the test has moved on, so what is measured is
+  // the round trip itself rather than a wait on a clock.
+  let release;
+  const answered = new Promise((resolve) => { release = resolve; });
+  let inFlight = false;
+  await page.route('**/api/v1/users/*', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    inFlight = true;
+    await answered;
+    return route.fallback();
+  });
+  await open(page, '/#/admin');
+
+  const role = page.locator('.person', { hasText: GRACE.email }).locator('select.person-role');
+  await role.focus();
+  await role.selectOption('viewer');
+  await expect.poll(() => inFlight).toBe(true);
+
+  // The next thing anybody does on this screen, while the write is still out.
+  await page.locator('#newUserEmail').click();
+  await expect(page.locator('#newUserEmail')).toBeFocused();
+
+  release();
+  // Enabled again means the answer has been drawn: re-enabling the control
+  // and rebuilding the list are one step when the request settles.
+  await expect(role).toBeEnabled();
+  await expect(role).toHaveValue('viewer');
+
+  // A role select handed focus back would read what follows as type-ahead,
+  // and the first letter of this address reaches Admin - which writes on
+  // change, with nothing asked and nothing said. It belongs in the field.
+  await expect(page.locator('#newUserEmail')).toBeFocused();
+  await page.keyboard.type('ada@example.test');
+  await expect(page.locator('#newUserEmail')).toHaveValue('ada@example.test');
+  expect(server.calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
+});
+
+/* ------------------------------------------------------------------
+ * Being told the screen changed
+ * ------------------------------------------------------------------
+ * The planner and the accounts screens are two halves of one page, and the
+ * button that swaps them is always in the half that goes away. Nothing moved,
+ * nothing was said, and the tab kept its name, so for somebody who cannot see
+ * the swap it did not happen.
+ * ------------------------------------------------------------------ */
+
+test('opening the accounts screen moves focus onto it, names the tab, and leaves one landmark', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA] });
+  await open(page);
+
+  await page.getByRole('button', { name: 'People' }).click();
+  await expect(page.locator('#panelAdmin')).toBeVisible();
+
+  await expect(page.locator('#authTitle')).toBeFocused();
+  await expect(page).toHaveTitle('People · Rehearsal Dinner (e2e)');
+  // The planner is display:none behind it, so exactly one main landmark is in
+  // the accessibility tree and "skip to the content" has one destination.
+  const main = page.locator('[role="main"]:visible');
+  await expect(main).toHaveCount(1);
+  await expect(main).toHaveAttribute('id', 'authScreen');
+});
+
+test('going back to the planner moves focus onto it, and gives the tab its name back', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA] });
+  await open(page, '/#/admin');
+
+  await page.getByRole('button', { name: 'Back to the planner' }).click();
+  await expect(page.locator('#plannerWrap')).toBeVisible();
+
+  await expect(page.locator('.masthead h1')).toBeFocused();
+  await expect(page).toHaveTitle('Rehearsal Dinner (e2e)');
+  const main = page.locator('[role="main"]:visible');
+  await expect(main).toHaveCount(1);
+  await expect(main).toHaveAttribute('id', 'plannerWrap');
+});
+
+test('the sentence a screen leads with is announced, not only drawn', async ({ page }) => {
+  // The first flow an invited person goes through ends on the sign-in form
+  // with "your password is saved" as its lede. Focus belongs in the email
+  // field there, so that sentence has to reach a screen reader by itself.
+  await mountAccounts(page, { users: [LINUS] });
+  await page.goto(`/#/set-password?token=${TOKEN}`);
+  await page.fill('#newPassword', PASSWORD);
+  await page.fill('#newPassword2', PASSWORD);
+  await page.click('#setPasswordSubmit');
+
+  await expect(page.locator('#panelLogin')).toBeVisible();
+  await expect(page.locator('#authLede')).toHaveAttribute('role', 'status');
+  await expect(page.locator('#authLede')).toContainText('Your password is saved');
+  await expect(page.locator('#loginEmail')).toBeFocused();
 });
