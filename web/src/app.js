@@ -117,11 +117,23 @@
    * signing out has to do: on such a deployment that is the neutral title
    * again, and on every other it is the event's own name, which a sign-out
    * must not wipe off the masthead.
+   *
+   * The name and the tagline are read off the page rather than out of the
+   * block, because the block is the half the deployment emptied and the
+   * masthead is where the neutral name it was rendered with is written down.
+   * Taking them from the block would leave a signed-out page blank where a
+   * fresh load of the same URL says "soiree". They are the same string
+   * everywhere else, which is why nothing moves there.
    * ------------------------------------------------------------------ */
+  function shellText(id) {
+    var el = document.getElementById(id);
+    return el ? el.textContent : '';
+  }
+
   var SHELL_EVENT = {
     title: document.title,
-    name: CONFIG.eventName,
-    tagline: CONFIG.tagline,
+    name: shellText('eventName'),
+    tagline: shellText('eventTagline'),
     date: CONFIG.eventDate
   };
 

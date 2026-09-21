@@ -87,10 +87,12 @@
        count down to. -->
   <header class="masthead">
     <div class="masthead-id">
-      <!-- Empty on a deployment that keeps the event's details off a page
-           anybody with the URL can fetch; app.js fills both in once the
-           session says which event this is. Hence the ids: they are what it
-           writes through. -->
+      <!-- The product's name and no tagline at all on a deployment that keeps
+           the event's details off a page anybody with the URL can fetch;
+           app.js writes the event's own in once the session says which event
+           this is, and puts these back when somebody signs out. Hence the
+           ids: they are what it writes through, and what it reads to know
+           what the shell was rendered with. -->
       <h1 id="eventName">{{ .EventName }}</h1>
       <p class="tagline" id="eventTagline">{{ .Tagline }}</p>
     </div>

@@ -1472,9 +1472,19 @@
   }
 
   // What the tab is called with the planner on screen: the event's own name,
-  // as the server rendered it into the document. Read once, because from here
-  // on the title is this file's to set.
-  var EVENT_TITLE = document.title;
+  // as the masthead has it. Asked each time rather than read once, because a
+  // deployment that keeps the event off the page anybody can fetch sends the
+  // name on the session, and the planner writes it into the masthead when it
+  // arrives. A copy taken at load would put the neutral name the shell came
+  // with back on the tab at the next screen change and keep it there. The
+  // title the document was rendered with is the fallback, for a masthead with
+  // nothing in it.
+  var SHELL_TITLE = document.title;
+
+  function eventTitle() {
+    var head = byId('eventName');
+    return (head && head.textContent) || SHELL_TITLE;
+  }
 
   /* Arriving on a screen, for somebody who cannot see that it changed.
    *
@@ -1496,7 +1506,8 @@
   var onScreen;   // undefined until the first render; null is the planner
 
   function enterScreen(id, title) {
-    var named = id && title ? title + ' · ' + EVENT_TITLE : EVENT_TITLE;
+    var event = eventTitle();
+    var named = id && title ? title + ' · ' + event : event;
     // Guarded like the lede, and for the same reason: assigning the title it
     // already has is still a change as far as a screen reader is concerned.
     if (document.title !== named) document.title = named;
