@@ -21,6 +21,12 @@ import (
 // person between devices would be built on; until then the only other code
 // that touches it is the privacy export and erasure, which have no caller
 // either.
+//
+// A reader and a writer are all there is, and the erasure and cascade tests
+// are what they are for: putting a row in the table and proving it goes again
+// with the account. Deleting one on its own has no method here, because the
+// only path that deletes one is erasure, which does it inside its own
+// transaction and could not call one hanging off Store.
 func (s *Store) UIPrefs(ctx context.Context, userID uuid.UUID) (json.RawMessage, error) {
 	var prefs json.RawMessage
 	err := s.pool.QueryRow(ctx, `SELECT prefs FROM user_ui_prefs WHERE user_id = $1`, userID).Scan(&prefs)
@@ -41,11 +47,5 @@ func (s *Store) SetUIPrefs(ctx context.Context, userID uuid.UUID, prefs json.Raw
 		`INSERT INTO user_ui_prefs (user_id, prefs) VALUES ($1, $2)
 		 ON CONFLICT (user_id) DO UPDATE SET prefs = EXCLUDED.prefs`,
 		userID, prefs)
-	return err
-}
-
-// DeleteUIPrefs resets somebody to the default layout.
-func (s *Store) DeleteUIPrefs(ctx context.Context, userID uuid.UUID) error {
-	_, err := s.exec(ctx, "user_ui_prefs", `DELETE FROM user_ui_prefs WHERE user_id = $1`, userID)
 	return err
 }
