@@ -501,13 +501,27 @@ body.is-empty .when-data { display: none; }
 .step-note { grid-column: 2; font-size: 13px; color: var(--ink-2); }
 .start-steps button { grid-column: 3; grid-row: 1 / span 2; margin: 0; }
 
-/* Signed out, with nothing in this browser: the three steps would start a
-   plan that already exists somewhere this visitor cannot see yet, so they
-   give way to the way in. Both classes are set already - auth.js writes
-   signed-out, app.js writes is-empty - so nothing here has to be asked. */
+/* Signed out on a deployment that has accounts, with nothing in this browser:
+   the three steps would start a plan that already exists somewhere this
+   visitor cannot see yet, so they give way to the way in. All three classes
+   are set already - auth.js writes has-api and signed-out, app.js writes
+   is-empty - so nothing here has to be asked.
+
+   has-api is what says there is a server with accounts behind this page, and
+   it has to be asked for: signed-out alone is also how a session probe with no
+   answer is drawn, and then an installed planner opened offline - which is the
+   ordinary way one starts - would be told its own plan is somebody else's and
+   left without the steps that begin it. Waiting for an answer errs towards the
+   steps, which is the safe way round.
+
+   One thing for whoever edits the archive block below: it outranks the panel
+   above by order at equal specificity, and cannot outrank three classes. An
+   is-archived rule for .first-run-out written down there would be dead. None
+   is wanted - signing in is something a reader of a closed ledger can still
+   act on, unlike setting a ceiling - but it would have to be written here. */
 .first-run-out { display: none; }
-body.signed-out.is-empty .first-run { display: none; }
-body.signed-out.is-empty .first-run-out { display: block; }
+body.has-api.signed-out.is-empty .first-run { display: none; }
+body.has-api.signed-out.is-empty .first-run-out { display: block; }
 /* Sits where the list of steps starts in the panel it replaces. */
 .first-run-out .solid-btn { margin-top: 0; }
 

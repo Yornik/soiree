@@ -287,6 +287,23 @@ test('an empty browser is offered the plan it cannot see, not three ways to star
   await expect(page.locator('#panelLogin')).toBeVisible();
 });
 
+test('an origin that is away at load still offers the three steps', async ({ page }) => {
+  // Nobody answers: not the session probe, not the plan. auth.js draws that as
+  // signed out, because the door is the right offer when the answer is not
+  // "you are Ada" - but here it is a guess and not an answer, and a deployment
+  // with no database at all looks exactly the same from the body: empty, and
+  // signed out. Its planner is this browser's own, the three steps are how it
+  // starts, and an origin away at load is the ordinary start for an installed
+  // one. So the way in waits for a server to say it exists.
+  await page.route('**/api/v1/**', (route) => route.abort('failed'));
+  await open(page);
+
+  await expect(page.locator('.first-run')).toBeVisible();
+  await expect(page.locator('.first-run-out')).toBeHidden();
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+  await expect(page.locator('body')).not.toHaveClass(/has-api/);
+});
+
 test('a browser with a planner of its own keeps it signed out', async ({ page }) => {
   await seedPlanner(page);
   await mountAccounts(page, { users: [ADA] });

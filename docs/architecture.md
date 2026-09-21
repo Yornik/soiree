@@ -2098,9 +2098,13 @@ Principles, in rough priority:
   else's first impression too, and there the three steps are the wrong offer:
   the plan exists, this browser simply has none of it, and a visitor who
   accepts the offer builds a second plan that is merged into everybody's at
-  the next sign-in. So `body.signed-out.is-empty` shows the way in instead.
-  Only that panel changes: the planner itself stays open signed out, because
-  this browser's own copy is theirs to see.
+  the next sign-in. So `body.has-api.signed-out.is-empty` shows the way in
+  instead. All three are asked for: `signed-out` is also how a session probe
+  that got no answer is drawn, and without `has-api` - which `auth.js` latches
+  when `app.js` reports an origin that answered - an installed planner opened
+  offline would be told its own plan is somebody else's. Only that panel
+  changes: the planner itself stays open signed out, because this browser's
+  own copy is theirs to see.
 
 Explicitly avoided: the generated-template look — a centred hero over three
 equal feature cards, a purple-to-indigo gradient, emoji standing in for icons,

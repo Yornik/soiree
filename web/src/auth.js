@@ -1116,13 +1116,27 @@
     setSession('none');
   });
 
-  // And the other answer: there is an API. Whatever on screen depends on that
-  // and was drawn before it was known — the reminders switch, on a page opened
-  // straight at the account screen — is drawn again.
+  /* And the other answer: there is an API, so there is somewhere to sign in
+   * to. Written on the body because styles.css asks it: the empty planner
+   * offers the way in instead of the three start steps, and `signed-out`
+   * cannot carry that on its own. A probe that gets no answer at all is drawn
+   * as signed out too (probeSession below), and an origin away at load is the
+   * ordinary start for an installed planner, where a deployment with no
+   * database looks exactly the same from here: empty, and signed out. Latched
+   * and never taken off, because no deployment loses its database while a page
+   * is open; read off the global as well as the event, for the same reason
+   * apiKnownAbsent() is. */
+  function apiAnswered() { document.body.classList.add('has-api'); }
+
+  // Whatever on screen depends on that and was drawn before it was known —
+  // the reminders switch, on a page opened straight at the account screen —
+  // is drawn again.
   document.addEventListener('soiree:api', function (ev) {
     if (!ev || !ev.detail || ev.detail.available !== true) return;
+    apiAnswered();
     if (state === 'in' && readRoute().path === 'account') renderReminders();
   });
+  if (window.soiree && window.soiree.apiAvailable === true) apiAnswered();
 
   // And the service worker, which on a first visit is still installing when
   // the account screen asks. "Still being set up" is drawn in the meantime and
