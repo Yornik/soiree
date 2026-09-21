@@ -912,6 +912,14 @@ func TestPurgeEmptiesEverything(t *testing.T) {
 	if len(plan.BudgetItems) != 0 || len(plan.Sponsors) != 0 || len(plan.Tasks) != 0 || len(plan.Notes) != 0 {
 		t.Errorf("the plan still has rows after a purge: %+v", plan)
 	}
+	// Empty, but not untouched. A purged plan that read as one nobody had
+	// filled in yet would be filled back in by the first browser still holding
+	// a copy, most likely the admin's own, reloading to see that the purge
+	// worked. That is the decision this function exists to carry out, undone
+	// minutes later.
+	if plan.Pristine {
+		t.Error("a purged plan reads as one nobody has written to")
+	}
 }
 
 func TestPurgeKeepsAccountsUnlessAsked(t *testing.T) {

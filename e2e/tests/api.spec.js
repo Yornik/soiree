@@ -1415,6 +1415,53 @@ test('a planner built before the database existed is carried up, not wiped', asy
   await expect.poll(async () => (await apiPlan(request)).budgetItems.length).toBe(1);
 });
 
+test('a plan somebody emptied is not filled back in by a browser holding a copy', async ({ page, request }) => {
+  /*
+   * The other half of the same rule, and the case it was never written for.
+   * This browser's copy is not the only one in existence: it is a copy of rows
+   * the server confirmed and somebody then deleted, by hand or by the purge
+   * that empties the plan once the evening is over. Putting them back undoes a
+   * deletion that was meant, minutes after it happened, under the name of
+   * whoever happened to open the page next.
+   *
+   * An empty plan does not say which of the two it is, so the plan carries
+   * `pristine` to say it.
+   */
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item))
+    .toEqual(['Venue deposit']);
+
+  // What a returning browser holds: the rows, and the base that says the
+  // server confirmed them. Without the base this would be the test above.
+  await flushToStorage(page);
+  const stored = await readStored(page);
+  expect(Object.keys(stored.shadow.budgetItems), 'the saved copy must carry the confirmed row').toHaveLength(1);
+
+  // The tab is closed, and while it is, somebody empties the plan.
+  await page.close();
+  await resetPlan(request);
+
+  const returning = await page.context().newPage();
+  await openSharedPlanner(returning);
+
+  // The placeholder "no lines yet" row is a <tr> too, so count real ones.
+  await expect(returning.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(0);
+  await expect(returning.locator('#dataMsg')).toHaveText(/emptied/);
+
+  // A line typed now is what proves the browser sent everything it meant to:
+  // rows it was going to put back would have gone up before this one.
+  await gotoTab(returning, 'budget');
+  await addBudgetLine(returning, { item: 'Flowers', unit: 300, qty: 1 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item), {
+      message: 'the deleted line must not come back with the next write',
+    })
+    .toEqual(['Flowers']);
+});
+
 /*
  * A session that ends while the page is open.
  *
