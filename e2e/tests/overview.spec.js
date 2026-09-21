@@ -45,6 +45,18 @@ const geometry = (page) => page.locator('#runupMarks .runup-mark').evaluateAll((
 
 const overlap = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 
+/**
+ * Which mark a press at the very middle of the overdue ring lands on, named
+ * as the page names it. A click says the same thing but takes the
+ * actionability timeout to say it.
+ */
+const middleOfTheRing = (page) => page.locator('#runupMarks .runup-mark.late').evaluate((ring) => {
+  const r = ring.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  const mark = hit && hit.closest('.runup-mark');
+  return mark ? mark.getAttribute('aria-label') : null;
+});
+
 /** Opens the planner with a planted set of tasks, at a given instant. */
 async function openWith(page, when, tasks) {
   await page.clock.setFixedTime(new Date(when));
@@ -283,6 +295,33 @@ test('everything late is one mark at today, and it says what is late', async ({ 
   await late.click();
   await expect(page.locator('.runup-pop li .what')).toHaveText(['Pay the florist', 'Sign the venue contract']);
   await expect(page.locator('.runup-pop li .when.late')).toHaveCount(2);
+});
+
+test('the overdue ring is still the thing pressed when work is due today as well', async ({ page }) => {
+  await openWith(page, CROWDED_NOW, [
+    ['Pay the florist', '2029-12-20', 'Grace'],
+    ['Confirm the band', '2030-01-08', 'Ada'],
+    ['Collect the suits', '2030-01-08', 'Grace'],
+  ]);
+  const late = page.locator('#runupMarks .runup-mark.late');
+  const today = page.locator('#runupMarks .runup-mark').nth(1);
+  await expect(late).toHaveAttribute('aria-label', '1 overdue');
+  await expect(today).toHaveAttribute('aria-label', '2 tasks, Jan 8');
+
+  // A counted mark at today is drawn clear of the lamp, which lays it right
+  // across the ring, and a ring nobody can press is a count of what is late
+  // with no way to read it.
+  expect(await middleOfTheRing(page)).toBe('1 overdue');
+  await late.click();
+  await expect(page.locator('.runup-pop li .what')).toHaveText(['Pay the florist']);
+  await late.click();
+  await expect(page.locator('.runup-pop')).toHaveCount(0);
+
+  // And today's mark still opens its own list, from the part of it that
+  // reaches past the ring: its middle is inside the ring, so that is where
+  // this clicks rather than the middle Playwright would pick.
+  await today.click({ position: { x: 30, y: 8 } });
+  await expect(page.locator('.runup-pop li .what')).toHaveText(['Confirm the band', 'Collect the suits']);
 });
 
 test('the months are ticked where they fall and named where there is room', async ({ page }) => {

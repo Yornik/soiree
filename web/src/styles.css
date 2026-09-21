@@ -311,6 +311,15 @@ body {
   background: none;
   border: 2px solid var(--alarm);
 }
+/* Everything late is one mark and it stands at today, so a mark for work due
+   today stands on the same spot. The late one is drawn first, which makes the
+   one that can share the spot the next. A lone dot is smaller than the lamp
+   and shows inside the ring, as it is meant to; a counted mark is stretched
+   rightwards to carry its number clear of the lamp, so it lies across the
+   ring and takes every press meant for it, the one in the middle included.
+   That one goes under the ring instead and keeps the part of itself that
+   reaches past it, which is the part its number is drawn on. */
+.runup-mark.late + .runup-mark.many { z-index: 0; }
 .runup-mark:focus-visible { outline-offset: 3px; }
 
 .runup-leader {
