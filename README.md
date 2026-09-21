@@ -193,7 +193,7 @@ the planner closes the day after the event there, not the day after it in UTC.
 OpenAPI 3.1. Read it there, or render it to a file and open that:
 
 ```bash
-npx @redocly/cli@2.53.3 build-docs api/openapi.yaml -o soiree-api.html
+npx @redocly/cli@2.53.3 build-docs api/openapi.yaml -o /tmp/soiree-api.html
 ```
 
 Pinned, and to the version CI lints with: an unpinned `npx` fetches whatever
