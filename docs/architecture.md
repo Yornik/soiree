@@ -625,7 +625,16 @@ Done:
     subject export, erasure and a retention purge, with their own tests. Nothing
     invokes them: there is no route, no subcommand and no caller outside that
     package, so honouring a request today means writing Go or SQL against a
-    production database. The hard part is built and the way in is not.
+    production database. The way in is not the only thing missing, either. That
+    file was written against the schema as it stood at migration 0005 and has
+    never been taught about the personal data added since: `change_log` (0007),
+    `sessions` and `password_tokens` (0008), `push_subscriptions` (0010),
+    `passkey_credentials` (0011) and `attachments` (0012). So the export is
+    short by all of them and says so in its caveats, the erasure leaves the
+    name standing in the change log and, when it anonymises rather than
+    deletes, leaves the account's session, token, passkey and push rows behind,
+    and the purge leaves the change log, which is a full copy of the plan it
+    has just emptied.
 11. ~~Vulnerability disclosure.~~ `SECURITY.md`, and a documented verification
     command that the release workflow itself re-runs.
 13. ~~Mobile budget grid.~~
@@ -658,8 +667,16 @@ Open, in the order they matter:
   when there is provably nobody coming back to it, would close that.
 - **A way to invoke the data-protection functions.** Export, erasure and purge
   exist and nothing calls them. An admin-only route or a subcommand, either
-  would do; what there must not be is a documented obligation that can only be
-  met by hand-written SQL.
+  would do for the way in; what there must not be is a documented obligation
+  that can only be met by hand-written SQL. The way in is the smaller half,
+  though. The functions have to learn about the tables listed under item 10
+  first, and one of those, `change_log`, refuses every UPDATE and DELETE by
+  trigger. Striking a name out of the history, or dropping the history with
+  the plan, therefore starts with a migration that relaxes that trigger on
+  purpose: a decision about whether an erasure outranks the evidence, which
+  the trigger's own comment in `migrations/0007_audit.sql` asks to be made
+  deliberately. Wiring a route before it is made ships an erasure that does
+  not erase.
 - **Restore drill.** Backups that have never been restored are not backups.
   Restore into a scratch namespace, confirm the data, write down the steps.
 - **The budget table's sizing pass.** `fitBudgetText()` forces two layouts per
