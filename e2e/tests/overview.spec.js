@@ -57,6 +57,23 @@ const middleOfTheRing = (page) => page.locator('#runupMarks .runup-mark.late').e
   return mark ? mark.getAttribute('aria-label') : null;
 });
 
+/**
+ * What is in front at the middle of a counted mark's number, named as the page
+ * names it, or by its class where it is not a mark. The day marker takes no
+ * presses, so it is lent them for the length of the question: hit testing
+ * follows paint order, and nothing else will say which of two things that
+ * stand on the same spot is the one in view.
+ */
+const overTheCount = (page) => page.locator('#runupMarks .runup-mark.many .runup-count').evaluate((count) => {
+  const day = document.querySelector('.runup-day');
+  day.style.pointerEvents = 'auto';
+  const r = count.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  day.style.pointerEvents = '';
+  const mark = hit && hit.closest('.runup-mark');
+  return mark ? mark.getAttribute('aria-label') : (hit ? hit.className : null);
+});
+
 /** Opens the planner with a planted set of tasks, at a given instant. */
 async function openWith(page, when, tasks) {
   await page.clock.setFixedTime(new Date(when));
@@ -322,6 +339,27 @@ test('the overdue ring is still the thing pressed when work is due today as well
   // this clicks rather than the middle Playwright would pick.
   await today.click({ position: { x: 30, y: 8 } });
   await expect(page.locator('.runup-pop li .what')).toHaveText(['Confirm the band', 'Collect the suits']);
+});
+
+test('the mark counting what is due on the day keeps its number in front of the day marker', async ({ page }) => {
+  // Nine days to go, one thing behind, and the rest of the list on the day
+  // itself: the day-of checklist. Anything due after the day is drawn on the
+  // same spot, so this is the shape a plan takes at the end of it.
+  await openWith(page, '2030-06-03T03:00:00Z', [
+    ['Pay the florist', '2030-05-30', 'Grace'],
+    ['Collect the suits', '2030-06-12', 'Ada'],
+    ['Hand over the rings', '2030-06-12', 'Grace'],
+  ]);
+  const drawn = page.locator('#runupMarks .runup-mark');
+  await expect(drawn).toHaveCount(2);
+  await expect(drawn.nth(0)).toHaveAttribute('aria-label', '1 overdue');
+  await expect(drawn.nth(1)).toHaveAttribute('aria-label', '2 tasks, Jun 12');
+  expect(await drawn.nth(1).evaluate((el) => parseFloat(el.style.left))).toBe(100);
+
+  // The day marker is filled and stands on that same spot. A counted mark sent
+  // behind the marks goes behind it too, and the number is all such a mark
+  // says.
+  expect(await overTheCount(page)).toBe('2 tasks, Jun 12');
 });
 
 test('the months are ticked where they fall and named where there is room', async ({ page }) => {
