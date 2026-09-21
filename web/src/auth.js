@@ -2096,7 +2096,6 @@
       // nothing by itself and saves nothing.
       var lang = make('select', 'person-language');
       lang.setAttribute('aria-label', t('person.language.aria', { email: p.email }));
-      lang.setAttribute('data-act', 'language');
       fillLanguageChoice(lang, null);
       acts.appendChild(lang);
       acts.appendChild(actButton(
@@ -2918,8 +2917,11 @@
    * accounts screens. Whichever is up is the main content of the page while
    * it is up, and the other is out of the accessibility tree either way -
    * hidden, or display:none - so marking both leaves exactly one main
-   * landmark at any moment, and "skip to the content" lands past the language
-   * switcher whichever half that is.
+   * landmark at any moment, and jumping to it lands past the language
+   * switcher whichever half that is. The masthead is inside one of them and
+   * therefore no longer a banner landmark of its own; a page that says where
+   * its content begins is worth more here than one that says where its name
+   * is.
    *
    * The lede under the auth heading is the sentence a screen leads with, and
    * the one after a link is redeemed says the password is saved: the first
@@ -2935,8 +2937,8 @@
   });
   var authLede = byId('authLede');
   if (authLede) {
+    // role=status is already a polite live region, so it is the whole of it.
     authLede.setAttribute('role', 'status');
-    authLede.setAttribute('aria-live', 'polite');
   }
 
   render();
