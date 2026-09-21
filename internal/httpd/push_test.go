@@ -243,11 +243,15 @@ func TestMalformedSubscriptionsAreRefused(t *testing.T) {
 			"endpoint": "not a url at all",
 			"keys":     map[string]string{"p256dh": p256dhKey, "auth": authKey},
 		},
-		// Every real push endpoint is https, and this is also the line that
-		// stops an authenticated account pointing the digest sender at
-		// something on the inside of the network.
+		// Every real push endpoint is https.
 		"a plain http endpoint": {
 			"endpoint": "http://169.254.169.254/latest/meta-data/",
+			"keys":     map[string]string{"p256dh": p256dhKey, "auth": authKey},
+		},
+		// The same address over https. Storing it would have the digest run
+		// post to it from inside the network this server runs in.
+		"an address inside the network": {
+			"endpoint": "https://169.254.169.254/latest/meta-data/",
 			"keys":     map[string]string{"p256dh": p256dhKey, "auth": authKey},
 		},
 		"no keys at all": {
@@ -272,6 +276,46 @@ func TestMalformedSubscriptionsAreRefused(t *testing.T) {
 
 	if rec := f.do(t, http.MethodDelete, "/api/v1/push/subscriptions", nil, cookie); rec.Code != http.StatusBadRequest {
 		t.Errorf("unsubscribe with no endpoint: status %d, want 400", rec.Code)
+	}
+}
+
+// An endpoint is not only stored: the digest run posts to it, from wherever
+// this server happens to run. So the host is as much a part of "is this a push
+// subscription?" as the scheme is, and the address forms that name this
+// deployment's own network are refused before a row exists.
+//
+// No database here — the rule is the one function, and checking it directly is
+// what lets the awkward spellings of the same address be covered cheaply.
+func TestAnEndpointInsideTheNetworkIsRefused(t *testing.T) {
+	for _, raw := range []string{
+		"https://127.0.0.1/send/abc",
+		"https://[::1]:8443/send/abc",
+		"https://localhost/send/abc",
+		"https://metadata.localhost./send/abc",
+		"https://10.0.0.5/send/abc",
+		// A port must not carry the address past the check.
+		"https://192.168.1.7:8443/send/abc",
+		// The same private address, written as IPv6.
+		"https://[::ffff:10.0.0.5]/send/abc",
+		"https://169.254.169.254/latest/meta-data/",
+		"https://[fd00::1]/send/abc",
+		"https://[fe80::1]/send/abc",
+		"https://0.0.0.0/send/abc",
+	} {
+		if endpoint, problem := checkEndpoint(raw); problem == "" {
+			t.Errorf("checkEndpoint(%q) stored %q, so the digest would post there", raw, endpoint)
+		}
+	}
+
+	// And what a real push service looks like still goes through, port and all.
+	for _, raw := range []string{
+		"https://push.example.test/send/abc",
+		"https://push.example.test:8443/send/abc",
+		"https://198.51.100.7/send/abc",
+	} {
+		if _, problem := checkEndpoint(raw); problem != "" {
+			t.Errorf("checkEndpoint(%q) refused a push service: %s", raw, problem)
+		}
 	}
 }
 

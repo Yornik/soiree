@@ -574,7 +574,22 @@ the account id. There is no access log here to join a bare "api request failed"
 against, and the metrics carry no id to match a line to. A caller that hung up
 mid-read is answered `499` instead: nobody receives it, and it is what keeps a
 phone that locked its screen out of the 5xx rate it would otherwise be counted
-in.
+in. The session middleware answers the same event the same way. It meets that
+event a query earlier, and a bare return there left the request counted as one
+this server served, because a response nothing wrote a status on is recorded as
+`200`. Both are read as a cancelled query and a request context that is done,
+so that a database failing while somebody happens to close a tab is still a
+failure.
+
+A value the database refused as a data exception (SQLSTATE class 22) is
+answered `400`, which is the right answer to a figure past what its column
+holds, and logged at WARN with the SQLSTATE and the constraint. The same class
+covers a bound in this application that stopped agreeing with the column behind
+it, and nothing else would show that: the caller is refused like any other
+caller and a `400` is not in the 5xx rate. It is logged at WARN rather than
+ERROR, so a saved `level=ERROR` query does not show it. Beginning an attachment
+answers the same class the same way without the line: it calls
+`constraintError` directly rather than going through `writeStoreError`.
 
 A handler panic is recovered where the request is counted, so it arrives as one
 ERROR line carrying the route and the stack, and as a `status="500"` sample.
@@ -1524,8 +1539,13 @@ whatever subscription already exists rather than minting a new one, and the
 correct client posts on every page load. Both endpoints require a session: a
 subscription belongs to an account, and an unauthenticated `POST` here would be
 an open invitation to fill the table. The endpoint must be an absolute `https`
-URL, which is also the line that stops an authenticated account from pointing
-the digest sender at something inside the network.
+URL whose host is not `localhost` and not a loopback, private, link-local or
+unspecified address: the digest run posts to whatever is stored, from inside
+the network this server runs in, so the account that stores a row must not
+choose a target on that network. Written addresses only — a name that resolves
+to a private address still passes, and `internal/push` follows redirects — so
+it is a fence rather than a wall, and what it leaves is a push service reached
+over the public internet.
 
 **`404` or `410` from a push service means permanently gone, and the row must be
 deleted.** Storage was cleared, the app was uninstalled, permission was revoked,

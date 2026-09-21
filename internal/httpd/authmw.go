@@ -65,8 +65,18 @@ func (a *Auth) Authenticate(next http.Handler) http.Handler {
 		}
 		if err != nil {
 			// The caller hung up and took the query with it. That is not a
-			// database fault, and nothing written here would reach anybody.
-			if r.Context().Err() != nil {
+			// database fault, and nothing written here would reach anybody —
+			// but the request is still counted, and the recorder's default
+			// would count it as one this server served. 499, the same answer
+			// writeInternal gives the same event on the API path, so that one
+			// condition has one status wherever it is met.
+			//
+			// Both halves of the test, for writeInternal's reason: an outage
+			// that happens to coincide with somebody closing a tab is still an
+			// outage, and a guard on the cancelled context alone would swallow
+			// it here with no line in the log at all.
+			if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+				w.WriteHeader(statusClientClosedRequest)
 				return
 			}
 			// Anything else is the database not answering, which says nothing

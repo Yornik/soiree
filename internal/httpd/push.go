@@ -14,6 +14,7 @@ package httpd
 // POST here would be an open invitation to fill the table.
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -157,10 +158,10 @@ func (s *Server) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 // checkEndpoint validates a push endpoint, returning it trimmed, or a message
 // saying what is wrong with it.
 //
-// https only. Every real push endpoint is https, and the application will
-// later POST to whatever is stored here — so this is also the line that stops
-// an authenticated account from pointing the digest sender at something on the
-// inside of the network.
+// https only, because every real push endpoint is. The host matters too: the
+// digest run later POSTs to whatever is stored here, from inside whatever
+// network this server runs in, so an account that may store a row must not be
+// able to choose a target on that network.
 func checkEndpoint(raw string) (endpoint, problem string) {
 	raw = strings.TrimSpace(raw)
 	switch {
@@ -173,5 +174,39 @@ func checkEndpoint(raw string) (endpoint, problem string) {
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return "", "endpoint must be the absolute https URL the Push API supplied"
 	}
+	if isInsideTheNetwork(u.Hostname()) {
+		return "", "endpoint must be a push service, not an address on this network"
+	}
 	return raw, ""
+}
+
+// isInsideTheNetwork reports whether a host names the machine this runs on or
+// something only its neighbours can reach.
+//
+// Written addresses only, and deliberately: resolving a name would answer for
+// the moment the subscription was stored rather than the moment the digest
+// posts, and would also refuse every endpoint whenever this process cannot
+// reach a resolver, which is a subscription lost for a reason nobody could
+// read. So this closes the direct forms — the ones a browser never produces —
+// and it is a fence rather than a wall: a name someone points at a private
+// address still passes, and internal/push follows redirects, so a public host
+// can still send the sender somewhere else. A push service reached over the
+// public internet is what this leaves.
+//
+// Hostname() rather than Host, so that a port or IPv6 brackets cannot carry an
+// address past the check, and ParseIP folds ::ffff:10.0.0.5 onto 10.0.0.5 for
+// the same reason.
+func isInsideTheNetwork(host string) bool {
+	// Trailing dot: the same name, fully qualified.
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast()
 }

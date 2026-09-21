@@ -515,10 +515,38 @@ func writeStoreError[T any](w http.ResponseWriter, r *http.Request, e entity[T],
 		return
 	}
 	if status, code, message, ok := constraintError(err); ok {
+		logDataException(r, err)
 		writeError(w, status, code, message)
 		return
 	}
 	writeInternal(w, r, err)
+}
+
+// logDataException reports a value the column would not hold.
+//
+// The caller is answered 400 either way, because the alternative is the 500
+// this translation exists to prevent. But a class 22 is the one refusal that
+// may not be the caller's doing at all: a bound in this application that
+// stopped agreeing with the column behind it produces exactly the same answer,
+// and there is nothing else to find that in. There is no access log here, and a
+// 400 is nowhere near the 5xx rate the alerts read, so the request would be
+// indistinguishable from an honest client sending something silly.
+//
+// The SQLSTATE and the constraint, with what writeInternal carries; never the
+// value, which is the caller's and is read by more people in a log than in a
+// database. Warn rather than error, because most of these are that honest
+// client — which does mean an operator querying for level=ERROR has to widen it
+// to see this one. The class is tested again here rather than handed over by
+// constraintError, which is shared with the attachments path and has no request
+// to name.
+func logDataException(r *http.Request, err error) {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || !strings.HasPrefix(pgErr.Code, "22") {
+		return
+	}
+	slog.Warn("the database refused a value",
+		"sqlstate", pgErr.Code, "constraint", pgErr.ConstraintName,
+		"method", r.Method, "pattern", r.Pattern, "actor", actorID(r))
 }
 
 // constraintError classifies the database's own rejections.
@@ -544,9 +572,10 @@ func constraintError(err error) (status int, code, message string, ok bool) {
 		// properties of the value that was sent, so the caller is the only one
 		// who can act on them. The whole class rather than a list of codes,
 		// because a list is what lets the next column added bring back the 500
-		// this translation exists to prevent. The cost is that a class 22 this
-		// server caused itself, a literal built wrongly in some future query,
-		// now answers 400 and writes no log line.
+		// this translation exists to prevent. A class 22 this server caused
+		// itself — a bound that stopped agreeing with its column — is answered
+		// the same way, which is why writeStoreError logs the class as well as
+		// answering it.
 		if strings.HasPrefix(pgErr.Code, "22") {
 			return http.StatusBadRequest, errBadRequest, "the database refused that value", true
 		}
