@@ -106,6 +106,14 @@ directly, with the bootstrap address and password. The screens live in the URL
 fragment, so they can be linked to — `/#/login`, `/#/account` for your own
 passkeys, and `/#/admin` for everybody's accounts.
 
+The development stack in `compose.yaml` sets both variables itself, so
+`docker compose up --build` comes up with an admin already made: sign in at
+`http://localhost:8080/#/login` as `admin@example.test` with the password
+`local-development-only`. Writing a password into a public file is safe for
+that stack alone, whose database is a tmpfs that `docker compose down` throws
+away. Nothing that outlives an afternoon should use a credential every reader
+of the repository already knows.
+
 Be clear about what the page keeps, because this is a ledger of names against
 money. While somebody is signed in, the browser holds a copy of the plan in
 `localStorage`; that copy is what lets the page paint at once and work offline.
