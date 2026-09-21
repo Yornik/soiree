@@ -150,3 +150,30 @@ func TestVulnerabilitiesAreScannedOnASchedule(t *testing.T) {
 	}
 	t.Fatal("no workflow runs govulncheck on a schedule, so a vulnerability published between two pushes is reported by nothing until somebody happens to open a pull request")
 }
+
+// Everything that distinguishes the image from a `go build` binary — a scratch
+// filesystem with no timezone database and nothing writable, an unprivileged
+// user, no shell to fall back on — only matters on the path that has a
+// database, where the embedded migrations run at start, the bootstrap account
+// is created and the reminder timezone is loaded. The deployment is never the
+// other mode, so a smoke test that boots without a database proves the one
+// arrangement nobody runs.
+func TestTheImageIsSmokeTestedTheWayItIsDeployed(t *testing.T) {
+	read := 0
+	for name, text := range workflowSources(t) {
+		if !strings.Contains(text, "soiree:ci") {
+			continue
+		}
+		read++
+
+		if !strings.Contains(text, "DATABASE_URL") {
+			t.Errorf(".github/workflows/%s boots the image with no database, so the migrations, the bootstrap account and the API that only exist on that path are never run inside the image", name)
+		}
+		if !strings.Contains(text, "/readyz") {
+			t.Errorf(".github/workflows/%s waits on /healthz alone, which answers without asking the database, so the migrations could have failed and the step would still pass", name)
+		}
+	}
+	if read == 0 {
+		t.Fatal("no workflow builds the image for validation, so this test read nothing")
+	}
+}

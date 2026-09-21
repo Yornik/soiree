@@ -233,6 +233,74 @@ jobs:
           echo "image serves configured content"
           docker rm -f soiree-ci
 
+      # The step above boots the one arrangement nobody deploys. Everything
+      # that makes this image different from a `go build` binary — a scratch
+      # filesystem with no timezone database, nothing writable, an
+      # unprivileged user, no shell to fall back on — only bears on the path
+      # that has a database, where the embedded migrations run at start, the
+      # bootstrap account is created and the reminder timezone is read. So the
+      # image is booted a second time the way it is run, and asked for
+      # something only a working database can answer.
+      - name: Smoke test the image against a database
+        run: |
+          set -euo pipefail
+          # A password nothing else knows: the account it opens lives as long
+          # as the container and is reachable only from this runner.
+          admin_password=$(openssl rand -hex 24)
+
+          docker network create smoke
+          docker run -d --name smoke-pg --network smoke \
+            -e POSTGRES_USER=soiree \
+            -e POSTGRES_PASSWORD=soiree \
+            -e POSTGRES_DB=soiree \
+            postgres:18-alpine
+          # Over TCP, which is how soiree reaches it. Asking the same question
+          # over the socket answers yes while initdb's own temporary server is
+          # still running, and soiree exits rather than retries when the
+          # database refuses the first connection.
+          for i in $(seq 1 60); do
+            if docker exec smoke-pg pg_isready -h 127.0.0.1 -U soiree -d soiree >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec smoke-pg pg_isready -h 127.0.0.1 -U soiree -d soiree
+
+          docker run -d --name soiree-db --network smoke -p 8080:8080 \
+            -e DATABASE_URL='postgres://soiree:soiree@smoke-pg:5432/soiree?sslmode=disable' \
+            -e SOIREE_EVENT_NAME='CI Smoke Test' \
+            -e SOIREE_EVENT_DATE='2030-01-01T00:00:00Z' \
+            -e SOIREE_BASE_URL='http://localhost:8080' \
+            -e SOIREE_BOOTSTRAP_ADMIN='ci@example.org' \
+            -e SOIREE_BOOTSTRAP_PASSWORD="$admin_password" \
+            -e SOIREE_REMINDER_TZ='Europe/Amsterdam' \
+            soiree:ci
+
+          # Everything below fails by a curl returning nothing, and the only
+          # account of why is inside the container.
+          trap 'docker logs soiree-db 2>&1 | tail -40' ERR
+
+          # /readyz rather than /healthz: it is the one that asks the database,
+          # so waiting on it waits for the migrations the image just ran.
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/readyz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/readyz
+
+          # The session cookie is Secure, which curl will not store over plain
+          # HTTP, so it is read off the response and handed back by hand.
+          cookie=$(curl -fsS -D - -o /dev/null \
+            -H 'Content-Type: application/json' \
+            -d "{\"email\":\"ci@example.org\",\"password\":\"$admin_password\"}" \
+            http://localhost:8080/api/v1/auth/login \
+            | tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie: \(soiree_session=[^;]*\).*/\1/p')
+          test -n "$cookie"
+          curl -fsS -H "Cookie: $cookie" http://localhost:8080/api/v1/plan \
+            | jq -e '.settings' > /dev/null
+          echo "image migrates, creates its first account and answers the API"
+
+          docker rm -f soiree-db smoke-pg
+          docker network rm smoke
+
   # The claim "-trimpath, CGO_ENABLED=0, fixed toolchain" is only worth
   # something if it is checked. Build the binary twice from the same source and
   # compare the bytes, so an accidental source of nondeterminism (an embedded
