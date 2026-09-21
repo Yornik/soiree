@@ -983,6 +983,84 @@ test('a create answered a second time keeps the correction somebody else made me
 });
 
 /*
+ * The same lost answer again, with both people typing this time, which is the
+ * case the merge exists for: they correct the deposit here while the create is
+ * still going again, and somebody else writes a different column of the same
+ * line meanwhile.
+ *
+ * Neither of them touched what the other did, so both changes belong in the
+ * row that comes out. The version both edits started from is the row as it was
+ * first posted, and only that: a retry carries the row as it stands now, so
+ * measuring against it reads the correction typed since as nobody's change and
+ * takes the value that was already committed back over it. The figure reverts
+ * on the screen of the person who typed it, under a notice saying both sets of
+ * changes have been kept.
+ */
+test('a create answered a second time also keeps what was typed here while it waited', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  // The staging of the two specs above: the origin hears the create once and
+  // the browser hears nothing back until `offline` says otherwise.
+  let plays = 0;
+  let committed = 0;
+  let offline = true;
+  await page.route('**/api/v1/budget-items', async (route) => {
+    if (!offline || route.request().method() !== 'POST') return route.continue();
+    if (plays === 0) {
+      plays = 1;
+      const upstream = await request.post(`${API_URL}/api/v1/budget-items`, {
+        headers: await apiAuth(request),
+        data: JSON.parse(route.request().postData() || '{}'),
+      });
+      committed = upstream.status();
+    }
+    return route.abort('internetdisconnected');
+  });
+
+  const line = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await expect.poll(() => committed, { message: 'the first create should have committed' }).toBe(201);
+
+  // The deposit was typed from memory and the invoice says 2,600, so they
+  // correct it while the answer is still not arriving.
+  await line.unit.fill('2600');
+
+  // Somebody else adds the reference to the same line, in a column nobody here
+  // has touched. Polled rather than assumed: the retry backs off, so the order
+  // of the two is not ours to decide.
+  const stored = (await apiPlan(request)).budgetItems[0];
+  expect((await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
+    data: { revision: stored.revision, note: 'invoice attached' },
+  })).status(), 'their note lands').toBe(200);
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems[0].revision)
+    .toBe(2);
+
+  // The caret leaves the table, which is the cell the correction was typed
+  // into: a table somebody is inside is redrawn when they are not.
+  await line.unit.blur();
+
+  const answered = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && r.url().endsWith('/api/v1/budget-items'),
+    { timeout: 30_000 },
+  );
+  offline = false;
+  expect((await answered).status(), 'a create this server has already done').toBe(200);
+
+  // Their note is here and the correction typed here is still the correction,
+  // on the screen and then on the plan: the correction goes up as the patch
+  // that follows, at the revision their note gave the line.
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
+  await expect(budgetRow(page, 0).unit).toHaveValue('2600');
+  await expect(budgetRow(page, 0).note).toHaveValue('invoice attached');
+  await expectFigures(page, { committed: 2600, paid: 0, outstanding: 2600, forecast: 2600 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.unit, i.note]), { timeout: 20_000 })
+    .toEqual([['2600.00', 'invoice attached']]);
+});
+
+/*
  * The same outage, met from the other end: the origin is already away when the
  * page opens. That is the ordinary start for an installed planner, because the
  * service worker paints the shell with no network at all, and it is also a pod

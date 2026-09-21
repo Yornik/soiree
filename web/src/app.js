@@ -918,7 +918,9 @@
       // The base travels with the state or not at all: with no database there
       // is no base, and a bare state is also what every save before this one
       // looks like, which Store.read has to go on accepting.
-      var value = shadow ? { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys } : s;
+      var value = shadow
+        ? { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys, createBodies: createBodies }
+        : s;
       try { localStorage.setItem(this.key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
     },
     clear: function () {
@@ -933,13 +935,14 @@
   // copy in existence", and adopt() has to know which it is looking at.
   var hadSavedCopy = false;
   // The merge base the last page left behind, the ids it had adopted by then,
-  // and the names it had given the creates it had not sent. All three are
-  // installed further down, where the shadow they belong to is declared; what
-  // matters here is that they are taken out of the same value as the state, so
-  // they cannot be from different moments.
+  // and the names and bodies it had given the creates it had not sent. All
+  // four are installed further down, where the shadow they belong to is
+  // declared; what matters here is that they are taken out of the same value
+  // as the state, so they cannot be from different moments.
   var savedBase = null;
   var savedIdMap = null;
   var savedCreateKeys = null;
+  var savedCreateBodies = null;
   try {
     var saved = Store.read();
     hadSavedCopy = saved !== null;
@@ -947,6 +950,7 @@
       savedBase = saved.shadow;
       savedIdMap = saved.idMap;
       savedCreateKeys = saved.createKeys;
+      savedCreateBodies = saved.createBodies;
       saved = saved.state;
     }
     state = saved || (CONFIG.demoData ? demoState() : emptyState());
@@ -1011,6 +1015,12 @@
   var shadow = null;       // rows as the server last confirmed them (restored below)
   var idMap = {};          // this browser's optimistic ids -> the server's uuids
   var createKeys = {};     // and the uuid each unsent create names itself by
+  // The row each unsent create posted the first time, which is the row the
+  // server holds if that POST committed and its answer was lost. Kept apart
+  // from `state`, which is the row as it stands now: the difference between
+  // the two is exactly what somebody typed while the answer was not arriving,
+  // and sendCreate needs both to tell it from somebody else's write.
+  var createBodies = {};
   var blocked = {};        // writes the server refused, parked until they change
 
   // Backoff for a write that got no answer. Doubling from a second, capped,
@@ -1333,6 +1343,7 @@
   shadow = baseFromStored(savedBase);
   if (shadow && savedIdMap) idMap = savedIdMap;
   if (shadow && savedCreateKeys) createKeys = savedCreateKeys;
+  if (shadow && savedCreateBodies) createBodies = savedCreateBodies;
 
   // The server's answer to a write is the row as it now stands, so it is also
   // the new agreed version. Stored as its own object: a shadow that shared
@@ -1511,13 +1522,29 @@
     // the server, so there is nothing to create and nothing to delete either.
     if (!row) {
       delete createKeys[op.id];
+      delete createBodies[op.id];
       return Promise.resolve(true);
     }
 
+    // The row as it stands now, and that is what goes on the wire every time.
+    // Freezing it would be the shorter way to the base kept below, and it
+    // would strand every create the server refuses: planOps lets a parked
+    // write go again once the row changes (opSignature), and a body that
+    // could not change would carry the refused values up again for ever.
     var body = {};
     c.fields.forEach(function (f) { body[f.name] = f.wire(row); });
     body.position = nextPosition(c);
     body.id = createKeyFor(op.id);
+
+    // The row as it was posted the first time, kept because a retry's body
+    // cannot stand in for it: anything typed since is already in that one.
+    var posted = createBodies[op.id];
+    if (!posted) {
+      posted = createBodies[op.id] = body;
+      // Kept before the request goes, for the reason createKeyFor keeps the
+      // name: the retry that needs it may be on the other side of a reload.
+      Store.keep();
+    }
 
     return api('POST', '/' + c.route, body).then(function (res) {
       // 200 is this same create answered a second time: the first attempt
@@ -1525,9 +1552,9 @@
       // stored rather than a second one.
       //
       // Whether the row as stored is still the row this browser posted is its
-      // revision. At 1 nobody has written it since, so the answer and the POST
-      // say the same thing, and anything typed here since is a difference from
-      // both that goes up as the next pass's patch.
+      // revision. At 1 nobody has written it since, so the answer and the
+      // first POST say the same thing, and anything typed here since is a
+      // difference from both that goes up as the next pass's patch.
       //
       // Above 1 somebody else wrote the line while the answer was not
       // arriving, and taking their row as the agreed version is what makes
@@ -1542,11 +1569,16 @@
       if ((res.status === 201 || res.status === 200) && res.body && res.body.id) {
         adoptServerId(c, op.id, res.body.id);
         delete createKeys[op.id];
+        delete createBodies[op.id];
         if (res.status === 200 && (Number(res.body.revision) || 0) > 1) {
-          // The version both edits started from is the body that was posted,
-          // so that is what the merge is given as the agreed one. Its revision
-          // is never read: reconcile replaces it with the one that came back.
-          shadow[c.key][res.body.id] = { row: rowFromWire(c, body), revision: 0 };
+          // The version both edits started from is the row as it was posted
+          // the first time, since that is the one the server stored, so that
+          // is what the merge is given as the agreed one. Not this attempt's
+          // body: a correction typed while the answer was not arriving is in
+          // that one already, and the merge would read it as nobody's change
+          // and put the committed value back over it. Its revision is never
+          // read: reconcile replaces it with the one that came back.
+          shadow[c.key][res.body.id] = { row: rowFromWire(c, posted), revision: 0 };
           reconcile({ kind: 'update', coll: c, id: res.body.id, fields: [] }, res.body);
           // What shadowPut keeps for a create that landed, and for the same
           // reason: the row is in the state and the shadow under the server's
@@ -2115,6 +2147,7 @@
     blocked = {};
     idMap = {};
     createKeys = {};
+    createBodies = {};
     pendingRefresh = {};
     loaded = JSON.parse(JSON.stringify(state));
     Sync.queued = false;
