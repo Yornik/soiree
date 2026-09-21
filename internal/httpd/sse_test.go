@@ -327,6 +327,53 @@ func TestEventsAnnouncesAWrite(t *testing.T) {
 	}
 }
 
+// TestAStreamNamesTheBuildItIsAnsweredBy is the version handshake. A planning
+// tab is left open for days, so nothing in the page ever learns that the
+// deployment changed under it. The stream is the one thing that notices a
+// deploy by itself, because it drops with the old process and is reopened
+// against the new one, and the build it names on each open is what a page
+// compares with the script it is actually running.
+func TestAStreamNamesTheBuildItIsAnsweredBy(t *testing.T) {
+	previous := Version
+	Version = "1.2.3"
+	t.Cleanup(func() { Version = previous })
+
+	s, ts, _, _ := newLiveServer(t)
+
+	st := openStream(t, ts)
+	var earlier []string
+	frame := st.await(t, "hello event", func(f string) bool {
+		if strings.HasPrefix(f, "event: hello\n") {
+			return true
+		}
+		earlier = append(earlier, f)
+		return false
+	})
+	for _, f := range earlier {
+		if strings.HasPrefix(f, "event: resync\n") {
+			t.Error("the resync arrived first, so a page is told to refetch before it is told which build will answer it")
+		}
+	}
+
+	_, data, _ := strings.Cut(frame, "data: ")
+	var hello struct {
+		Version string `json:"version"`
+		Build   string `json:"build"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &hello); err != nil {
+		t.Fatalf("hello data is not a JSON object: %v\n%s", err, frame)
+	}
+	if hello.Version != Version {
+		t.Errorf("hello names version %q, want %q: the release this binary was linked with", hello.Version, Version)
+	}
+	// A page has nothing to compare a build id with except the script it
+	// loaded, so this has to be the URL the shell asks for rather than merely
+	// something that changes per build.
+	if !strings.Contains(string(s.index.Raw), `src="`+hello.Build+`"`) {
+		t.Errorf("hello names build %q, which is not the script the shell loads", hello.Build)
+	}
+}
+
 // TestEventsReachesEverySubscriber: one LISTEN connection, many clients. If the
 // fan-out only reached the first, a planning session of three would have two
 // people quietly out of date.
