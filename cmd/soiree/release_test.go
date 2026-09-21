@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -296,5 +297,44 @@ func TestTwoReleasesDoNotRaceForTheFloatingTag(t *testing.T) {
 	if len(groups) > 1 {
 		t.Errorf("the publishing jobs are spread over %d concurrency groups (%v), and a group serialises only against itself, so the two release paths still race",
 			len(groups), groups)
+	}
+}
+
+// Renovate merges most of its own pull requests here, so for those the only
+// review a new release gets is that CI compiled it, and CI cannot tell a
+// benign release from a compromised or withdrawn one: the checks build with
+// `push: false` and never sign, so they say nothing at all about the four
+// actions that run in the two jobs above holding `packages: write` and
+// `id-token: write`. The wait is the review. It is a top-level default rather
+// than a rule because a rule covers the managers somebody listed, and the
+// first wait here listed gomod and npm, which left the actions, the builder
+// image and the tool versions the workflows pin inline free to merge
+// themselves the day they were published.
+func TestNoDependencyMergesItselfTheDayItIsPublished(t *testing.T) {
+	var cfg struct {
+		MinimumReleaseAge string `json:"minimumReleaseAge"`
+		PackageRules      []struct {
+			MinimumReleaseAge *json.RawMessage `json:"minimumReleaseAge"`
+		} `json:"packageRules"`
+	}
+	if err := json.Unmarshal([]byte(repoFile(t, "renovate.json")), &cfg); err != nil {
+		t.Fatalf("parse renovate.json: %v", err)
+	}
+
+	if cfg.MinimumReleaseAge == "" || strings.HasPrefix(cfg.MinimumReleaseAge, "0") {
+		t.Errorf("renovate.json sets minimumReleaseAge to %q at the top level, so an update automerges as soon as CI is green and a compromised release reaches main on the day it is published",
+			cfg.MinimumReleaseAge)
+	}
+
+	// A rule may lengthen the wait; nothing may switch it off, which is how
+	// the previous one came to cover two of the managers in use.
+	for i, r := range cfg.PackageRules {
+		if r.MinimumReleaseAge == nil {
+			continue
+		}
+		switch string(*r.MinimumReleaseAge) {
+		case "null", "0", `""`, `"0"`:
+			t.Errorf("renovate.json packageRules[%d] turns the wait off for what it matches, so those updates merge themselves unreviewed", i)
+		}
 	}
 }
