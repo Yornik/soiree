@@ -104,7 +104,15 @@ exists.
 Then sign in on the page: *Sign in* in the bar at the top, or `/#/login`
 directly, with the bootstrap address and password. The screens live in the URL
 fragment, so they can be linked to — `/#/login`, `/#/account` for your own
-passkeys, and `/#/admin` for everybody's accounts.
+password and passkeys, and `/#/admin` for everybody's accounts.
+
+*Password* on that screen is where the `then change it` above is done, and it
+needs nothing but the password you have: `POST /api/v1/auth/password` with
+`currentPassword` and `newPassword`, which is the one way to a new password
+that needs no mail at all. It ends every session the account had, because they
+were all made with the password that is ending; the answer carries a new
+cookie, so the browser doing it stays signed in and every other device is
+signed out. Any set-password link still outstanding is spent with them.
 
 The development stack in `compose.yaml` sets both variables itself, so
 `docker compose up --build` comes up with an admin already made: sign in at
@@ -156,7 +164,11 @@ With SMTP configured the link goes to the person it belongs to and nowhere else
 — an admin who never sees it cannot use it — unless an admin asks for it
 instead of the mail, which is `"deliver": "link"` on a create or an invite, is
 accepted only for an account that has not set a password yet, and is logged as
-`account link issued to admin`. Without SMTP the screen shows the link once,
+`account link issued to admin`. A link that goes out by mail is logged too, as
+`account link issued by mail`, with the account it is for, whether it is an
+`invite` or a `reset`, and the admin who asked. A reset somebody asked for on
+the sign-in screen names the account itself, since nobody signed in asked for
+it. Neither line ever carries the link. Without SMTP the screen shows the link once,
 for the admin to pass on by another route. *Send the link again*
 issues a fresh one when the first expires or goes to a mailbox nobody reads;
 issuing supersedes whatever was outstanding, so it is also how a leaked link is
@@ -218,6 +230,15 @@ A session lasts seven days idle and thirty days at most. When one ends under an
 open page, the page stops asking, keeps the person's edits in the browser, shows
 the sign-in screen with a line saying why, and sends those edits once they are
 back.
+
+A refused password login is `login refused` in the log, the way a refused
+passkey is, with `method=password` and, when the address named an account,
+that account and why it was refused (`wrong password`, `no password set`, or
+the status it has instead of active). An address with no account here leaves
+the line with nothing on it: the address itself is never written down, and
+neither is the password. The two login buckets bound how many of these one
+caller can produce, so a run against the sign-in screen shows up as a burst of
+them rather than as a flood.
 
 ## Generating a VAPID key pair
 

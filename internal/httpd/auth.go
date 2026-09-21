@@ -259,6 +259,13 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	// Who am I. Any live session; the browser uses it to decide what to draw.
 	mux.Handle("GET /api/v1/auth/session", a.RequireAuth(http.HandlerFunc(a.handleSession)))
 
+	// Changing your own password. Behind a session rather than a link,
+	// because it is the one way to replace a password on a deployment whose
+	// relay is not delivering, which is the deployment SOIREE_BOOTSTRAP_PASSWORD
+	// exists for. Not wrapped in the limiter, for handleSetPassword's reason:
+	// it charges for itself, after the checks that cost nothing.
+	mux.Handle("POST /api/v1/auth/password", a.RequireAuth(http.HandlerFunc(a.handleChangePassword)))
+
 	// Administration. Every one of these is an admin-only route, checked
 	// server-side per request against the role as it stands in the database —
 	// not as it stood when the session was created.
@@ -392,6 +399,25 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Checked after the verify, not before, so a disabled account costs the
 	// same as an active one.
 	if !ok || err != nil || user.PasswordHash == nil || user.Status != store.StatusActive {
+		// One line per refusal, the way every passkey refusal gets one from
+		// logPasskeyRefusal: the caller is told nothing, and the operator can
+		// see which account is being worked on and why it is being refused.
+		// An address that names no account is logged bare: writing it down
+		// would keep a list of addresses nobody here has an account for, and
+		// the file it would be written to is read by more people than the
+		// database is.
+		if err != nil {
+			a.log.Info("login refused", "method", "password")
+		} else {
+			reason := "wrong password"
+			switch {
+			case user.PasswordHash == nil:
+				reason = "no password set"
+			case user.Status != store.StatusActive:
+				reason = string(user.Status)
+			}
+			a.log.Info("login refused", "method", "password", "user", user.ID, "reason", reason)
+		}
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "")
 		return
 	}
@@ -559,7 +585,13 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		// and its link has no reader other than the address it is sent to.
 		if _, err := a.issueToken(ctx, user, purpose, language, false); err != nil {
 			a.log.Error("could not issue a reset link", "user", user.ID, "err", err)
+			return
 		}
+		// The same line an admin's invitation leaves, and the actor is the
+		// account itself: nobody signed in asked for this, so the only thing
+		// it can name is whose address the link went to, which is not a claim
+		// about who typed it in.
+		a.log.Info("account link issued by mail", "user", user.ID, "purpose", purpose, "by", user.ID)
 	})
 
 	// 202: something may happen, and we are not saying what.
@@ -640,6 +672,105 @@ func (a *Auth) handleSetPassword(w http.ResponseWriter, r *http.Request) {
 	clearSessionCookie(w)
 	a.log.Info("password set", "user", user.ID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// handleChangePassword replaces the password of whoever is calling.
+//
+// The only way to change a password used to be a link, and a link is handed to
+// the mailer and never shown. So the deployment SOIREE_BOOTSTRAP_PASSWORD
+// exists for, one whose relay is configured and not delivering, was the one
+// deployment where the boot log's "then change it" named something the product
+// could not do.
+//
+// It is also this surface's "sign out everywhere else", without a second
+// route. Every session was minted against the password that is ending, so
+// every session ends with it, and the browser that asked gets a new one on the
+// way out. That is what somebody means when they change a password they think
+// another person has: not "from now on", but "and put the others out".
+func (a *Auth) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "")
+		return
+	}
+
+	var req changePasswordRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	// The free check first, as in handleSetPassword: a password below the
+	// floor is a fact about the request, costs nothing to find, and should
+	// neither spend the allowance nor be answered as though the current
+	// password were the thing that was wrong.
+	if msg, ok := checkPassword(req.NewPassword); !ok {
+		writeError(w, http.StatusBadRequest, "weak_password", msg)
+		return
+	}
+	// Charged to the login buckets, because this asks for exactly what a login
+	// asks for: an Argon2 evaluation against a stored hash, from a caller who
+	// may be holding a session they took rather than one they were given.
+	if !a.loginIP.allow(clientIP(r, a.trustProxy)) || !a.loginAcct.allow(user.Email) {
+		tooManyRequests(w)
+		return
+	}
+
+	// An account can reach this with no password at all: a passkey is a way in
+	// too. The dummy keeps that on the same path as a wrong password, which is
+	// the right answer for it: there is no current password to be right about.
+	hash := auth.DummyHash()
+	if user.PasswordHash != nil {
+		hash = *user.PasswordHash
+	}
+	ok, _, verifyErr := a.params.Verify(hash, req.CurrentPassword)
+	if verifyErr != nil {
+		// A stored hash this build cannot parse, as at login: refuse, and say
+		// so in the log because it needs a person.
+		a.log.Error("stored password hash is unreadable", "user", user.ID, "err", verifyErr)
+		ok = false
+	}
+	if !ok {
+		// Somebody guessing at a password from inside a session is the thing
+		// worth noticing here, and it looks the same as its owner mistyping.
+		a.log.Info("password change refused", "user", user.ID)
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "")
+		return
+	}
+
+	newHash, err := a.params.Hash(req.NewPassword)
+	if err != nil {
+		a.log.Error("could not hash password", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "")
+		return
+	}
+
+	updated, err := a.store.ChangePassword(r.Context(), user.ID, newHash)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		// Disabled or deleted while this was in flight. The session it arrived
+		// with has stopped resolving too, so this is the answer the next
+		// request would get anyway.
+		clearSessionCookie(w)
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "")
+		return
+	case err != nil:
+		a.log.Error("could not change password", "user", user.ID, "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "")
+		return
+	}
+
+	a.log.Info("password changed", "user", updated.ID)
+	// The session this arrived on went with the rest. A new one keeps the
+	// browser that asked signed in, and it is a different token, so a cookie
+	// copied off this machine before the change does not come back.
+	if !a.startSession(w, r, updated, "password change") {
+		return
+	}
+	writeJSON(w, http.StatusOK, toDTO(updated))
 }
 
 // --- administering accounts -------------------------------------------------
@@ -872,6 +1003,15 @@ func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user st
 	}
 
 	res := createUserResponse{User: toDTO(user), MailSent: a.mailer != nil && !toAdmin}
+	actor, _ := UserFrom(r.Context())
+	if a.mailer != nil && !toAdmin {
+		// The link goes to its owner and no admin ever sees it, which is not
+		// the same as nothing having happened: this is how one admin has a
+		// working credential sent to another admin's mailbox, and the
+		// password_tokens row it leaves behind carries no issuer. Who asked,
+		// for whom, and which of the two kinds of link it was.
+		a.log.Info("account link issued by mail", "user", user.ID, "purpose", purpose, "by", actor.ID)
+	}
 	if a.mailer == nil || toAdmin {
 		// The documented degraded mode: no SMTP, so the admin passes the link
 		// on by hand. A deployment without mail is inconvenient, not broken.
@@ -884,7 +1024,6 @@ func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user st
 		// without a relay hands one over on every invitation, and it is also
 		// the deployment where the refusal above cannot fire, so the account
 		// on the other end may be one somebody is using.
-		actor, _ := UserFrom(r.Context())
 		a.log.Info("account link issued to admin", "user", user.ID, "by", actor.ID)
 	}
 	writeJSON(w, status, res)

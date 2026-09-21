@@ -300,9 +300,10 @@ What works end to end:
   database it *is* the planner, and that deployment still works exactly as it
   did.
 - **Signing in.** A sign-in screen, the set-password screen an invitation link
-  lands on, an account screen for your own passkeys, and an accounts screen
-  where an admin creates people and chooses their role, and the language of
-  the invitation: that mail and the screen its link opens are written in it.
+  lands on, an account screen for your own password and passkeys, and an
+  accounts screen where an admin creates people and chooses their role, and
+  the language of the invitation: that mail and the screen its link opens are
+  written in it.
   It is a choice about one mail and is not stored. There is no self-service
   sign-up. **Passkeys** work alongside the password wherever
   `SOIREE_BASE_URL` gives them a domain to belong to.

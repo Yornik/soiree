@@ -397,6 +397,79 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /auth/password:
+    post:
+      tags: [session]
+      operationId: changePassword
+      summary: Change your own password.
+      description: |
+        Send the password you have now and the one you want. This needs a
+        session, and no mail: it is the way to replace a password on a
+        deployment whose mail is not being delivered.
+
+        Every session of the account ends, including this one. The server
+        sends a new session cookie with the answer, so the browser that asked
+        stays signed in on a new token. Every other device is signed out.
+
+        Any set-password link still outstanding for the account is spent.
+
+        The new password is read first. A password under twelve characters
+        gets **400** with the code `weak_password`, and the server does not
+        look at the current one.
+
+        The same two rate limits as `POST /auth/login` apply, because the work
+        is the same: one counts the attempts from your address, one counts
+        them against the account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword:
+                  type: string
+                  format: password
+                newPassword:
+                  type: string
+                  format: password
+                  minLength: 12
+      responses:
+        '200':
+          description: |
+            The password is changed. The session cookie is replaced, and every
+            other session of the account is gone.
+          headers:
+            Set-Cookie:
+              description: The new session cookie. It is HttpOnly, Secure and SameSite=Lax.
+              schema:
+                type: string
+                examples: ['soiree_session=…; Path=/; HttpOnly; Secure; SameSite=Lax']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: |
+            The new password is too short (`weak_password`), or the body is
+            not readable (`invalid_json`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: |
+            There is no session, or the current password is wrong. The error
+            code is `invalid_credentials` for a wrong password. It carries no
+            further detail, on purpose.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   ############################################################################
   # Passkeys
   ############################################################################
