@@ -190,11 +190,15 @@ the planner closes the day after the event there, not the day after it in UTC.
 ## The API
 
 [`api/openapi.yaml`](api/openapi.yaml) describes the whole HTTP surface, as
-OpenAPI 3.1. Read it there, or render it with any viewer:
+OpenAPI 3.1. Read it there, or render it to a file and open that:
 
 ```bash
-npx @redocly/cli preview-docs api/openapi.yaml
+npx @redocly/cli@2.53.3 build-docs api/openapi.yaml -o soiree-api.html
 ```
+
+Pinned, and to the version CI lints with: an unpinned `npx` fetches whatever
+is current, and the command that stood here before this one was removed in
+Redocly 2.x.
 
 Three things in it are easy to get wrong and worth reading before writing a
 client: money crosses the wire as a **decimal string in major units** and never
@@ -210,12 +214,16 @@ The document is hand-written, so it is checked rather than trusted. `redocly
 lint` in CI proves it is valid OpenAPI. `TestEveryDocumentedRouteExists` asks
 the running server for every path and method it describes, so a renamed or
 deleted route fails the build. `TestTheDocumentedErrorContractHolds` pins the
-answers a client branches on — the codes behind 400, 401, 403 and 429.
+answers a client branches on — the codes behind 400, 401, 403 and 429. Four
+more pin what is easy to leave behind: every collection has both its paths,
+the keys `GET /plan` puts on the wire and the `Plan` schema are the same set,
+and the rate limit and the change frame answer as they are written down.
 
 That is narrower than "the document is correct", deliberately: nothing checks
-the prose or the schemas against live responses. Writing the first version of
-this specification produced two responses that were described from inference
-rather than read from the source, and the tests above are what found them.
+the prose, and a schema is held against a live response only where one of
+those tests names it. Writing the first version of this specification produced
+two responses that were described from inference rather than read from the
+source, and the tests are what found them.
 
 ## Design notes
 
@@ -239,16 +247,28 @@ activity page, are gzipped as they go out. Hashed URLs are served `immutable`
 with a one-year lifetime; only the HTML shell is revalidated, which is what
 makes a deploy land.
 
-Measured transfer at 1.0.0, brotli:
+Measured from a running binary with brotli, on `main` after 1.2.1:
 
 | | |
 |---|---|
-| HTML shell | 4.5 kB (the three flags are inline SVG, so they cost no request) |
-| Stylesheet | 11 kB |
-| Planner script | 46 kB (`defer`, does not block paint) |
-| Accounts script | 25 kB (`defer`, does not block paint; three languages) |
+| HTML shell | 4.7 kB (the three flags are inline SVG, so they cost no request) |
+| Stylesheet | 16 kB |
+| Planner script | 57 kB (`defer`, does not block paint) |
+| Accounts script | 32 kB (`defer`, does not block paint; three languages) |
 | Display font | 69 kB (`font-display: swap`, does not block paint) |
-| **First paint** | **~16 kB** |
+| **First paint** (shell + stylesheet) | **~21 kB** |
+
+The table is hand-written and goes stale on any release that touches
+`web/src`, so ask the build in front of you instead, with the default
+configuration and no database:
+
+```bash
+curl -s -H 'Accept-Encoding: br' -o /dev/null -w '%{size_download}\n' \
+  http://localhost:8080/
+```
+
+Then the same for each `/assets/…` URL the shell names. The shell carries the
+config data block, so its own figure moves a little with the event's details.
 
 **Writes are debounced.** Edits apply to local state instantly and persist
 500 ms later, flushed on page hide. That keeps typing smooth, and it is what
@@ -268,8 +288,8 @@ rather than claiming both were kept.
 
 ## Status
 
-Version 1.0.0 is a shared planner with a shared database behind it, accounts in
-front of it, and a page that uses all of it.
+soiree is a shared planner with a shared database behind it, accounts in front
+of it, and a page that uses all of it.
 
 What works end to end:
 
@@ -366,20 +386,21 @@ SOIREE_DEMO_DATA=true go run ./cmd/soiree
 ```
 
 The full suite additionally exercises the store and migrations against a real
-PostgreSQL via testcontainers, so it needs Docker and will pull
-`postgres:18-alpine`:
+PostgreSQL, and the attachment handlers against a real S3, both via
+testcontainers, so it needs Docker and will pull `postgres:18-alpine` and a
+digest-pinned `quay.io/minio/minio`:
 
 ```bash
 go test ./...
 ```
 
-`-short` skips exactly those tests, which is why it is the default suggestion
-above.
+`-short` skips exactly the tests that need a container, which is why it is the
+default suggestion above.
 
 There is also a browser-level suite, which is opt-in and not part of
 `go test ./...`. It starts the real binary three times — once plain, once with
-a different locale and no event date, once with a throwaway Postgres behind it
-— and drives them with Playwright:
+a different locale and no event date, once with a throwaway Postgres and a
+throwaway MinIO behind it — and drives them with Playwright:
 
 ```bash
 cd e2e && npm install && npx playwright install --with-deps && npm test

@@ -31,11 +31,13 @@ go test -short ./...    # no Docker required
 go test -race ./...     # the full suite: needs Docker
 ```
 
-`-short` is the everyday loop. Anything that talks to PostgreSQL skips itself
-under it, because those tests start a real `postgres:18-alpine` container
-through testcontainers — the same major version the production cluster runs.
-Mocking that layer would defeat its purpose: a fake would happily accept a
-cascade that does not exist and a `CHECK` that never fires.
+`-short` is the everyday loop. Anything that needs a container skips itself
+under it: the tests that talk to PostgreSQL start a real `postgres:18-alpine`
+through testcontainers, the same major version the production cluster runs,
+and the attachment tests start a real MinIO. Mocking either would defeat its
+purpose: a fake database would happily accept a cascade that does not exist and
+a `CHECK` that never fires, and a fake bucket, written by whoever wrote the
+signer, would agree with the signer by construction.
 
 Note that `-short` is a local convenience, not a lower bar: CI runs
 `go test -race -cover ./...`, the full suite rather than the `-short` subset.
@@ -78,8 +80,8 @@ docs(security): add a disclosure policy
 - `fix:` — a patch bump and a changelog entry
 - `docs:`, `chore:`, `ci:`, `refactor:`, `test:`, `build:` — no release
 - `!` after the type, or a `BREAKING CHANGE:` footer — a major bump. The
-  repository does not set `bump-minor-pre-major`, so this takes a 0.x version
-  straight to 1.0.0. Use it only when you mean that.
+  repository is past 1.0.0, so this is 1.x to 2.0.0. Use it only when you mean
+  that.
 
 A wrong type is not cosmetic: `feat:` on a documentation-only change mints a
 release nobody meant to cut. Whatever subject lands on `main` is what
@@ -92,8 +94,8 @@ Branches follow `feat/<scope>`, `fix/<scope>` and so on, branched from current
 ## What CI checks
 
 Seven jobs run on every pull request
-([`.github/workflows/ci.yaml`](.github/workflows/ci.yaml)). All of them must
-pass.
+([`.github/workflows/checks.yaml`](.github/workflows/checks.yaml), which
+`ci.yaml` calls). All of them must pass.
 
 | Job | What it does |
 |---|---|
@@ -145,7 +147,8 @@ not a preconnect to somewhere else. The people using an instance are spread
 across the world and there is no CDN in front of the origin. Each extra origin
 costs a DNS lookup, a TCP connection and a TLS handshake before first paint —
 about a second on a 300 ms link, which is more than the entire rest of the
-page. First paint is currently about 4.6 kB.
+page. First paint is currently about 21 kB: the shell plus the stylesheet that
+blocks it, which the README's table measures.
 
 The binary sends a strict Content-Security-Policy of its own, which is why the
 page carries no inline script that executes and no inline `style=` attribute
