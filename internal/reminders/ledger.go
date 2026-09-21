@@ -188,9 +188,13 @@ func confirmSent(ctx context.Context, conn *pgxpool.Conn, key string, sentAt tim
 	return nil
 }
 
-// releaseClaim undoes a claim for a send that definitely did not happen —
-// the server refused the connection, the credentials, or a recipient. Nothing
-// was delivered, so the next tick may try again.
+// releaseClaim undoes a claim for a send that definitely did not happen — the
+// server refused the connection, the credentials, or every one of the
+// recipients. Nothing was delivered, so the next tick may try again.
+//
+// Every one of them, because each recipient is sent a copy of their own: a
+// refusal that cost only some of the copies leaves the claim standing, since
+// releasing it would offer the people who did get the digest a second one.
 //
 // Detached from the caller's context because the reason the send failed is
 // sometimes that the context was cancelled, and a claim that cannot be undone

@@ -37,7 +37,10 @@ var outcomes = []outcome{
 // Not sending is usually right: the period already went out, one went out too
 // recently, another replica is sending it, or nothing was due. The four that
 // are not ok all mean the same thing in the end, which is that a deadline
-// somebody has to act on reached nobody and no run will try again by itself.
+// somebody has to act on did not reach them and no run will try again by
+// itself. `failed` covers the copy the relay refused while the others went
+// out, for that reason: the person it was addressed to is owed a digest that
+// nothing will now send.
 //
 // no_recipients is the odd one out, and counts as ok deliberately. That digest
 // reaches nobody either, but the cause is a deployment with no active admin

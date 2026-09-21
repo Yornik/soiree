@@ -327,8 +327,8 @@ What is not there, stated rather than left to be discovered:
 - **The deadline digest is in English only.** Every screen is in three
   languages, and so are the invitation and the password-reset mail — in the
   language the admin chose for that mail, or the one the sign-in screen was
-  being read in. The digest is one body sent to every admin at once, and is
-  not.
+  being read in. The digest is one English body, composed once and sent as a
+  copy to each recipient.
 - **Phases and the programme have an API and no interface.** Both are in the
   plan and in `/api/v1`; the page draws neither. For the same reason a budget
   row with a `parentId`, which only a client writing to the API directly can

@@ -63,6 +63,44 @@ func (f *fakeSender) last(t *testing.T) mailer.Message {
 	return f.sent[len(f.sent)-1]
 }
 
+// recipients is the address each message was addressed to, in send order. It
+// fails the test on a message carrying more than one, because a digest with
+// two people in its To header is the thing every test here is guarding.
+func (f *fakeSender) recipients(t *testing.T) []string {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.sent))
+	for _, m := range f.sent {
+		if len(m.To) != 1 {
+			t.Errorf("a digest went out to %v, want one recipient per message", m.To)
+			continue
+		}
+		out = append(out, m.To[0])
+	}
+	return out
+}
+
+// refusingSender is a relay that refuses one mailbox and takes every other,
+// which is what a deleted or mistyped address looks like from here: a 550 at
+// RCPT, before the body is ever offered. It refuses any message that names
+// that address, however many other people share the envelope, which is what
+// makes one bad address everybody's problem when there is one message for all
+// of them.
+type refusingSender struct {
+	fakeSender
+	refuse string
+}
+
+func (r *refusingSender) Send(ctx context.Context, m mailer.Message) error {
+	for _, addr := range m.To {
+		if strings.Contains(addr, r.refuse) {
+			return &mailer.SendError{Err: errors.New("RCPT TO: 550 5.1.1 mailbox does not exist")}
+		}
+	}
+	return r.fakeSender.Send(ctx, m)
+}
+
 // fixture is one migrated database with a plan in it.
 type fixture struct {
 	pool  *pgxpool.Pool
@@ -173,13 +211,15 @@ func TestRunOnceSendsTheDigest(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	if sender.count() != 1 {
-		t.Fatalf("sent %d mails, want 1", sender.count())
+	// One message each: nobody is shown who else reads the event's finances.
+	if sender.count() != 2 {
+		t.Fatalf("sent %d mails to two recipients, want one each", sender.count())
+	}
+	got := sender.recipients(t)
+	if !contains(got, "ada@example.test") || !contains(got, "grace@example.test") {
+		t.Errorf("recipients = %v, want both, each in a message of their own", got)
 	}
 	msg := sender.last(t)
-	if len(msg.To) != 2 {
-		t.Errorf("recipients = %v, want both", msg.To)
-	}
 	if msg.Text == "" || msg.HTML == "" {
 		t.Error("a digest went out without both a text and an HTML part")
 	}
@@ -202,6 +242,75 @@ func TestRunOnceSendsTheDigest(t *testing.T) {
 	}
 }
 
+// One address the relay refuses must not cost everybody else their digest.
+// With one envelope for all of them, a 550 at RCPT ends the transaction before
+// the body is offered and the period reaches nobody.
+func TestARefusedRecipientDoesNotStopTheOthers(t *testing.T) {
+	f := newFixture(t)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
+
+	relay := &refusingSender{refuse: "ada@example.test"}
+	if err := f.service(t, relay).RunOnce(t.Context()); err == nil {
+		t.Fatal("a recipient the relay refused was not reported")
+	}
+
+	if got := relay.recipients(t); len(got) != 1 || !strings.Contains(got[0], "grace@example.test") {
+		t.Fatalf("delivered to %v, want grace alone: the refused address took the other copy with it", got)
+	}
+
+	led := f.ledger(t)
+	if len(led) != 1 || !led[0].Sent {
+		t.Fatalf("ledger = %+v, want the period claimed and confirmed: a copy did go out", led)
+	}
+
+	// The period is done, refused copy and all. A later run that sent it again
+	// in the hope the address had been fixed would be the second digest this
+	// whole file exists to prevent.
+	retry := &fakeSender{}
+	f.now = f.now.Add(3 * time.Hour)
+	if err := f.service(t, retry).RunOnce(t.Context()); err != nil {
+		t.Fatalf("later run: %v", err)
+	}
+	if retry.count() != 0 {
+		t.Errorf("a period that reached somebody was sent again %d times", retry.count())
+	}
+}
+
+// An admin who is also named in SOIREE_REMINDER_TO is one person. The two
+// sources spell the same mailbox differently, the users table holding it bare
+// and ParseRecipients having rendered it through mail.Address, and now that
+// everyone gets a copy of their own a match that fails is a second mail rather
+// than a repeated address in one header.
+func TestAnAdminNamedInTheConfiguredListGetsOneCopy(t *testing.T) {
+	f := newFixture(t)
+	f.seedDeadline(t, "Venue deposit", "Grand Hall", "2030-01-19", 250000, 0, 1)
+	f.seedAdmin(t, "ada@example.test")
+
+	// Built the way LoadConfig builds it, because a hand-written slice of bare
+	// addresses is exactly the spelling that hides this.
+	to, err := ParseRecipients("ada@example.test, Grace Hopper <grace@example.test>")
+	if err != nil {
+		t.Fatalf("parse recipients: %v", err)
+	}
+	f.cfg.To = to
+
+	sender := &fakeSender{}
+	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	got := sender.recipients(t)
+	if len(got) != 2 {
+		t.Fatalf("sent to %v, want one copy each for two people", got)
+	}
+	if !strings.Contains(got[0], "ada@example.test") || !strings.Contains(got[1], "grace@example.test") {
+		t.Errorf("sent to %v, want ada once and grace once", got)
+	}
+	if led := f.ledger(t); len(led) != 1 || led[0].People != 2 {
+		t.Errorf("ledger = %+v, want 2 recipients recorded", led)
+	}
+}
+
 // The thing this whole feature turns on: a restart, a redeploy or a second
 // replica must not say it again.
 func TestDigestIsNotResentAcrossARestart(t *testing.T) {
@@ -212,8 +321,8 @@ func TestDigestIsNotResentAcrossARestart(t *testing.T) {
 	if err := f.service(t, first).RunOnce(t.Context()); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if first.count() != 1 {
-		t.Fatalf("first run sent %d mails, want 1", first.count())
+	if first.count() != 2 {
+		t.Fatalf("first run sent %d mails, want one per recipient", first.count())
 	}
 
 	// A new process, a new scheduler, the same database and the same week.
@@ -256,8 +365,8 @@ func TestTheNextPeriodSendsAgain(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 
-	if sender.count() != 2 {
-		t.Errorf("sent %d digests over two periods, want 2", sender.count())
+	if sender.count() != 4 {
+		t.Errorf("sent %d mails over two periods, want a digest each period for each of the two", sender.count())
 	}
 	if led := f.ledger(t); len(led) != 2 {
 		t.Errorf("ledger has %d rows, want 2", len(led))
@@ -278,16 +387,16 @@ func TestABoundaryStraddleDoesNotSendTwice(t *testing.T) {
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if sender.count() != 1 {
-		t.Fatalf("first run sent %d mails, want 1", sender.count())
+	if sender.count() != 2 {
+		t.Fatalf("first run sent %d mails, want one per recipient", sender.count())
 	}
 
 	f.now = f.now.Add(4 * time.Minute) // over the boundary, into the next week
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
-	if sender.count() != 1 {
-		t.Errorf("crossing a period boundary four minutes later sent %d digests", sender.count())
+	if sender.count() != 2 {
+		t.Errorf("crossing a period boundary four minutes later sent %d mails, want the first digest's two", sender.count())
 	}
 
 	// And the week after is a genuinely new digest, so the floor has not
@@ -296,8 +405,8 @@ func TestABoundaryStraddleDoesNotSendTwice(t *testing.T) {
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
 		t.Fatalf("third run: %v", err)
 	}
-	if sender.count() != 2 {
-		t.Errorf("sent %d digests over two weeks, want 2", sender.count())
+	if sender.count() != 4 {
+		t.Errorf("sent %d mails over two weeks, want a digest each week for each of the two", sender.count())
 	}
 }
 
@@ -327,8 +436,8 @@ func TestNothingDueSendsNothingAtAll(t *testing.T) {
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
-	if sender.count() != 1 {
-		t.Fatalf("sent %d mails after something became due, want 1", sender.count())
+	if sender.count() != 2 {
+		t.Fatalf("sent %d mails after something became due, want one per recipient", sender.count())
 	}
 }
 
@@ -367,8 +476,8 @@ func TestLeaderGuardStopsASecondReplica(t *testing.T) {
 	if err := f.service(t, sender).RunOnce(t.Context()); err != nil {
 		t.Fatalf("run after release: %v", err)
 	}
-	if sender.count() != 1 {
-		t.Errorf("sent %d digests after the lock came free, want 1", sender.count())
+	if sender.count() != 2 {
+		t.Errorf("sent %d mails after the lock came free, want one per recipient", sender.count())
 	}
 }
 
@@ -414,8 +523,8 @@ func TestARefusedSendReleasesThePeriod(t *testing.T) {
 	if err := f.service(t, working).RunOnce(t.Context()); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if working.count() != 1 {
-		t.Errorf("the retry sent %d digests, want 1", working.count())
+	if working.count() != 2 {
+		t.Errorf("the retry sent %d mails, want one per recipient", working.count())
 	}
 }
 
@@ -436,8 +545,8 @@ func TestADigestSentAsTheContextDiesIsStillMarkedSent(t *testing.T) {
 	if err := f.service(t, sender).RunOnce(ctx); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if sender.count() != 1 {
-		t.Fatalf("sent %d mails, want 1", sender.count())
+	if sender.count() != 2 {
+		t.Fatalf("sent %d mails, want one per recipient", sender.count())
 	}
 
 	led := f.ledger(t)
@@ -493,7 +602,7 @@ func TestStartRunsImmediatelyAndStops(t *testing.T) {
 	}
 	stop()
 
-	if sender.count() != 1 {
-		t.Errorf("the scheduler sent %d digests on start, want 1", sender.count())
+	if sender.count() != 2 {
+		t.Errorf("the scheduler sent %d mails on start, want one per recipient", sender.count())
 	}
 }
