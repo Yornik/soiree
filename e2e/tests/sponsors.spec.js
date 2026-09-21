@@ -10,7 +10,10 @@
  * total. Money attributed to nobody still has to appear somewhere.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, addSponsor, expectFigures, gotoTab, money, openPlanner, readSplit, tagLine } = require('./helpers');
+const {
+  addBudgetLine, addSponsor, expectFigures, gotoTab, money, openPlanner, readSplit,
+  readSponsorGrid, tagLine,
+} = require('./helpers');
 
 // Round numbers, so a wrong split is obvious rather than arguable:
 //   Venue 2000 -> Rose
@@ -105,6 +108,89 @@ test('split evenly divides shared lines between their sponsors', async ({ page }
   const back = await readSplit(page);
   expect(back.map((r) => r.label)).toEqual(['Rose', 'Rose + Ivy (shared)', 'Unassigned']);
   expect(back.reduce((sum, r) => sum + r.amount, 0)).toBe(5000);
+});
+
+/*
+ * The fixture above is deliberately round, so it cannot see the case where
+ * the arithmetic and the display disagree. These two can: a share of a third,
+ * and a pair of lines with cents on them.
+ */
+test('a line split three ways still adds up to the line', async ({ page }) => {
+  await openPlanner(page);
+  await gotoTab(page, 'budget');
+  await addSponsor(page, { code: 'Rose', name: 'Ada' });
+  await addSponsor(page, { code: 'Ivy', name: 'Grace' });
+  await addSponsor(page, { code: 'Fern', name: 'Marie' });
+
+  const cake = await addBudgetLine(page, { item: 'Cake', unit: 100, qty: 1, paid: 0 });
+  await tagLine(cake, ['Rose', 'Ivy', 'Fern']);
+  await page.locator('#splitEvenly').check();
+
+  // Rounding each row on its own gives 33 + 33 + 33 under a header of 100,
+  // and 33% + 33% + 33% of it.
+  const split = await readSplit(page);
+  expect(split.reduce((sum, r) => sum + r.amount, 0)).toBe(100);
+  expect(split.reduce((sum, r) => sum + parseInt(r.pct, 10), 0)).toBe(100);
+
+  // The figures beside the names add up to the same total. Three equal thirds
+  // cannot tell the two lists apart, because every allocation order gives the
+  // same answer; the case further down is the one that can.
+  const amounts = await page.locator('#sponsorGrid .sponsor-row .sp-amt').allTextContents();
+  expect(amounts.map(money).reduce((a, b) => a + b, 0)).toBe(100);
+});
+
+test('two lines with cents on them do not round up into more than the total', async ({ page }) => {
+  await openPlanner(page);
+  await gotoTab(page, 'budget');
+  await addSponsor(page, { code: 'Rose', name: 'Ada' });
+  await addSponsor(page, { code: 'Ivy', name: 'Grace' });
+
+  // Nothing is shared here. Two halves rounded up separately are a whole unit
+  // more than the total they came from.
+  const flowers = await addBudgetLine(page, { item: 'Flowers', unit: 10.5, qty: 1, paid: 0 });
+  const candles = await addBudgetLine(page, { item: 'Candles', unit: 10.5, qty: 1, paid: 0 });
+  await tagLine(flowers, ['Rose']);
+  await tagLine(candles, ['Ivy']);
+
+  const committed = money(await page.locator('#sumTotal').textContent());
+  expect(committed).toBe(21);
+  expect((await readSplit(page)).reduce((sum, r) => sum + r.amount, 0)).toBe(committed);
+});
+
+/*
+ * The same name in the two lists this page draws from one set of lines.
+ *
+ * A leftover unit goes to a row by its position in the list being allocated,
+ * so a list that sorts its rows and hands the sorted array to the allocation
+ * gives that unit to somebody else than the grid does. Halves are what make it
+ * visible: 10.50 and 20.50 under a total of 31 leave exactly one unit to hand
+ * out, and the grid keeps the order the names were added while the breakdown
+ * puts the larger share first.
+ */
+test('a name is the same money beside itself and in the split list', async ({ page }) => {
+  await openPlanner(page);
+  await gotoTab(page, 'budget');
+  await addSponsor(page, { code: 'Rose', name: 'Ada' });
+  await addSponsor(page, { code: 'Ivy', name: 'Grace' });
+
+  const flowers = await addBudgetLine(page, { item: 'Flowers', unit: 10.5, qty: 1, paid: 0 });
+  const candles = await addBudgetLine(page, { item: 'Candles', unit: 20.5, qty: 1, paid: 0 });
+  await tagLine(flowers, ['Rose']);
+  await tagLine(candles, ['Ivy']);
+  await page.locator('#splitEvenly').check();
+
+  const grid = await readSponsorGrid(page);
+  expect(grid).toEqual([
+    { code: 'Rose', amount: 11 },
+    { code: 'Ivy', amount: 20 },
+  ]);
+
+  const split = await readSplit(page);
+  expect(split.reduce((sum, r) => sum + r.amount, 0)).toBe(31);
+  for (const row of grid) {
+    const mine = split.find((r) => r.label.startsWith(row.code));
+    expect(mine && mine.amount).toBe(row.amount);
+  }
 });
 
 test("each sponsor's own total always splits shared lines, whatever the toggle says", async ({ page }) => {

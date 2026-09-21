@@ -564,6 +564,10 @@ body.is-empty .when-data { display: none; }
 }
 .fig-sub { font-size: 12px; color: var(--ink-2); margin-top: 5px; }
 .fig-sub:empty { display: none; }
+/* Money handed over above what a line committed. Not rust, which means
+   outstanding, and not the colour of money well spent either: it is a figure
+   that wants correcting. */
+.fig-sub.over { color: var(--alarm); }
 .reckoning.compact { margin-bottom: 4px; }
 .reckoning.compact .fig-num { font-size: 21px; }
 
@@ -684,6 +688,18 @@ body.is-empty .when-data { display: none; }
   font-variant-numeric: tabular-nums;
 }
 .split-list .amt { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+/* What was paid and what is still open, under the name rather than beside it:
+   three figures and a percentage across one line is a row that cannot be read
+   on a phone. */
+.split-list .settle-sub {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
 .split-list .pct {
   font-variant-numeric: tabular-nums;
   color: var(--ink-2);
@@ -825,6 +841,7 @@ td.calc {
 }
 td.calc.strong { color: var(--ink); font-weight: 600; }
 td.calc.owing { color: var(--owed); }
+td.calc.over { color: var(--alarm); }
 table.budget tbody tr.settled td.calc:nth-child(6) { color: var(--paid); font-weight: 600; }
 td.calc.paid { color: var(--paid); }
 td.num-cell input { text-align: right; }
@@ -1130,6 +1147,26 @@ table.budget td.item-cell.has-files .det-btn { right: 34px; }
   border-top: 1px solid var(--rule);
 }
 .data-msg { font-size: 13px; color: var(--ink-2); }
+/* A condition that is still true - writes not reaching the server, a row the
+   server refused, a session that has ended - leaves the footer and is put
+   where the reader is. At the top rather than the bottom, because a strip
+   along the bottom of a phone is behind the on-screen keyboard exactly when
+   there is something to read. News that stops being true on its own stays
+   quiet down here. */
+.data-msg.problem {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  padding: 10px 16px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--alarm);
+  background: var(--raise);
+  border-bottom: 2px solid var(--alarm);
+}
 
 /* --- After the event ---
    The day after, the page stops being a plan. The countdown has nothing left
@@ -1698,6 +1735,10 @@ body.showing-auth #plannerWrap { display: none; }
    today, and the interface saying so is the honest version of this. */
 body.role-viewer #plannerWrap .add-row-btn,
 body.role-viewer #plannerWrap .del-btn,
+/* The archive unlock among them: it unlocks nothing for a viewer, whose
+   fields are locked again a moment later, and it takes away the reckoning
+   they came to read, which is drawn only while the planner is closed. */
+body.role-viewer #plannerWrap #reopenPlanner,
 body.role-viewer #plannerWrap .size-tools,
 body.role-viewer #plannerWrap .col-grip,
 body.role-viewer #plannerWrap .row-grip,

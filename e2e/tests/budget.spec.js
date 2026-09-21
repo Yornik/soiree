@@ -318,6 +318,46 @@ test.describe('on a touchscreen at desk width', () => {
   });
 });
 
+test('a line paid above its own total does not cancel out one nobody has paid', async ({ page }) => {
+  // How this arrives: the final invoice came in above the quote and somebody
+  // raised Paid without touching Unit. Subtracting one sum from the other
+  // nets the 500 too much on the venue against the 500 nobody has paid the
+  // band, and the headline the couple checks reads that as nothing left.
+  const over = await addBudgetLine(page, { item: 'Venue', unit: 1000, qty: 1, paid: 1500 });
+  const unpaid = await addBudgetLine(page, { item: 'Band', unit: 500, qty: 1, paid: 0 });
+
+  await expectFigures(page, { committed: 1500, paid: 1500, outstanding: 500, forecast: 1500 });
+
+  // The row says which way it is out rather than printing a negative amount
+  // owed, and rust stays on the line that is actually owed.
+  await expect(over.outstanding).toHaveText('€500 overpaid');
+  await expect(over.outstanding).not.toHaveClass(/owing/);
+  await expect(unpaid.outstanding).toHaveText('€500');
+  await expect(unpaid.outstanding).toHaveClass(/owing/);
+
+  await gotoTab(page, 'overview');
+
+  // Committed − Paid = Outstanding − Overpaid. The four figures only
+  // reconcile while the overpayment is on the page as well.
+  await expect(page.locator('#mOverpaid')).toBeVisible();
+  expect(money(await page.locator('#mOverpaid').textContent())).toBe(500);
+
+  // A third of what was committed has nothing against it, so neither gauge
+  // may read full. Both used to, because 1,500 paid covers 1,500 committed.
+  await expect(page.locator('#paidBarPct')).toHaveText('67%');
+  await expect(page.locator('#mPaidSub')).toHaveText('67% of committed');
+  await expect(page.locator('#paidBarFill')).toHaveAttribute('style', /width:\s*67%/);
+  await expect(page.locator('#moneyBarOwed')).not.toHaveAttribute('style', /width:\s*0\.00%/);
+});
+
+test('with every line paid to its total there is nothing overpaid to report', async ({ page }) => {
+  await addBudgetLine(page, { item: 'Venue', unit: 1000, qty: 1, paid: 1000 });
+
+  await gotoTab(page, 'overview');
+  await expect(page.locator('#mOverpaid')).toBeHidden();
+  await expect(page.locator('#paidBarPct')).toHaveText('100%');
+});
+
 test('a figure with cents is a valid figure, not one the browser calls invalid', async ({ page }) => {
   // The same 45.33 the line above reckons with. The field used to declare a
   // step of one whole unit, which makes every price with cents a step

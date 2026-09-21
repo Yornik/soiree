@@ -356,13 +356,19 @@ Five consequences worth stating, because each is easy to undo:
 - **A `4xx` that is not a `409` parks the row** rather than retrying it. The
   server understood and said no; an identical body would only earn an identical
   refusal. The edit is not lost — it is in `state`, on the screen and in
-  `localStorage` — and the person is told it has not left the browser. A `404`
-  is the exception, because it is not about the edit at all: somebody else
-  removed the line, and the re-read that the same removal announces takes the
-  row off this screen too. There is nowhere left to keep the work, because the
-  row has no server side to write it to and posting it back would undo a
-  removal somebody meant, so the person is told the changes went with the line
-  rather than promised a copy the next read will drop.
+  `localStorage` — and the person is told it has not left the browser, for as
+  long as it has not: a parked row is a condition rather than news, so it holds
+  the status line the way "the server is away" does instead of passing in a
+  six-second flash. Which is why what is parked is read back out of the
+  differences the page is holding rather than out of the list of refusals: the
+  person changes the row, the write is no longer the one that was refused, it
+  goes and is taken, and the line has to have nothing left to say. A `404` is
+  the exception, because it is not about the edit at all: somebody else removed
+  the line, and the re-read that the same removal announces takes the row off
+  this screen too. There is nowhere left to keep the work, because the row has
+  no server side to write it to and posting it back would undo a removal
+  somebody meant, so the person is told the changes went with the line rather
+  than promised a copy the next read will drop.
 - **Ids are reconciled, not assumed.** The page mints an optimistic id the
   moment a row appears, because the row has to be addressable before any round
   trip could have answered. The `POST` also carries a uuid the page chose for
@@ -413,12 +419,31 @@ them.
 ```
 
 `status` is one of `not-started` | `in-progress` | `done`. Line total is
-`unit * qty`; outstanding is `total - paid`. A budget line with more than one
+`unit * qty`; outstanding is `total - paid` **per line, floored at zero**, and
+anything paid above a line's total is reported separately as overpaid rather
+than netted against a line nobody has paid. A budget line with more than one
 entry in `sponsors` is a shared cost, and `splitEvenly` decides whether the
-breakdown divides it between them or reports it as a shared bucket.
+breakdown divides it between them or reports it as a shared bucket. A share of
+a shared line is allocated in whole minor units, with the remainder going to
+the first names on the line, and the whole-unit figures a list shows are
+allocated against the total above it, so the rows add up to it and the
+percentages to 100. The allocation runs in one fixed order, the sponsors as
+they are listed and then whatever is unassigned, and a list sorts for display
+only once its figures are decided: a leftover unit goes to a row by its
+position, so a list that sorted first would give it to a different name than
+the figure beside that name in the sponsor grid. In the final reckoning the
+paid column is allocated against its own total and then held to the share it
+stands against, so it can add to a whole unit less than the Paid headline.
+That is the lesser of the two, because the alternative reads as a person
+owing less than nothing.
+
 `colWidths`, `rowHeights` and `reopened` have no column behind them and survive
-an adopted plan untouched — one person dragging a column must not resize it for
-everybody.
+an adopted plan untouched. For the first two that is a decision: one person
+dragging a column must not resize it for everybody. `reopened` is there for a
+smaller reason, which is that there is nowhere else to put it. Lifting the
+archive lock is therefore a per-browser guard against editing the record by
+accident, not a decision the event carries, and the banner says as much in all
+three languages.
 
 `vendor` and `lockBy` are fields of the line with no column of their own: the
 nine widths above are measured against the width of the page, so two more can

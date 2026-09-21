@@ -166,6 +166,8 @@
       'f.buffer': 'With buffer',
       'f.paid': 'Paid',
       'f.outstanding': 'Outstanding',
+      'f.overpaid': '{a} overpaid',
+      'f.overpaidsub': '{a} paid above what those lines committed',
       'f.headroom': 'Headroom',
       'aria.money': 'Money at a glance',
       'aria.totals': 'Budget totals',
@@ -292,10 +294,12 @@
       'd.nostorage': 'This browser is not keeping your changes. Export the planner before you close this tab.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
       'ar.reopen': 'Reopen for editing',
-      'ar.open': 'Reopened for editing. Close it again once everything is settled.',
-      'ar.close': 'Close the planner',
+      'ar.open': 'Reopened for editing in this browser. Close it again once everything is settled.',
+      'ar.close': 'Close it again here',
       'ar.settle': 'The final reckoning',
-      'ar.settlenote': 'what each person covered',
+      'ar.settlenote': 'what each person took on, shared lines split evenly',
+      'ar.paidsofar': 'paid {a}',
+      'ar.stillopen': 'still open {a}',
       'ar.nothing': 'Nothing was recorded.',
       'th.title': 'Theme',
       'th.system': 'System',
@@ -332,6 +336,8 @@
       'f.buffer': 'Met buffer',
       'f.paid': 'Betaald',
       'f.outstanding': 'Openstaand',
+      'f.overpaid': '{a} te veel betaald',
+      'f.overpaidsub': '{a} meer betaald dan die regels vastlegden',
       'f.headroom': 'Ruimte over',
       'aria.money': 'Het geld in één oogopslag',
       'aria.totals': 'Budgettotalen',
@@ -458,10 +464,12 @@
       'd.nostorage': 'Deze browser bewaart je wijzigingen niet. Exporteer de planner voordat je dit tabblad sluit.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
       'ar.reopen': 'Heropenen om te bewerken',
-      'ar.open': 'Weer opengesteld. Sluit de planner zodra alles is afgerekend.',
-      'ar.close': 'Planner sluiten',
+      'ar.open': 'Weer opengesteld in deze browser. Sluit hem weer zodra alles is afgerekend.',
+      'ar.close': 'Hier weer sluiten',
       'ar.settle': 'De eindafrekening',
-      'ar.settlenote': 'wat ieder heeft betaald',
+      'ar.settlenote': 'wat ieder op zich nam, gedeelde regels gelijk verdeeld',
+      'ar.paidsofar': 'betaald {a}',
+      'ar.stillopen': 'nog open {a}',
       'ar.nothing': 'Er is niets vastgelegd.',
       'th.title': 'Thema',
       'th.system': 'Systeem',
@@ -498,6 +506,8 @@
       'f.buffer': 'Dengan cadangan',
       'f.paid': 'Dibayar',
       'f.outstanding': 'Sisa bayar',
+      'f.overpaid': '{a} lebih bayar',
+      'f.overpaidsub': '{a} dibayar melebihi yang ditetapkan baris itu',
       'f.headroom': 'Sisa anggaran',
       'aria.money': 'Ringkasan uang',
       'aria.totals': 'Total anggaran',
@@ -623,10 +633,12 @@
       'd.nostorage': 'Browser ini tidak menyimpan perubahanmu. Ekspor perencana sebelum kamu menutup tab ini.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
       'ar.reopen': 'Buka lagi untuk diubah',
-      'ar.open': 'Dibuka lagi untuk diubah. Tutup lagi setelah semuanya beres.',
-      'ar.close': 'Tutup perencana',
+      'ar.open': 'Dibuka lagi untuk diubah di browser ini. Tutup lagi setelah semuanya beres.',
+      'ar.close': 'Tutup lagi di sini',
       'ar.settle': 'Perhitungan akhir',
-      'ar.settlenote': 'berapa yang ditanggung tiap orang',
+      'ar.settlenote': 'berapa yang ditanggung tiap orang, biaya patungan dibagi rata',
+      'ar.paidsofar': 'dibayar {a}',
+      'ar.stillopen': 'masih terbuka {a}',
       'ar.nothing': 'Tidak ada yang tercatat.',
       'th.title': 'Tema',
       'th.system': 'Sistem',
@@ -752,9 +764,12 @@
       inflationPct: 0,
       fxRate: 0,
       splitEvenly: false,
-      // Set once, by hand, from the archive banner. Kept in the planner rather
-      // than in a per-browser preference because reopening a settled event is
-      // a decision about the event, not about the device looking at it.
+      // Set once, by hand, from the archive banner. It has no column behind
+      // it, so in database mode it is a fact about this browser and not about
+      // the event: the lock is a guard against editing the record by
+      // accident, and lifting it here lifts it here alone. The banner says as
+      // much, because a button labelled as though it closed the ledger for
+      // everybody would be the interface promising what the data does not do.
       reopened: false,
       colWidths: DEFAULT_COL_WIDTHS.slice(),
       rowHeights: {},
@@ -1164,6 +1179,10 @@
   // and sendCreate needs both to tell it from somebody else's write.
   var createBodies = {};
   var blocked = {};        // writes the server refused, parked until they change
+  // Which refusal the parked writes are under, for the notice that stands
+  // while any of them do. The last one wins: the message is about a browser
+  // holding work the server will not take, not about one particular row.
+  var parkedNote = 'd.refused';
 
   // Backoff for a write that got no answer. Doubling from a second, capped,
   // because the common cause is a tunnel or a train and neither is helped by
@@ -1360,10 +1379,6 @@
   var BY_ENTITY = { settings: SETTINGS };
   COLLECTIONS.forEach(function (c) { BY_ENTITY[c.entity] = c; });
 
-  // State key -> the same descriptor, for reading an op key back apart.
-  var BY_KEY = { settings: SETTINGS };
-  COLLECTIONS.forEach(function (c) { BY_KEY[c.key] = c; });
-
   function fieldNamed(coll, name) {
     for (var i = 0; i < coll.fields.length; i++) {
       if (coll.fields[i].name === name) return coll.fields[i];
@@ -1532,7 +1547,11 @@
     return op.coll.fields.map(function (f) { return String(f.canon(row)); }).join('');
   }
 
-  function planOps() {
+  // Every difference between the page and the shadow, parked or not. Split
+  // out from planOps because the two answers below are the same list read
+  // under opposite tests, and a park that is not one of these differences is
+  // a write nothing can make again.
+  function pendingOps() {
     var creates = [], updates = [], deletes = [];
 
     COLLECTIONS.forEach(function (c) {
@@ -1562,7 +1581,11 @@
       updates.push({ kind: 'update', coll: SETTINGS, id: null, fields: settings });
     }
 
-    return creates.concat(updates).concat(deletes).filter(function (op) {
+    return creates.concat(updates).concat(deletes);
+  }
+
+  function planOps() {
+    return pendingOps().filter(function (op) {
       return blocked[opKey(op)] !== opSignature(op);
     });
   }
@@ -1825,7 +1848,8 @@
       // server side. So the flash says the changes went with the line rather
       // than promising a copy the next read will drop.
       blocked[opKey(op)] = opSignature(op);
-      flash(t(res.status === 404 ? 'd.gone' : 'd.refused'));
+      parkedNote = res.status === 404 ? 'd.gone' : 'd.refused';
+      flash(t(parkedNote), true);
       return true;
     }
     return false;
@@ -1997,7 +2021,12 @@
     if (outcome === 'done') {
       if (Sync.failures >= FAILURES_BEFORE_NOTICE) flash(t('d.online'));
       Sync.failures = 0;
-      setSticky('');
+      // Everything that could be sent has been. A parked write is the one
+      // thing that survives that: it is still on this screen and nowhere
+      // else, and it will be until somebody changes the row. So it holds the
+      // status line rather than being told once, in six seconds of small
+      // grey text, and forgotten.
+      setSticky(parkedKeys().length ? t(parkedNote) : '');
       if (Sync.queued) Sync.run();
       return;
     }
@@ -2240,20 +2269,31 @@
    */
   var forgotten = false;
 
+  /* The writes the server refused and this browser has parked.
+   *
+   * Read from the same differences planOps filters, under exactly the test
+   * planOps filters them by, because a key in `blocked` on its own says
+   * nothing: the person does what the notice asks, the row changes, and the
+   * write goes and is taken while the key it was parked under stays where it
+   * is. What is parked is a write this page would still make and the server
+   * has already refused in that form. A row edited since is not one, and
+   * planOps counts it instead; a row gone from both the page and the shadow
+   * produces no write at all, so nothing could ever clear its key and
+   * counting it would speak of a change that exists nowhere.
+   */
+  function parkedKeys() {
+    if (!apiMode || !shadow) return [];
+    return pendingOps().filter(function (op) {
+      return blocked[opKey(op)] === opSignature(op);
+    }).map(opKey);
+  }
+
   function unsentCount() {
     if (!apiMode || !shadow) return 0;
     // Waiting to be sent, plus refused by the server and parked: both are
-    // edits that exist in this browser and nowhere else. A park whose row is
-    // in neither the page nor the shadow is neither of those: nothing can
-    // produce that op again, so nothing will ever clear the key, and counting
-    // it asks the person about a change that exists nowhere at all.
-    var parked = Object.keys(blocked).filter(function (key) {
-      var c = BY_KEY[key.slice(0, key.indexOf(':'))];
-      if (!c || c.singleton) return true;
-      var id = key.slice(key.indexOf(':') + 1, key.lastIndexOf(':'));
-      return !!findRow(state[c.key], id) || !!shadow[c.key][id];
-    });
-    return planOps().length + parked.length;
+    // edits that exist in this browser and nowhere else, and the two are the
+    // halves this one list splits into.
+    return pendingOps().length;
   }
 
   function beforeSignOut() {
@@ -2498,7 +2538,9 @@
       var next = stateFromPlan(plan);
       // Per-browser preferences and the one flag with no column behind it.
       // Column widths are a view of the table, not a fact about the event: one
-      // person dragging a column must not resize it for everybody.
+      // person dragging a column must not resize it for everybody. The archive
+      // unlock is carried over for a different reason - there is nowhere to
+      // put it but this browser - and the banner is worded accordingly.
       next.colWidths = state.colWidths;
       next.rowHeights = state.rowHeights;
       next.reopened = state.reopened;
@@ -2961,17 +3003,85 @@
   function lineTotalMinor(i) {
     return Math.round(toMinor(i.unit) * (Number(i.qty) || 0));
   }
-  function lineTotal(i) { return toMajor(lineTotalMinor(i)); }
+
+  // One line's share of the whole, for the person at `at` in its list of `n`
+  // payers. Divided in whole minor units with the remainder handed out from
+  // the first name on the line, so that n shares add back to the line rather
+  // than to a unit less than it.
+  function lineShareMinor(totalMinor, n, at) {
+    if (n <= 1) return totalMinor;
+    var each = Math.trunc(totalMinor / n);
+    var rest = totalMinor - each * n;
+    return each + (at < Math.abs(rest) ? (rest < 0 ? -1 : 1) : 0);
+  }
+
+  /* Whole units that still add up.
+   *
+   * Every figure on this page is shown without decimals, and a list of them
+   * rounded one row at a time need not add up to the total printed above it:
+   * 100 between three people is 33 + 33 + 33. So the rows are allocated
+   * rather than rounded. Each gets the whole units it certainly has, and the
+   * few left over go to the rows with most of a unit going spare, from the
+   * top of the list down. The same for the percentages, against 100.
+   *
+   * Takes exact minor amounts and the total they came from; answers one
+   * { amount, pct } per row, in the order given.
+   */
+  function allocateRows(amountsMinor, grandMinor) {
+    var target = Math.round(toMajor(grandMinor));
+    var rows = amountsMinor.map(function (minor, at) {
+      var exact = toMajor(minor);
+      var whole = Math.floor(exact);
+      return { at: at, amount: whole, fraction: exact - whole, pct: 0, pctFraction: 0 };
+    });
+    if (grandMinor) {
+      rows.forEach(function (r, at) {
+        var exact = (amountsMinor[at] / grandMinor) * 100;
+        r.pct = Math.floor(exact);
+        r.pctFraction = exact - r.pct;
+      });
+    }
+    handOutUnits(rows, 'amount', 'fraction', target);
+    handOutUnits(rows, 'pct', 'pctFraction', grandMinor ? 100 : 0);
+    return rows.map(function (r) { return { amount: r.amount, pct: r.pct }; });
+  }
+
+  // The leftover units, one at a time, biggest fraction first. Ties keep the
+  // order the rows came in, so the same plan always allocates the same way.
+  function handOutUnits(rows, key, fraction, target) {
+    var short = target - rows.reduce(function (sum, r) { return sum + r[key]; }, 0);
+    if (short <= 0 || !rows.length) return;
+    rows.slice().sort(function (a, b) {
+      return b[fraction] - a[fraction] || a.at - b.at;
+    }).slice(0, short).forEach(function (r) { r[key] += 1; });
+  }
 
   function totals() {
-    var t = 0, p = 0;
+    var t = 0, p = 0, owed = 0, over = 0;
     state.budgetItems.forEach(function (i) {
-      t += lineTotalMinor(i);
-      p += toMinor(i.paid);
+      var line = lineTotalMinor(i);
+      var paid = toMinor(i.paid);
+      t += line;
+      p += paid;
+      // Reckoned per line rather than as one sum minus the other. A final
+      // invoice above its quote, with Paid raised and Unit left alone, is an
+      // ordinary afternoon in an event budget - and netting that line's
+      // surplus against the line nobody has paid yet made Outstanding read
+      // zero while a vendor was still owed.
+      owed += Math.max(0, line - paid);
+      over += Math.max(0, paid - line);
     });
     var buffer = Math.round(t * (1 + (Number(state.inflationPct) || 0) / 100));
     return {
-      total: toMajor(t), paid: toMajor(p), owing: toMajor(t - p),
+      total: toMajor(t), paid: toMajor(p), owing: toMajor(owed),
+      // `paid` stays the sum of what was typed, so the Paid figure is the one
+      // in the column. `settled` is the part of it that stands against
+      // something committed, and the gauges are drawn from that: a bar full
+      // to the end while a line has nothing against it is the same lie in a
+      // different shape. The four figures then read
+      // committed - paid = outstanding - overpaid, which is why the
+      // overpayment has to be on the page whenever it is not zero.
+      overpaid: toMajor(over), settled: toMajor(p - over),
       forecast: toMajor(buffer), ceiling: Number(state.ceiling) || 0,
       // The same figure in minor units, for the callers that go on to divide
       // it between people and would otherwise start their arithmetic from a
@@ -3627,9 +3737,17 @@
     setText('mForecast', fmtCur(Math.round(m.forecast)));
     setText('mForecastSub', t('pr.quoted', { a: Number(state.inflationPct) || 0 }));
     setText('mPaid', fmtCur(m.paid));
-    setText('mPaidSub', m.total ? t('pr.ofcommitted', { a: Math.round((m.paid / m.total) * 100) }) : '');
+    setText('mPaidSub', m.total ? t('pr.ofcommitted', { a: Math.round((m.settled / m.total) * 100) }) : '');
     setText('mOutstanding', fmtCur(m.owing));
     setText('mOutstandingEur', fmtSecondary(m.owing));
+    // Only when there is one. It is the difference between the four figures
+    // and the arithmetic somebody expects of them, so it is said where that
+    // arithmetic stops working and nowhere else.
+    var overEl = document.getElementById('mOverpaid');
+    if (overEl) {
+      overEl.hidden = !(m.overpaid > 0);
+      setText('mOverpaid', m.overpaid > 0 ? t('f.overpaidsub', { a: fmtCur(m.overpaid) }) : '');
+    }
 
     var budgetStatEl = document.getElementById('statBudget');
     var budgetFillEl = document.getElementById('budgetBarFill');
@@ -3656,16 +3774,16 @@
     // plan under its ceiling shows the room it has left and one over it shows
     // the ceiling as a mark it has passed.
     var barMax = Math.max(m.total, m.ceiling, 1);
-    document.getElementById('moneyBarPaid').style.width = ((Math.min(m.paid, m.total) / barMax) * 100).toFixed(2) + '%';
-    document.getElementById('moneyBarOwed').style.width = ((Math.max(m.total - m.paid, 0) / barMax) * 100).toFixed(2) + '%';
+    document.getElementById('moneyBarPaid').style.width = ((m.settled / barMax) * 100).toFixed(2) + '%';
+    document.getElementById('moneyBarOwed').style.width = ((m.owing / barMax) * 100).toFixed(2) + '%';
     var ceilingMark = document.getElementById('moneyBarCeiling');
     ceilingMark.hidden = !(m.ceiling > 0);
     ceilingMark.style.left = ((m.ceiling / barMax) * 100).toFixed(2) + '%';
     ceilingMark.classList.toggle('over', m.ceiling > 0 && m.total > m.ceiling);
 
-    var paidPct = m.total ? Math.round((m.paid / m.total) * 100) : 0;
+    var paidPct = m.total ? Math.round((m.settled / m.total) * 100) : 0;
     setText('paidBarPct', paidPct + '%');
-    setText('paidBarSub', t('pr.of', { a: fmtShort(m.paid), b: fmtShort(m.total) }));
+    setText('paidBarSub', t('pr.of', { a: fmtShort(m.settled), b: fmtShort(m.total) }));
     document.getElementById('paidBarFill').style.width = Math.min(paidPct, 100) + '%';
 
     var upcoming = state.tasks
@@ -3899,7 +4017,8 @@
   function renderSponsors() {
     var grid = document.getElementById('sponsorGrid');
     grid.innerHTML = '';
-    state.sponsors.forEach(function (sp) {
+    var shares = sponsorAmounts();
+    state.sponsors.forEach(function (sp, at) {
       var row = document.createElement('div');
       row.className = 'sponsor-row';
 
@@ -3928,7 +4047,7 @@
 
       var amt = document.createElement('span');
       amt.className = 'sp-amt';
-      amt.textContent = fmtCur(sponsorShare(sp.id));
+      amt.textContent = fmtCur(shares[at].amount);
 
       var del = delButton(t('sp.del'), function () {
         var id = sp.id;
@@ -3960,15 +4079,61 @@
     syncEmptyState();
   }
 
-  // Amount attributed to one sponsor, shared lines divided evenly. Summed in
-  // minor units and converted once, so a dozen shared lines cannot drift.
-  function sponsorShare(id) {
-    var sum = 0;
+  // What one name is down for, and what has been paid against it. Shared
+  // lines are divided evenly and both figures are divided the same way: with
+  // one Paid figure per line and no record of who handed it over, the even
+  // split is the only answer the data supports, and the heading above the
+  // reckoning says so. Summed in whole minor units and converted once, so a
+  // dozen shared lines cannot drift.
+  function sponsorTally(id) {
+    var committed = 0, paid = 0;
     state.budgetItems.forEach(function (i) {
       var ids = i.sponsors || [];
-      if (ids.indexOf(id) !== -1) sum += lineTotalMinor(i) / ids.length;
+      var at = ids.indexOf(id);
+      if (at === -1) return;
+      var line = lineTotalMinor(i);
+      committed += lineShareMinor(line, ids.length, at);
+      // Clamped to the line, as the headline figures are. What was paid above
+      // what a line committed is not payment towards anybody's share of it.
+      paid += lineShareMinor(Math.min(toMinor(i.paid), line), ids.length, at);
     });
-    return Math.round(toMajor(sum));
+    return { committed: committed, paid: paid };
+  }
+
+  /* Who is down for what: every name, and what nobody has taken on.
+   *
+   * One list in one order, read by the figures beside the names and by the
+   * final reckoning. Both hand out their whole units in the order this
+   * returns them and sort for display only afterwards, which is what stops
+   * the same name reading a unit apart in the two lists. The unassigned row
+   * belongs in it even though the sponsor grid has no line for it: it is part
+   * of the committed total, and an allocation that left it out would hand its
+   * rounding to somebody who is not down for it.
+   */
+  function sponsorRows() {
+    var rows = state.sponsors.map(function (sp) {
+      var tally = sponsorTally(sp.id);
+      return { label: sponsorLabel(sp), committedMinor: tally.committed, paidMinor: tally.paid };
+    });
+    var loose = 0, loosePaid = 0;
+    state.budgetItems.forEach(function (i) {
+      if ((i.sponsors || []).length) return;
+      var line = lineTotalMinor(i);
+      loose += line;
+      loosePaid += Math.min(toMinor(i.paid), line);
+    });
+    if (loose) {
+      rows.push({ label: t('sp.unassigned'), committedMinor: loose, paidMinor: loosePaid });
+    }
+    return rows;
+  }
+
+  // The figures beside the names, allocated across the whole committed total
+  // so that the column adds up to it. Sponsors come first in `sponsorRows`,
+  // so the first entries line up with the grid.
+  function sponsorAmounts() {
+    var rows = sponsorRows();
+    return allocateRows(rows.map(function (r) { return r.committedMinor; }), totals().totalMinor);
   }
 
   document.getElementById('addSponsor').addEventListener('click', function () {
@@ -4002,7 +4167,9 @@
         var ids = i.sponsors || [];
         var tot = lineTotalMinor(i);
         if (!ids.length) { add(t('sp.unassigned'), tot); return; }
-        ids.forEach(function (id) { add(sponsorLabel(sponsorById(id)), tot / ids.length); });
+        ids.forEach(function (id, at) {
+          add(sponsorLabel(sponsorById(id)), lineShareMinor(tot, ids.length, at));
+        });
       });
     } else {
       state.budgetItems.forEach(function (i) {
@@ -4017,11 +4184,21 @@
     var list = document.getElementById('splitList');
     list.innerHTML = '';
     var grand = totals().totalMinor;
-    order.sort(function (a, b) { return groups[b] - groups[a]; }).forEach(function (k) {
+    // Allocated in the order the rows were gathered, which in the even mode
+    // is the order sponsorRows uses, and sorted for display only once the
+    // figures are decided. Sorting first and handing the sorted array to the
+    // allocation gives the leftover unit to whoever is at the top of this
+    // list rather than to the same row the grid gives it to, and one name
+    // then reads a whole unit apart in two lists on one screen.
+    var shown = allocateRows(order.map(function (k) { return groups[k]; }), grand);
+    var entries = order.map(function (k, at) { return { key: k, shown: shown[at] }; });
+    entries.sort(function (a, b) { return groups[b.key] - groups[a.key]; });
+    entries.forEach(function (e) {
+      var k = e.key;
       var li = document.createElement('li');
-      var share = grand ? Math.round((groups[k] / grand) * 100) : 0;
+      var share = e.shown.pct;
       li.appendChild(cell('span', '', k));
-      li.appendChild(cell('span', 'amt', fmtCur(Math.round(toMajor(groups[k])))));
+      li.appendChild(cell('span', 'amt', fmtCur(e.shown.amount)));
       li.appendChild(cell('span', 'pct', share + '%'));
       // The share again, as a length: five percentages in a column have to be
       // read and compared, five bars are compared by looking.
@@ -4036,18 +4213,20 @@
 
     // keep the per-sponsor amounts in the editor in step
     var rows = document.querySelectorAll('#sponsorGrid .sponsor-row');
+    var shares = sponsorAmounts();
     state.sponsors.forEach(function (sp, idx) {
-      if (rows[idx]) rows[idx].querySelector('.sp-amt').textContent = fmtCur(sponsorShare(sp.id));
+      if (rows[idx]) rows[idx].querySelector('.sp-amt').textContent = fmtCur(shares[idx].amount);
     });
   }
 
   /* ---------- After the event ----------
    * A dated, one-shot thing. The day after, this stops being a plan and
    * becomes the record of what happened, so it reads as one: the closing
-   * figures, who covered what, and no control that implies anything can still
-   * be changed. Recoverable in one deliberate click, because a date in an
-   * environment variable is as likely to be wrong as anything else here — and
-   * because "something still needs settling" is the normal case, not the
+   * figures, who took on what and what each of them still owes, and no
+   * control that implies anything can still be changed. Recoverable in one
+   * deliberate click, in this browser, which is where the flag lives: a date
+   * in an environment variable is as likely to be wrong as anything else
+   * here, and "something still needs settling" is the normal case, not the
    * exception.
    *
    * With no event date configured there is no "after": every branch below is
@@ -4058,29 +4237,54 @@
     if (!list || !isPast()) return;
 
     // Always split shared lines between the people who share them: the
-    // question this list answers is "what did each person cover", and a joint
-    // line attributed to nobody in particular does not answer it. That is the
-    // same arithmetic as the figure beside each sponsor, so the two agree.
-    var rows = state.sponsors.map(function (sp) {
-      return { label: sponsorLabel(sp), amount: sponsorShare(sp.id) };
+    // question this list answers is "what did each person take on", and a
+    // joint line attributed to nobody in particular does not answer it. That
+    // is the same arithmetic as the figure beside each sponsor, so the two
+    // agree.
+    //
+    // Three figures per name, because the one this list used to show was the
+    // plan: what somebody is down for is not what they have handed over, and
+    // settling up is the reason anybody opens this page the day after. What
+    // has been paid is attributed the same way the cost is - evenly - since
+    // a line carries one Paid figure and no payer, and guessing is worse than
+    // saying which rule is in force, which the heading does.
+    var rows = sponsorRows();
+    var paidMinor = rows.reduce(function (sum, r) { return sum + r.paidMinor; }, 0);
+    var shown = allocateRows(rows.map(function (r) { return r.committedMinor; }), totals().totalMinor);
+    var paidShown = allocateRows(rows.map(function (r) { return r.paidMinor; }), paidMinor);
+    // The two columns are allocated against different totals, so where both
+    // land on a half unit the payment can come out a unit above the share it
+    // stands against: 10.50 taken on and 10.50 paid, shown as 10 and 11.
+    // Nobody can settle from "still open -1", so the payment is the figure
+    // that gives way. It reads as a unit less paid, never as more owed than
+    // was taken on.
+    var entries = rows.map(function (r, at) {
+      var paid = Math.min(paidShown[at].amount, shown[at].amount);
+      return { row: r, shown: shown[at], paid: paid };
     });
-    var loose = 0;
-    state.budgetItems.forEach(function (i) {
-      if (!(i.sponsors || []).length) loose += lineTotalMinor(i);
-    });
-    if (loose) rows.push({ label: t('sp.unassigned'), amount: Math.round(toMajor(loose)) });
+    // Largest share at the top, and only now that every figure is decided.
+    // Allocating the sorted list instead would hand the leftover unit to a
+    // different name here than beside the names in the sponsor grid, and the
+    // record of the evening would say two things about one person.
+    entries.sort(function (a, b) { return b.row.committedMinor - a.row.committedMinor; });
 
-    var grand = totals().total;
     list.innerHTML = '';
-    rows.sort(function (a, b) { return b.amount - a.amount; }).forEach(function (r) {
+    entries.forEach(function (e) {
+      var open = e.shown.amount - e.paid;
       var li = document.createElement('li');
-      li.appendChild(cell('span', '', r.label));
-      li.appendChild(cell('span', 'amt', fmtCur(r.amount)));
-      li.appendChild(cell('span', 'pct', (grand ? Math.round((r.amount / grand) * 100) : 0) + '%'));
+      li.appendChild(cell('span', '', e.row.label));
+      li.appendChild(cell('span', 'amt', fmtCur(e.shown.amount)));
+      li.appendChild(cell('span', 'pct', e.shown.pct + '%'));
+      // Under the name rather than beside it: three money figures and a
+      // percentage in one row is a row nobody can read on a phone.
+      var sub = cell('span', 'settle-sub', '');
+      sub.appendChild(cell('span', 'settle-paid', t('ar.paidsofar', { a: fmtCur(e.paid) })));
+      sub.appendChild(cell('span', 'settle-open' + (open > 0 ? ' owing' : ''), t('ar.stillopen', { a: fmtCur(open) })));
+      li.appendChild(sub);
       list.appendChild(li);
     });
     var empty = document.getElementById('settleEmpty');
-    if (empty) empty.style.display = rows.length ? 'none' : 'block';
+    if (empty) empty.style.display = entries.length ? 'none' : 'block';
   }
 
   /* readOnly rather than disabled wherever the control supports it: a closed
@@ -5122,14 +5326,25 @@
   function label(td, key) { td.setAttribute('data-label', t(key)); }
 
   function refreshRow(tr, item) {
-    var tot = lineTotal(item);
-    var owing = tot - (Number(item.paid) || 0);
-    tr.children[3].textContent = fmtCur(tot);
-    tr.children[5].textContent = fmtCur(owing);
+    // Whole minor units, as everywhere else: the difference decides both the
+    // wording and whether the row counts as settled, and a fraction of a cent
+    // of floating-point error must not decide either.
+    var tot = lineTotalMinor(item);
+    var owing = tot - toMinor(item.paid);
+    tr.children[3].textContent = fmtCur(toMajor(tot));
+    // A bare "-€500" in a column headed Outstanding reads as a credit against
+    // everything else, which is exactly what it is not. The word says which
+    // way the line is out, so that the one thing to do about it - raise the
+    // unit price to the invoice - is the obvious one.
+    tr.children[5].textContent = owing < 0
+      ? t('f.overpaid', { a: fmtCur(toMajor(-owing)) })
+      : fmtCur(toMajor(owing));
     tr.children[5].classList.toggle('owing', owing > 0);
+    tr.children[5].classList.toggle('over', owing < 0);
     // Paid in full: the line is settled, and the figure that said what was
     // owed says so in the colour of money paid rather than as a bare zero.
-    tr.classList.toggle('settled', tot > 0 && owing <= 0);
+    // Paid past full is not that, and must not be dressed as it.
+    tr.classList.toggle('settled', tot > 0 && owing === 0);
     // A decide-by date that has gone by with nothing paid against the line,
     // which is the reminder digest's own rule: money against a line is the
     // decision having been made, so a paid line is never late for it. Paying
@@ -5395,18 +5610,26 @@
   var flashToken = 0;
   var flashUntil = 0;
 
-  function paintMsg(text) {
+  function paintMsg(text, problem) {
     var el = document.getElementById('dataMsg');
-    if (el) el.textContent = text;
+    if (!el) return;
+    el.textContent = text;
+    // The same element, moved. Thirteen points of secondary ink under the
+    // export buttons is the right weight for "Exported soiree-2030-06-12.json"
+    // and the wrong one for "your changes are not reaching the server": the
+    // second is still true a minute later, and the person it concerns is
+    // looking at the grid, not at the foot of the page. The stylesheet takes
+    // it from there.
+    el.classList.toggle('problem', !!problem);
   }
 
-  function flash(msg) {
-    paintMsg(msg);
+  function flash(msg, problem) {
+    paintMsg(msg, problem);
     flashUntil = Date.now() + FLASH_MS;
     var mine = ++flashToken;
     setTimeout(function () {
       // Only if nothing newer has taken the element in the meantime.
-      if (mine === flashToken) paintMsg(stickyMsg);
+      if (mine === flashToken) paintMsg(stickyMsg, !!stickyMsg);
     }, FLASH_MS);
   }
 
@@ -5414,7 +5637,9 @@
     msg = msg || '';
     if (stickyMsg === msg) return;
     stickyMsg = msg;
-    if (Date.now() >= flashUntil) paintMsg(stickyMsg);
+    // Every sticky message is a problem: they are the conditions that are
+    // still true.
+    if (Date.now() >= flashUntil) paintMsg(stickyMsg, !!stickyMsg);
   }
 
   /* The planner as a file. Its own function because the import takes one for
