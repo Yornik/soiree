@@ -1121,6 +1121,15 @@ func TestOneNetworkCannotLockAnAccountOutOfSigningIn(t *testing.T) {
 	f := newFixture(t, false)
 	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
 
+	// Staying inside it is also what makes the run say anything: past the
+	// per-address allowance the 429 asserted below is that bucket's answer,
+	// and the account bucket this is about is never reached. Swapping loginIP
+	// out does not help, because limitIP took hold of it when Register ran.
+	if loginAcctBurst+9 >= loginIPBurst {
+		t.Fatalf("this test makes %d attempts from one address and the per-address bucket holds %d",
+			loginAcctBurst+9, loginIPBurst)
+	}
+
 	const attacker, owner = "203.0.113.7:51000", "198.51.100.4:51000"
 
 	// The account's whole allowance from the attacker's network, and then
@@ -1599,6 +1608,31 @@ func TestARefusedPasswordLoginIsWrittenDown(t *testing.T) {
 	// this deployment has no account for.
 	if strings.Contains(out, "nobody@example.test") {
 		t.Errorf("the log carries an address nobody here has an account for: %s", out)
+	}
+
+	// And the refusal a login bucket makes, which is the one refusal on this
+	// route that happens before anything is looked up. It names no account
+	// for that reason: looking an address up in order to log it would make
+	// the 429 answer the question the rest of the handler is careful not to.
+	var rateLimited bool
+	for range loginAcctBurst + 1 {
+		logged.Reset()
+		rec = f.do(t, http.MethodPost, "/api/v1/auth/login",
+			map[string]string{"email": "ada@example.test", "password": guess}, nil)
+		if rec.Code == http.StatusTooManyRequests {
+			rateLimited = true
+			break
+		}
+	}
+	if !rateLimited {
+		t.Fatalf("a run of %d guesses was never refused by a login bucket", loginAcctBurst+1)
+	}
+	out = logged.String()
+	if !strings.Contains(out, "login refused") || !strings.Contains(out, "rate limited") {
+		t.Errorf("a refusal by a login bucket left no line of its own: %s", out)
+	}
+	if strings.Contains(out, ada.ID.String()) || strings.Contains(out, "ada@example.test") {
+		t.Errorf("the line names the account or the address that was submitted: %s", out)
 	}
 }
 
