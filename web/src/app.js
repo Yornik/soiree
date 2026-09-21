@@ -223,6 +223,7 @@
       'b.reset': 'Reset column & row sizes',
       'b.del': 'Remove budget line',
       'b.confirmdel': 'Files on this line: {n}. They go with it and cannot be recovered. Remove the line?',
+      'b.confirmdelunknown': 'The files on this line cannot be counted until this browser has the planner from the server. Any there are go with it, for everyone, and cannot be recovered. Remove the line?',
       'b.gripcol': 'Drag to resize column',
       'b.griprow': 'Drag to resize row',
       'sl.title': 'Who’s covering what',
@@ -240,6 +241,7 @@
       'k.nofilter': 'No tasks with that status.',
       'k.del': 'Remove task',
       'k.confirmdel': 'Files on this task: {n}. They go with it and cannot be recovered. Remove the task?',
+      'k.confirmdelunknown': 'The files on this task cannot be counted until this browser has the planner from the server. Any there are go with it, for everyone, and cannot be recovered. Remove the task?',
       'f.open': 'Files on this row: {n}',
       'f.title': 'Files',
       'f.none': 'No files yet.',
@@ -379,6 +381,7 @@
       'b.reset': 'Kolom- en rijafmetingen herstellen',
       'b.del': 'Post verwijderen',
       'b.confirmdel': 'Bestanden bij deze post: {n}. Die gaan mee en zijn niet terug te halen. Post verwijderen?',
+      'b.confirmdelunknown': 'De bestanden bij deze post zijn niet te tellen zolang deze browser de planner niet van de server heeft. Wat er staat gaat mee, voor iedereen, en is niet terug te halen. Post verwijderen?',
       'b.gripcol': 'Sleep om de kolom breder te maken',
       'b.griprow': 'Sleep om de rij hoger te maken',
       'sl.title': 'Wie betaalt wat',
@@ -396,6 +399,7 @@
       'k.nofilter': 'Geen taken met die status.',
       'k.del': 'Taak verwijderen',
       'k.confirmdel': 'Bestanden bij deze taak: {n}. Die gaan mee en zijn niet terug te halen. Taak verwijderen?',
+      'k.confirmdelunknown': 'De bestanden bij deze taak zijn niet te tellen zolang deze browser de planner niet van de server heeft. Wat er staat gaat mee, voor iedereen, en is niet terug te halen. Taak verwijderen?',
       'f.open': 'Bestanden bij deze regel: {n}',
       'f.title': 'Bestanden',
       'f.none': 'Nog geen bestanden.',
@@ -534,6 +538,7 @@
       'b.reset': 'Atur ulang ukuran kolom & baris',
       'b.del': 'Hapus baris anggaran',
       'b.confirmdel': 'Berkas di baris ini: {n}. Semuanya ikut terhapus dan tidak bisa dikembalikan. Hapus baris ini?',
+      'b.confirmdelunknown': 'Berkas di baris ini belum bisa dihitung selama browser ini belum mengambil perencana dari server. Yang ada ikut terhapus, untuk semua orang, dan tidak bisa dikembalikan. Hapus baris ini?',
       'b.gripcol': 'Seret untuk mengubah lebar kolom',
       'b.griprow': 'Seret untuk mengubah tinggi baris',
       'sl.title': 'Siapa menanggung apa',
@@ -551,6 +556,7 @@
       'k.nofilter': 'Tidak ada tugas dengan status itu.',
       'k.del': 'Hapus tugas',
       'k.confirmdel': 'Berkas di tugas ini: {n}. Semuanya ikut terhapus dan tidak bisa dikembalikan. Hapus tugas ini?',
+      'k.confirmdelunknown': 'Berkas di tugas ini belum bisa dihitung selama browser ini belum mengambil perencana dari server. Yang ada ikut terhapus, untuk semua orang, dan tidak bisa dikembalikan. Hapus tugas ini?',
       'f.open': 'Berkas di baris ini: {n}',
       'f.title': 'Berkas',
       'f.none': 'Belum ada berkas.',
@@ -3879,6 +3885,17 @@
   // Only once the plan has come from the server: before that this browser does
   // not know whether there is a server, and afterwards it may have lost it.
   function filesOffered() { return !!FILES && apiMode && !sessionGone; }
+
+  // Whether a count of zero on this row is an answer or only ignorance. The
+  // list arrives with the plan and with nothing else, so on a page painted
+  // from this browser's copy, with the origin away, or a session that ended
+  // before the reload, or simply the gap before the first read lands, it is
+  // empty because nothing has filled it. A row under an id this browser minted has never
+  // been sent and can have no files whatever the page knows, which is the one
+  // case where the empty list is the truth.
+  function filesUncounted(id) {
+    return !!FILES && !apiMode && SERVER_ID.test(String(id));
+  }
   function canChangeFiles() {
     return (sessionRole === 'admin' || sessionRole === 'editor') &&
       !document.body.classList.contains('is-archived');
@@ -4478,9 +4495,14 @@
       label(tdDel, 'c.remove');
       tdDel.appendChild(delButton(t('b.del'), function () {
         // The row's files go with it, out of the plan and then out of the
-        // bucket, and they are in neither the export nor the backup.
+        // bucket, and they are in neither the export nor the backup. Asked
+        // either way where they cannot be counted: the delete is queued
+        // against the copy on the screen and takes them when the origin is
+        // back, which is the moment the loss is least visible.
         var files = filesOf('budget', item.id).length;
-        if (files && !confirmLoss(t('b.confirmdel', { n: files }))) return;
+        if (filesUncounted(item.id)) {
+          if (!confirmLoss(t('b.confirmdelunknown'))) return;
+        } else if (files && !confirmLoss(t('b.confirmdel', { n: files }))) return;
         dropRow(state.budgetItems, item);
         save();
         renderBudgetTable();
@@ -4647,7 +4669,9 @@
       tdDel.className = 'del-cell';
       tdDel.appendChild(delButton(t('k.del'), function () {
         var files = filesOf('task', task.id).length;
-        if (files && !confirmLoss(t('k.confirmdel', { n: files }))) return;
+        if (filesUncounted(task.id)) {
+          if (!confirmLoss(t('k.confirmdelunknown'))) return;
+        } else if (files && !confirmLoss(t('k.confirmdel', { n: files }))) return;
         dropRow(state.tasks, task);
         save();
         renderTasksTable();

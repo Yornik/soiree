@@ -2355,6 +2355,50 @@ test('a file can be removed, and removing a line takes its files with it', async
   }).toEqual([0, 0]);
 });
 
+/*
+ * The same loss, on a page that has not managed to read the plan.
+ *
+ * The list of what is attached arrives with the plan and with nothing else, so
+ * on a page painted from the copy this browser keeps, with the origin away
+ * or a session that ended before the reload, it is empty because nothing has
+ * filled it, not because the row has no files. A count of zero is ignorance
+ * rather than an answer there, and the delete queued against that copy takes
+ * the receipts on the line out of the plan and then out of the bucket the
+ * moment the origin is back.
+ */
+test('a delete asks about the files on the row when the plan has not been read', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await savedLine(page, request, 'Catering');
+
+  await openFiles(page);
+  await page.setInputFiles('body > input[type=file]', { name: 'quote.pdf', mimeType: 'application/pdf', buffer: QUOTE });
+  await expect(page.locator('#budgetBody .files-count')).toHaveText('1');
+  await page.keyboard.press('Escape');
+  await flushToStorage(page);
+
+  // The tab comes back to an origin that is away: the planner paints from the
+  // copy this browser keeps, and the plan read that would say what is
+  // attached never lands. What is attached is in neither.
+  await page.route('**/api/v1/**', (route) => route.abort('internetdisconnected'));
+  await page.goto('/');
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).item).toHaveValue('Catering');
+
+  const asked = [];
+  page.once('dialog', (dialog) => { asked.push(dialog.message()); dialog.dismiss().catch(() => {}); });
+  await page.locator('#budgetBody .del-cell .del-btn').first().click();
+  await expect.poll(() => asked, { message: 'a delete that cannot count the files must still ask' }).toEqual([
+    'The files on this line cannot be counted until this browser has the planner from the server. '
+    + 'Any there are go with it, for everyone, and cannot be recovered. Remove the line?',
+  ]);
+
+  // Answered with no, so the line is still on the page and the quote is still
+  // on the line.
+  await expect(budgetRow(page, 0).item).toHaveValue('Catering');
+  expect((await apiPlan(request)).attachments.map((a) => a.name)).toEqual(['quote.pdf']);
+});
+
 test('an import counts the files it would destroy before anything is replaced', async ({ page, request }, testInfo) => {
   await openSharedPlanner(page);
   test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
