@@ -1132,11 +1132,14 @@ func (a *Auth) setPasswordURL(token string, language *string) string {
 // planner this is; what it protected turned out to be nothing, because the
 // link's own hostname is in the mail and the page behind it hands the event's
 // name and date to any anonymous visitor, and the stranger is holding a
-// working credential besides. What the omission did cost was borne by the
-// person the mail was meant for, who had an unsigned account mail from an
-// unfamiliar domain to judge on twenty words and a tokenised URL. The digest
-// has named the event in its subject all along. The admin who sent it is still
-// deliberately unnamed.
+// working credential besides. On a deployment with
+// SOIREE_PUBLIC_EVENT_DETAILS off that page hands over nothing, so only the
+// credential is left of that reasoning; these mails name the event there too,
+// because the reason they do is about their reader rather than about the page.
+// What the omission did cost was borne by the person the mail was meant for,
+// who had an unsigned account mail from an unfamiliar domain to judge on
+// twenty words and a tokenised URL. The digest has named the event in its
+// subject all along. The admin who sent it is still deliberately unnamed.
 //
 // Only the invitation carries the line about an expired link. Whoever asked
 // for a reset has just used the control it points at.

@@ -147,12 +147,12 @@ the reader is or on UTC.
 
 Inlining that block also puts the event's name, tagline and date into a page
 served to whoever has the address. For most deployments that is what a masthead
-is for. For a deployment that treats the event's identity as personal it is not:
-the invitation mails are deliberately written to name nothing, so that one sent
-to a mistyped address tells a stranger nothing about whose planner this is (see
-`inviteMessage`), and the link in that mail opened a page titled with the
-event's name. `SOIREE_ALLOW_INDEXING` does not help, because `X-Robots-Tag`
-says nothing to somebody who already has the URL.
+is for. For a deployment that treats the event's identity as personal it is
+not: such a deployment keeps the name, the day and the place out of everything
+it can, and its hostname is then usually the one thing about it that is public.
+One visit to that hostname hands all three back. `SOIREE_ALLOW_INDEXING` does
+not help, because `X-Robots-Tag` says nothing to somebody who already has the
+URL.
 
 So the decision above was revisited and this switch approved, with the default
 left exactly where it was: `SOIREE_PUBLIC_EVENT_DETAILS`, on unless an operator
@@ -177,10 +177,17 @@ turns it off. Off:
   the process refuses to start rather than quietly publishing what an operator
   has just asked to keep back.
 
-Two things the switch cannot do, and both are worth knowing before turning it
-on. The manifest is one rendering for everybody, so an installed app is named
-"soiree". And somebody following a set-password link is not told which event
-they are joining until they are signed in.
+Three things the switch cannot do, and all of them are worth knowing before
+turning it on. The manifest is one rendering for everybody, so an installed app
+is named "soiree". Somebody following a set-password link is not told which
+event they are joining until they are signed in. And the account mails go on
+naming the event, in the subject and in the first line, because they are
+written that way deliberately: see the mail section below. So an invitation to
+a mistyped address still tells a stranger whose planner this is. Of the two
+reasons that naming was judged to cost nothing, this switch takes one away, in
+that the page behind the link no longer names the event to an anonymous
+visitor. The other stands: a stranger holding a mistyped invitation is holding
+a working credential besides.
 
 ## The `Store` seam
 
@@ -1269,7 +1276,11 @@ account that has not set a password yet. They named nothing until that was
 reversed. The omission was meant to keep a mail to a mistyped address from
 telling a stranger whose planner this is, and it protected nothing, because the
 link's hostname is in the mail and the page behind it gives the event's name and
-date to any anonymous visitor. Who sent the invitation is still unnamed.
+date to any anonymous visitor. On a deployment with
+`SOIREE_PUBLIC_EVENT_DETAILS` off that page gives neither, and what is left of
+the argument is the credential in the stranger's hands. The mails name the
+event there too; the switch is about the page. Who sent the invitation is still
+unnamed.
 
 **The first account is the exception, and needs its own way in.** Every route
 that hands back a set-password link is admin-only, and `password-reset` issues

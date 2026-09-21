@@ -3104,8 +3104,10 @@ components:
         The account of the current session, and on some deployments the event
         this planner is for.
 
-        Everything in `User`, plus `event`. The three answers that sign
-        somebody in or say who is signed in return this.
+        Everything in `User`, plus `event`. The two logins and the session
+        check answer with this. `POST /auth/password` starts a session too and
+        still answers with `User`, because a page changing its own password
+        has been told already.
       allOf:
         - $ref: '#/components/schemas/User'
         - type: object
