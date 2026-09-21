@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -113,7 +114,16 @@ func (s *Store) DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) (in
 //
 // The password is left alone, which is the difference between this and
 // disabling: what comes back is an account its owner can still log in to.
-func (s *Store) RevokeCredentials(ctx context.Context, userID uuid.UUID) error {
+//
+// actor is the admin doing it, where the context names none; resolveActor
+// settles the two. It is recorded, because this is the widest thing anybody
+// can do to somebody else's account and the screen an admin reads to find out
+// what has happened to one is the activity feed rather than whatever collects
+// the process's stdout. The entry says that everything was taken away and by
+// whom, never how much there was: there is no admin view of anybody's
+// passkeys, and an entry that counted them would be one.
+func (s *Store) RevokeCredentials(ctx context.Context, userID uuid.UUID, actor *uuid.UUID) error {
+	who := resolveActor(ctx, actor)
 	_, err := inTx(ctx, s, func(tx pgx.Tx) (struct{}, error) {
 		var done struct{}
 		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
@@ -135,7 +145,17 @@ func (s *Store) RevokeCredentials(ctx context.Context, userID uuid.UUID) error {
 			  WHERE user_id = $1 AND consumed_at IS NULL`, userID); err != nil {
 			return done, fmt.Errorf("password_tokens: %w", err)
 		}
-		return done, nil
+		// Written here rather than through recordUpdate, which diffs the row
+		// and would record nothing at all: no column of `users` changes, so
+		// there is no difference to find. One field that is not a column says
+		// what did happen, and no revision, because the account's own revision
+		// did not move. Inside the transaction like every other entry, so an
+		// entry cannot outlive a revocation that rolled back.
+		return done, insertChange(ctx, tx, EntityUsers, userID, ChangeUpdate, nil,
+			// Null on the old side rather than a claim about what was there:
+			// an account that had never signed in had nothing to take away,
+			// and this entry only says what the act did.
+			changeSet{"credentials": {Old: jsonNull, New: json.RawMessage(`"revoked"`)}}, who)
 	})
 	return err
 }

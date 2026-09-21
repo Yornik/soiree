@@ -176,9 +176,10 @@ type ChangeEntry struct {
 	Entity   string       `db:"entity"`
 	EntityID *uuid.UUID   `db:"entity_id"` // nil for the settings singleton
 	Action   ChangeAction `db:"action"`
-	// The row's revision after the change. Non-null for every entity now that
-	// migration 0009 has given phases a revision; nil only on phase entries
-	// written before it, which the column keeps rather than rewrites.
+	// The row's revision after the change, where the change moved one. Nil on
+	// phase entries written before migration 0009 gave phases a revision,
+	// which the column keeps rather than rewrites, and on a credential
+	// revocation, which changes no column of the account it is about.
 	Revision *int64                 `db:"revision"`
 	Changes  map[string]FieldChange `db:"changes"`
 	// Nil where there was no account, or where the account has since been

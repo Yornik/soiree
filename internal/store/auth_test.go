@@ -342,7 +342,7 @@ func TestRevokingCredentialsLeavesNothingToSignInWith(t *testing.T) {
 	adaCookie, adaCeremony, adaLink := live(t, ada, adaInvite)
 	graceCookie, graceCeremony, graceLink := live(t, grace, graceInvite)
 
-	if err := s.RevokeCredentials(ctx, ada.ID); err != nil {
+	if err := s.RevokeCredentials(ctx, ada.ID, nil); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -382,6 +382,47 @@ func TestRevokingCredentialsLeavesNothingToSignInWith(t *testing.T) {
 		t.Fatalf("check link: %v", err)
 	} else if !redeemable {
 		t.Error("another account's link was spent too")
+	}
+}
+
+// Revoking is the answer to an account having been got into, so it is also the
+// thing whoever looks into that afterwards has to be able to find. The feed
+// they read is the change log, and what it has to say is that everything was
+// taken away, by whom, and to which account.
+func TestRevokingCredentialsIsRecorded(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	ada, _ := invite(t, s, "ada@example.test", store.RoleAdmin)
+	grace, _ := invite(t, s, "grace@example.test", store.RoleEditor)
+
+	if err := s.RevokeCredentials(ctx, grace.ID, &ada.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	entries := history(t, s, store.EntityUsers, grace.ID)
+	if len(entries) != 2 {
+		t.Fatalf("history has %d entries, want the create and the revocation", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != store.ChangeUpdate {
+		t.Errorf("action = %q, want update", entry.Action)
+	}
+	if entry.ActorID == nil || *entry.ActorID != ada.ID {
+		t.Errorf("actor = %v, want the admin who did it", entry.ActorID)
+	}
+	revoked, recorded := entry.Changes["credentials"]
+	if !recorded {
+		t.Fatalf("the entry does not say what was done: %v", entry.Changes)
+	}
+	if asString(t, revoked.New) != "revoked" {
+		t.Errorf("credentials = %s, want revoked", revoked.New)
+	}
+	// One field and no more. How many passkeys somebody had is not an admin's
+	// business: there is no view of anybody's credentials in this application,
+	// and an entry that counted them would be one.
+	if len(entry.Changes) != 1 {
+		t.Errorf("the entry records %d fields, want the one: %v", len(entry.Changes), entry.Changes)
 	}
 }
 
