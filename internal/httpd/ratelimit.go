@@ -24,6 +24,14 @@ import (
 // are. The real defence against guessing is Argon2id at 19 MiB, which caps the
 // rate at something like single-digit attempts per second per core no matter
 // who is asking.
+//
+// Nor is the account-wide ceiling in front of login a promise that an account
+// cannot be held out of password sign-in. Somebody with addresses in enough
+// networks can keep that ceiling at zero, the way one client alone could once
+// keep the tight bucket there. Putting the network in the tight bucket's key
+// raised the price of a lockout from one client to many; it did not remove it,
+// and a passkey, charged to the per-address bucket alone, is the way in that
+// is left when somebody pays it.
 type limiter struct {
 	mu     sync.Mutex
 	burst  float64
@@ -170,4 +178,14 @@ func ipKey(s string) (string, bool) {
 		return addr.String(), true
 	}
 	return netip.PrefixFrom(addr, 64).Masked().String(), true
+}
+
+// acctKey is the bucket one account's attempts from one client network share.
+//
+// The network the request came from goes first and the address somebody typed
+// second, because only the second of those is the caller's to choose: a local
+// part with a "|" in it then lands inside its own network's key and cannot be
+// punctuated into reading as anybody else's.
+func acctKey(ip, email string) string {
+	return ip + "|" + email
 }

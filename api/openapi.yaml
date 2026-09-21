@@ -219,8 +219,10 @@ paths:
         The server sets the session cookie on success. Send the cookie with
         every later request.
 
-        Two rate limits apply. One counts the attempts from your address. One
-        counts the attempts against the account. Both answer **429**.
+        Three rate limits apply. One counts the attempts from your address.
+        One counts the attempts against the account from your address. One
+        counts the attempts against the account from every address at once,
+        and is much looser. All three answer **429**.
 
         The server gives one error for a wrong password and for an unknown
         address. This keeps an attacker from learning which addresses have an
@@ -417,9 +419,10 @@ paths:
         gets **400** with the code `weak_password`, and the server does not
         look at the current one.
 
-        The same two rate limits as `POST /auth/login` apply, because the work
-        is the same: one counts the attempts from your address, one counts
-        them against the account.
+        The same three rate limits as `POST /auth/login` apply, because the
+        work is the same: one counts the attempts from your address, one
+        counts them against the account from your address, and one counts them
+        against the account from every address at once.
       requestBody:
         required: true
         content:

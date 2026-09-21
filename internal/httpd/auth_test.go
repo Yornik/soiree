@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -181,6 +182,27 @@ func (f *fixture) login(t *testing.T, email, password string) *http.Cookie {
 	}
 	t.Fatalf("login as %s set no session cookie", email)
 	return nil
+}
+
+// loginFrom is a sign-in attempt from a named client address.
+//
+// httptest.NewRequest gives every request the same peer, which is exactly what
+// the rate-limit tests need to vary: the question there is what one network's
+// attempts cost another's.
+func (f *fixture) loginFrom(t *testing.T, remoteAddr, email, password string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	raw, err := json.Marshal(map[string]string{"email": email, "password": password})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(raw))
+	r.Header.Set("Content-Type", "application/json")
+	r.RemoteAddr = remoteAddr
+
+	rec := httptest.NewRecorder()
+	f.h.ServeHTTP(rec, r)
+	return rec
 }
 
 func decodeTestBody[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
@@ -1084,6 +1106,91 @@ func TestLoginIsRateLimitedPerAccount(t *testing.T) {
 	}
 	if !limitedUnknown {
 		t.Error("an unknown address is not rate-limited, which tells an attacker it is unknown")
+	}
+}
+
+// Ten guesses at an address anybody can find used to be enough to keep its
+// owner out. The tight bucket was keyed on the submitted address alone, and a
+// refused attempt costs its sender nothing, so one client going on asking held
+// that bucket at zero for everybody, from inside the per-address allowance,
+// which is why nothing else stopped it.
+//
+// Every attempt below stays inside that allowance too, deliberately: the run
+// is the attack, not a flood.
+func TestOneNetworkCannotLockAnAccountOutOfSigningIn(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+
+	const attacker, owner = "203.0.113.7:51000", "198.51.100.4:51000"
+
+	// The account's whole allowance from the attacker's network, and then
+	// more, which is the state the owner used to arrive in.
+	for range loginAcctBurst + 8 {
+		f.loginFrom(t, attacker, "ada@example.test", otherPassword)
+	}
+	if rec := f.loginFrom(t, attacker, "ada@example.test", otherPassword); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the attacker's own next attempt = %d, want 429: the limit has stopped refusing the client that spent it", rec.Code)
+	}
+
+	rec := f.loginFrom(t, owner, "ada@example.test", goodPassword)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the owner signing in from another network with the right password = %d, want 200: one client can hold an account out", rec.Code)
+	}
+}
+
+// The order of the two checks is the whole fix, so it is pinned. An attempt
+// the tight bucket refused must not be charged to the ceiling behind it: one
+// client would otherwise empty that ceiling by itself and the lockout would be
+// back, wearing a bigger number.
+func TestAnAttemptTheTightBucketRefusedCostsTheAccountNothing(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+
+	// Two tokens wider than the tight bucket, so that a run past the tight
+	// bucket's refusals would empty it if refusals were charged to it. The
+	// shipped ceiling is ten times as wide and would need a run this test
+	// cannot make in the time the tokens take to come back.
+	f.a.loginAcctAll = newLimiter(loginAcctBurst+2, loginAcctAllWindow)
+
+	const attacker, owner = "203.0.113.7:51000", "198.51.100.4:51000"
+	for range loginAcctBurst + 8 {
+		f.loginFrom(t, attacker, "ada@example.test", otherPassword)
+	}
+
+	rec := f.loginFrom(t, owner, "ada@example.test", goodPassword)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the owner signing in from another network = %d, want 200: refused attempts are spending the account's ceiling", rec.Code)
+	}
+}
+
+// The other half of it: a network in the key is a network an attacker can
+// change, so the account keeps a ceiling of its own behind the tight bucket.
+// That ceiling is what a run spread across networks meets, which is the run
+// the tight bucket no longer sees as one caller.
+func TestARunSpreadAcrossNetworksIsStillRefused(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+
+	// One attempt per network, so every one of them meets a full tight bucket
+	// and a full per-address bucket, and the ceiling is the only thing left
+	// that can refuse them.
+	var limited bool
+	for i := range loginAcctAllBurst + 5 {
+		rec := f.loginFrom(t, fmt.Sprintf("192.0.2.%d:51000", i+1), "ada@example.test", otherPassword)
+		if rec.Code == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	if !limited {
+		t.Errorf("a run of %d guesses, each from a network of its own, was never refused", loginAcctAllBurst+5)
+	}
+
+	// And the ceiling belongs to the account, not to the deployment: a run
+	// against one address must not be a way to keep everybody else out.
+	if rec := f.loginFrom(t, "198.51.100.9:51000", "grace@example.test", goodPassword); rec.Code != http.StatusOK {
+		t.Errorf("another account signing in during that run = %d, want 200", rec.Code)
 	}
 }
 
