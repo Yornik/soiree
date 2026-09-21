@@ -284,6 +284,11 @@ test('a passkey can be registered from a signed-in session and then signs you in
     await page.locator('.passkey').getByText('Remove').click();
     await expect(page.locator('#passkeyList .passkey')).toHaveCount(0);
     await expect(page.locator('#passkeyEmpty')).toBeVisible();
+    // A row here has one control and it is the one that just removed the row,
+    // so the list cannot hand focus back to where it was. Without somewhere
+    // to send it, focus lands on <body> and the next Tab starts at the
+    // language flags.
+    await expect(page.locator('#passkeyAdd')).toBeFocused();
   } finally {
     await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId }).catch(() => {});
   }

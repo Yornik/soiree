@@ -928,3 +928,43 @@ test('the switcher is there on the sign-in screen, and turns it too', async ({ p
   await expect(page.locator('#loginSubmit')).toHaveText('Masuk');
   await expect(page.locator('#accountActs button')).toHaveText(['Masuk']);
 });
+
+/* ------------------------------------------------------------------
+ * Where focus is left
+ * ------------------------------------------------------------------
+ * The list is rebuilt wholesale rather than patched, and a rebuild takes the
+ * focused element with it: the browser then has nowhere to put focus and
+ * drops it on <body>, where a screen reader loses its place and the next Tab
+ * starts at the language flags. Both cases below are keyboard journeys that
+ * ended there.
+ * ------------------------------------------------------------------ */
+
+test('changing a role leaves focus on the select that changed it', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS] });
+  await open(page, '/#/admin');
+
+  const role = page.locator('.person', { hasText: GRACE.email }).locator('select.person-role');
+  await role.focus();
+  await role.selectOption('admin');
+
+  // The write went out and the list has been rebuilt with the answer, so the
+  // select being asked about is the new node rather than the one pressed.
+  await expect.poll(() => server.calls.filter((c) => c.method === 'PATCH').length).toBe(1);
+  await expect(role).toHaveValue('admin');
+  await expect(role).toBeFocused();
+});
+
+test('removing somebody lands on the row that took their place, never on a Remove', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS] });
+  await open(page, '/#/admin');
+  page.on('dialog', (d) => d.accept().catch(() => {}));
+
+  await page.locator('.person', { hasText: GRACE.email }).getByRole('button', { name: 'Remove' }).click();
+  await expect(page.locator('#peopleList .person')).toHaveCount(2);
+
+  // Grace was the second row, so Linus is now. His first control, not his
+  // last: somebody who has just removed one person should not be one
+  // keystroke from removing the next.
+  await expect(page.locator('.person', { hasText: LINUS.email }).locator('select.person-role')).toBeFocused();
+  expect(await page.evaluate(() => document.activeElement.className)).not.toContain('danger');
+});

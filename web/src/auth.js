@@ -1852,7 +1852,52 @@
     loadPeople();
   }
 
+  /* Focus across a redraw.
+   *
+   * Every action here ends in a rebuild of the whole list, which takes the
+   * control that was pressed with it - after disabling it for the round trip,
+   * which has already dropped focus on <body>. So what is remembered is not
+   * the node but which row and which of its controls, and the rebuilt list is
+   * asked for that pair again. Without it an admin changing three roles tabs
+   * in from the top of the page twice.
+   */
+  var heldFocus = null;
+
+  function holdFocus(p, control) {
+    heldFocus = control ? { id: p.id, act: control.getAttribute('data-act') || '' } : null;
+  }
+
+  function rowIndex(list, id) {
+    var rows = list.querySelectorAll('li[data-id]');
+    for (var i = 0; i < rows.length; i += 1) {
+      if (rows[i].getAttribute('data-id') === id) return i;
+    }
+    return -1;
+  }
+
+  function restoreFocus(list, held, was) {
+    var again = list.querySelector('li[data-id="' + held.id.replace(/["\\]/g, '\\$&')
+      + '"] [data-act="' + held.act + '"]');
+    if (again) { again.focus(); return; }
+    // The row is gone, so the control that was pressed is gone with it. Focus
+    // goes to the row that took its place, and to its first control rather
+    // than its "Remove": somebody who has just removed one person should not
+    // be one keystroke from removing the next.
+    var rows = list.querySelectorAll('li[data-id]');
+    var row = rows[was >= 0 && was < rows.length ? was : rows.length - 1];
+    var ctl = row ? row.querySelector('select, button:not(.danger)') : null;
+    if (ctl) { ctl.focus(); return; }
+    // Nobody left to point at: the heading over the list is where this screen
+    // begins.
+    var head = byId('authTitle');
+    if (head) { head.tabIndex = -1; head.focus(); }
+  }
+
   function loadPeople() {
+    // Built from scratch, so there is nothing to put focus back on: a hold
+    // taken before a request that ended in a sign-out must not be spent on
+    // whatever list is drawn next.
+    heldFocus = null;
     request('GET', '/users').then(function (res) {
       if (signedOut(res)) { sessionEnded(); return; }
       if (res.status !== 200 || !res.body) {
@@ -1867,9 +1912,13 @@
   function drawPeople() {
     var list = byId('peopleList');
     if (!list) return;
+    var held = heldFocus;
+    heldFocus = null;
+    var was = held ? rowIndex(list, held.id) : -1;
     while (list.firstChild) list.removeChild(list.firstChild);
     show(byId('peopleEmpty'), people.length === 0);
     people.forEach(function (p) { list.appendChild(personRow(p)); });
+    if (held) restoreFocus(list, held, was);
   }
 
   // Replaces one account in the list with the version the server just
@@ -1924,6 +1973,9 @@
   function personRow(p) {
     var self = !!(user && user.id === p.id);
     var li = make('li', 'person');
+    // Which row this is. The node a person pressed does not survive the
+    // redraw that follows; this pair, with the data-act below, does.
+    li.setAttribute('data-id', p.id);
 
     var head = make('div', 'person-head');
     head.appendChild(make('span', 'person-email', p.email));
@@ -1948,6 +2000,7 @@
     } else {
       var sel = make('select', 'person-role');
       sel.setAttribute('aria-label', t('person.role.aria', { email: p.email }));
+      sel.setAttribute('data-act', 'role');
       ['viewer', 'editor', 'admin'].forEach(function (role) {
         var o = document.createElement('option');
         o.value = role;
@@ -1970,9 +2023,11 @@
       // nothing by itself and saves nothing.
       var lang = make('select', 'person-language');
       lang.setAttribute('aria-label', t('person.language.aria', { email: p.email }));
+      lang.setAttribute('data-act', 'language');
       fillLanguageChoice(lang, null);
       acts.appendChild(lang);
       acts.appendChild(actButton(
+        'invite',
         t(p.status === 'invited' ? 'person.resend' : 'person.sendlink'),
         'link-btn',
         function (btn) { invite(p, btn, lang.value); }
@@ -1981,13 +2036,14 @@
 
     if (!self) {
       acts.appendChild(actButton(
+        'access',
         t(p.status === 'disabled' ? 'person.access.on' : 'person.access.off'),
         'link-btn',
         function (btn) {
           patchPerson(p, { status: p.status === 'disabled' ? 'active' : 'disabled' }, btn);
         }
       ));
-      acts.appendChild(actButton(t('remove'), 'link-btn danger', function (btn) {
+      acts.appendChild(actButton('remove', t('remove'), 'link-btn danger', function (btn) {
         if (!window.confirm(t('person.confirm', { email: p.email }))) return;
         removePerson(p, btn);
       }));
@@ -1997,9 +2053,10 @@
     return li;
   }
 
-  function actButton(label, cls, fn) {
+  function actButton(act, label, cls, fn) {
     var b = make('button', cls, label);
     b.type = 'button';
+    b.setAttribute('data-act', act);
     b.addEventListener('click', function () { fn(b); });
     return b;
   }
@@ -2012,6 +2069,7 @@
   function patchPerson(p, change, control) {
     var body = { revision: p.revision };
     for (var k in change) if (Object.prototype.hasOwnProperty.call(change, k)) body[k] = change[k];
+    holdFocus(p, control);
     if (control) control.disabled = true;
     adminSays('');
     request('PATCH', '/users/' + p.id, body).then(function (res) {
@@ -2037,6 +2095,7 @@
   }
 
   function removePerson(p, control) {
+    holdFocus(p, control);
     if (control) control.disabled = true;
     adminSays('');
     request('DELETE', '/users/' + p.id + '?revision=' + encodeURIComponent(p.revision))
@@ -2063,6 +2122,7 @@
   }
 
   function invite(p, control, language) {
+    holdFocus(p, control);
     if (control) control.disabled = true;
     adminSays('');
     request('POST', '/users/' + p.id + '/invite', language ? { language: language } : {}).then(function (res) {
@@ -2317,7 +2377,7 @@
       li.appendChild(make('span', 'passkey-used',
         k.lastUsedAt ? t('pk.lastused', { date: day(k.lastUsedAt) }) : t('pk.unused')));
 
-      li.appendChild(actButton(t('remove'), 'link-btn danger', function (btn) {
+      li.appendChild(actButton('remove', t('remove'), 'link-btn danger', function (btn) {
         if (!window.confirm(t('pk.confirm', { label: k.label || t('pk.this') }))) return;
         btn.disabled = true;
         request('DELETE', '/auth/passkeys/' + k.id).then(function (res) {
@@ -2328,6 +2388,12 @@
           if (res.status === 204 || gone(res)) {
             passkeys = passkeys.filter(function (x) { return x.id !== k.id; });
             drawPasskeys();
+            // A row here has one control and it is the one that just removed
+            // it, so there is nothing of the row to go back to. "Add a
+            // passkey" is the next thing anybody does on this screen, and it
+            // is not a way to remove another one by mistake.
+            var add = byId('passkeyAdd');
+            if (add) add.focus();
             // The options in hand still tell this device not to make a second
             // key, for a key the server has just forgotten.
             registerCeremony.renew();
