@@ -1067,14 +1067,14 @@ func TestTheActivityFeedStopsNamingAnErasedPerson(t *testing.T) {
 func TestPurgeStrikesTheNamesOutOfTheChangeLog(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()
-	plant(t, s)
+	p := plant(t, s)
 
 	res, err := s.PurgeEvent(ctx, store.PurgeOptions{IncludeAccounts: true})
 	if err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 	if res.ChangeLogRedacted == 0 {
-		t.Errorf("result = %+v, want the entries it struck the plan out of", res)
+		t.Errorf("result = %+v, want the entries it struck the plan's names out of", res)
 	}
 
 	for _, word := range []string{"Ada", "Grace", "Nevada", "Venue deposit", "Example Hall", "ada@example.test"} {
@@ -1085,12 +1085,13 @@ func TestPurgeStrikesTheNamesOutOfTheChangeLog(t *testing.T) {
 
 	// And the half a purge does not reach, asserted rather than left to the
 	// comment on PurgeEvent: the redaction takes the text and nothing else, so
-	// a unit price and a quantity are still there to be read. What this test
-	// pins is that the documented limit is the real one, whichever way a later
-	// change moves it.
-	for _, word := range []string{"250000", "40.5"} {
+	// a unit price, a quantity and the id of a deleted contributor are all
+	// still there to be read. This is a guard on the mechanism rather than a
+	// wish, and it fails the day a change moves that limit, which is when the
+	// prose describing it would otherwise quietly stop being true.
+	for _, word := range []string{"250000", "40.5", p.adaSponsor.ID.String()} {
 		if !logHolds(t, ctx, s, word) {
-			t.Errorf("the change log no longer holds %q, so a purge now reaches the figures as well", word)
+			t.Errorf("the change log no longer holds %q, so a purge now reaches more than the text", word)
 		}
 	}
 

@@ -773,19 +773,20 @@ Done:
     since been taught about one of the tables added after it, `change_log`
     (0007), which held every name, owner cell, sentence and address the rows
     ever carried: erasure strikes the person out of those entries and the
-    purge strikes every name in the plan out of them, both through the one
-    exception migration 0013 makes to the append-only trigger. Names, not
-    figures. The redaction reaches the text fields and leaves the rest of the
-    entry as it was written, so every recorded amount, quantity, date,
-    position and row id survives a purge and the shape of a purged plan is
-    still readable in its history, with nobody in it named. Whether those go
-    too is a retention decision nobody has taken. The tables `privacy.go`
-    still does not know about: `sessions` and `password_tokens` (0008),
-    `push_subscriptions` (0010), `passkey_credentials` (0011) and
-    `attachments` (0012). So the export is short by all of them and says so in
-    its caveats, an erasure that anonymises rather than deletes leaves the
-    account's session, token, passkey and push rows behind, and a file keeps
-    the name it was uploaded under.
+    purge strikes every name a person can be known by out of them, both
+    through the one exception migration 0013 makes to the append-only
+    trigger. Those names, and not figures. The redaction reaches the text
+    fields and leaves the rest of the entry as it was written, so every
+    recorded amount, quantity, date, position and row id survives a purge,
+    and the shape of a purged plan is still readable in its history with
+    nobody in it named. Whether those go too is a retention decision nobody
+    has taken. The tables `privacy.go` still does not know about: `sessions`
+    and `password_tokens` (0008), `push_subscriptions` (0010),
+    `passkey_credentials` (0011) and `attachments` (0012). So the export is
+    short by all of them and says so in its caveats, an erasure that
+    anonymises rather than deletes leaves the account's session, token,
+    passkey and push rows behind, and a file keeps the name it was uploaded
+    under.
 11. ~~Vulnerability disclosure.~~ `SECURITY.md`, and a documented verification
     command that the release workflow itself re-runs.
 13. ~~Mobile budget grid.~~
