@@ -6,6 +6,8 @@
     ":separateMultipleMajorReleases",
     "helpers:pinGitHubActionDigests"
   ],
+  "description": "A dependency here merges itself as soon as CI is green, so without a wait the only review a new release gets is that it compiled, and CI cannot tell a benign release from a compromised or withdrawn one. Three days is roughly how long that takes to surface. The wait sits at the top level rather than on a rule because a rule covers the managers somebody listed, and the first one here listed gomod and npm: that left every GitHub Action, the builder image and the four tool versions the workflows pin inline free to merge themselves on the day they were published, four of those actions being the ones that run in the jobs that push and sign the release image, which the checks exercise with push disabled and never sign with. Nothing merges itself inside those three days, and with internalChecksFilter left at its default of strict nothing is opened either: the update is listed on the Dependency Dashboard under Pending Status Checks until it has aged. Set internalChecksFilter to flexible if the pull request is wanted immediately with only the automerge held back. Where the platform raises a vulnerability alert the fix for it is not held back, since vulnerabilityAlerts sets minimumReleaseAge to null by default and nothing here overrides that; alerts are off on this repository today, so nothing takes that path yet.",
+  "minimumReleaseAge": "3 days",
   "labels": [
     "renovate",
     "dependencies"
@@ -50,14 +52,6 @@
         "golang"
       ],
       "groupName": "go toolchain"
-    },
-    {
-      "description": "A patch update merges itself as soon as CI is green, so without a wait the only review a new dependency gets is that it compiles, and CI cannot tell a benign release from a compromised or withdrawn one. Three days is roughly how long that takes to surface. Nothing merges itself inside those three days, and with internalChecksFilter left at its default of strict nothing is opened either: the update is listed on the Dependency Dashboard under Pending Status Checks until it has aged. Set internalChecksFilter to flexible if the pull request is wanted immediately with only the automerge held back.",
-      "matchManagers": [
-        "gomod",
-        "npm"
-      ],
-      "minimumReleaseAge": "3 days"
     }
   ],
   "customManagers": [

@@ -34,6 +34,22 @@ jobs:
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     needs: checks
     runs-on: ubuntu-latest
+    # Which digest `:latest` ends on is decided by the step below, not here:
+    # all this group does is keep the two publish jobs out of the registry at
+    # the same time, and a group serialises only against itself, so the name is
+    # shared with release-please.yaml. It does not make the publish order the
+    # release order, because a job joins its group once `needs` is satisfied,
+    # so a re-run of a flaked check joins it long after the later release has
+    # landed (the instruction to re-run one is in release-please.yaml). It sits
+    # on the job rather than on the workflow so that what queues is the push
+    # and the signature, a couple of minutes, rather than the whole suite: while
+    # one run waits, a third release joining cancels the one that waits, and
+    # that version gets no image at all. cancel-in-progress stays false, since
+    # stopping a release between pushing the image and signing it is worse than
+    # either.
+    concurrency:
+      group: release-image
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -44,6 +60,63 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The step below compares two histories, and the default fetch is one
+          # commit deep, which shares none of either.
+          fetch-depth: 0
+
+      # The checks above say the tagged tree passes its own tests; they say
+      # nothing about how that tree got there. A `v*` tag can be pushed at any
+      # commit in the repository, including one on a branch that never opened a
+      # pull request, and this job would sign that commit and move `:latest`
+      # onto it. The other release path builds what main has just merged, so
+      # this is the only door that needs the lock.
+      - name: Refuse a tag whose commit is not on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::$GITHUB_REF_NAME points at a commit that is not reachable from main, so nothing on the branch ever saw it; no image was pushed"
+            exit 1
+          fi
+
+      # `:latest` is what README.md hands a new reader and what SECURITY.md
+      # calls the supported version, so it has to name the newest release
+      # rather than the last one to reach the registry. Those come apart
+      # whenever the publish order is not the release order: two releases cut
+      # minutes apart finish their checks in whichever order their runners
+      # take, a re-run of a flaked check runs after the later release has
+      # landed, and a tag pushed at an old commit has nothing to race at all.
+      # The comparison is against the tags on origin rather than against images
+      # that exist, so a tag that never produced one holds the floating tag
+      # where it is until a higher version is cut; that is why declining to
+      # move it is a warning and not a silent skip.
+      - name: Decide whether this release moves :latest
+        id: tags
+        run: |
+          set -euo pipefail
+          newest=$(git ls-remote --tags --refs --sort=-v:refname origin 'v*' |
+            awk 'NR == 1 { sub(/.*refs\/tags\//, "", $2); print $2 }')
+          if [ -z "$newest" ]; then
+            echo "::error::origin carries no vX.Y.Z tag, so there is nothing to compare $GITHUB_REF_NAME against"
+            exit 1
+          fi
+          # Which of the two is higher, rather than whether this tag is the one
+          # at the top: a tag pushed a moment ago need not be listed yet, and
+          # not moving `:latest` for the newest release is the worse mistake.
+          highest=$(printf '%s\n%s\n' "$newest" "$GITHUB_REF_NAME" | sort -V | tail -n 1)
+          {
+            echo 'list<<END_OF_TAG_LIST'
+            echo "${IMAGE}:${GITHUB_REF_NAME}"
+            if [ "$highest" = "$GITHUB_REF_NAME" ]; then
+              echo "${IMAGE}:latest"
+            fi
+            echo END_OF_TAG_LIST
+          } >> "$GITHUB_OUTPUT"
+          if [ "$highest" != "$GITHUB_REF_NAME" ]; then
+            echo "::warning::$newest is a later release than $GITHUB_REF_NAME, so :latest was left where it is"
+          fi
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -55,9 +128,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ env.IMAGE }}:latest
+          tags: ${{ steps.tags.outputs.list }}
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
@@ -73,7 +144,7 @@ jobs:
       # digest-pinning the action pins cosign too.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Sign the index digest, which is what both tags resolve to.
+      # Sign the index digest, which is what the tags above resolve to.
       - name: Sign the image (keyless, GitHub OIDC)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

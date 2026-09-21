@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,9 +28,11 @@ type workflowFile struct {
 }
 
 type workflowJob struct {
-	Needs jobNames       `yaml:"needs"`
-	Uses  string         `yaml:"uses"`
-	Steps []workflowStep `yaml:"steps"`
+	Needs       jobNames         `yaml:"needs"`
+	If          string           `yaml:"if"`
+	Uses        string           `yaml:"uses"`
+	Concurrency concurrencyGroup `yaml:"concurrency"`
+	Steps       []workflowStep   `yaml:"steps"`
 }
 
 type workflowStep struct {
@@ -52,6 +56,30 @@ func (n *jobNames) UnmarshalYAML(value *yaml.Node) error {
 		return err
 	}
 	*n = many
+	return nil
+}
+
+// concurrencyGroup reads `concurrency:` in either form GitHub accepts: the
+// group name on its own, or a mapping that also says what happens to a run
+// already in flight.
+type concurrencyGroup struct {
+	Group            string `yaml:"group"`
+	CancelInProgress any    `yaml:"cancel-in-progress"`
+}
+
+func (c *concurrencyGroup) UnmarshalYAML(value *yaml.Node) error {
+	var name string
+	if err := value.Decode(&name); err == nil {
+		c.Group = name
+		return nil
+	}
+	// A named type, so decoding the mapping does not call this method again.
+	type mapping concurrencyGroup
+	var m mapping
+	if err := value.Decode(&m); err != nil {
+		return err
+	}
+	*c = concurrencyGroup(m)
 	return nil
 }
 
@@ -185,4 +213,187 @@ func TestASignedImageIsNotBuiltFromTheSharedCache(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A green `checks` says the tagged tree passes its own tests. It says nothing
+// about how that tree got there: `v*` is not restricted to commits on main and
+// no ruleset stands behind the tag either, so a tag pushed at a branch that
+// never opened a pull request would be built, pushed as `:latest` and signed
+// with the identity docs/verifying-releases.md tells a third party to trust.
+// The other release path builds what main has just merged, so the assertion is
+// scoped to the job a tag triggers.
+func TestATagOffMainIsNotReleased(t *testing.T) {
+	gated := 0
+	for name, jobs := range releaseJobs(t) {
+		for id, j := range jobs {
+			if !strings.Contains(j.If, "refs/tags/") {
+				continue
+			}
+			gated++
+
+			ancestry, depth := false, "unset"
+			for _, s := range j.Steps {
+				if strings.Contains(s.Run, "merge-base --is-ancestor") {
+					ancestry = true
+				}
+				if strings.HasPrefix(s.Uses, "actions/checkout") {
+					depth = fmt.Sprint(s.With["fetch-depth"])
+				}
+			}
+
+			if !ancestry {
+				t.Errorf(".github/workflows/%s: job %q publishes a tag without checking that its commit is reachable from main, so a tag pushed at any commit in the repository goes out as a signed :latest",
+					name, id)
+			}
+			// The check compares two histories and the default checkout is one
+			// commit deep, which shares none of either. Losing the depth would
+			// not weaken the guard, it would fail every release at the moment
+			// it was cut, so it is asserted next to the check it serves.
+			if depth != "0" {
+				t.Errorf(".github/workflows/%s: job %q checks the tag against main with fetch-depth %s; the two histories have to be present for merge-base to answer",
+					name, id, depth)
+			}
+		}
+	}
+	if gated == 0 {
+		t.Fatal("no publishing job is gated on a tag ref, so this test read nothing")
+	}
+}
+
+// `:latest` is what README.md hands a new reader, and SECURITY.md defines the
+// supported version as "the newest `vX.Y.Z` tag, which is what
+// `ghcr.io/yornik/soiree:latest` points at", so the floating tag has to name
+// the newest release rather than the last one to reach the registry. Those are
+// different whenever the publish order is not the release order: two releases
+// cut minutes apart finish their checks in whichever order their runners take,
+// a re-run of a flaked check publishes after the later release has landed, and
+// a tag pushed at an old commit has nothing to race at all. Nothing reports
+// it, since both runs are green and each verifies its own digest. So the tag
+// list is computed by a step that compares the version being released against
+// the tags on origin, and `:latest` is never in the fixed list a job hands the
+// builder.
+func TestTheFloatingTagFollowsTheNewestRelease(t *testing.T) {
+	for name, jobs := range releaseJobs(t) {
+		for id, j := range jobs {
+			compares := false
+			for _, s := range j.Steps {
+				if strings.Contains(s.Run, "--sort=-v:refname") {
+					compares = true
+				}
+				if strings.Contains(fmt.Sprint(s.With["tags"]), ":latest") {
+					t.Errorf(".github/workflows/%s: job %q hands the builder :latest in a fixed list, so it moves the floating tag whichever version it is publishing",
+						name, id)
+				}
+			}
+			if !compares {
+				t.Errorf(".github/workflows/%s: job %q publishes without comparing the version it releases against the tags on origin, so whichever release reaches the registry last owns :latest",
+					name, id)
+			}
+		}
+	}
+}
+
+// The two publishing jobs share one concurrency group, so they do not write
+// the registry at the same time. That is the whole of what it buys: a job
+// joins its group only once `needs` is satisfied, so the group does not make
+// the publish order the release order, and a re-run of a flaked check joins it
+// long after the later release has landed. Which digest `:latest` ends on is
+// TestTheFloatingTagFollowsTheNewestRelease's subject. What this one keeps is
+// the serialising, and the queueing rather than the replacing.
+func TestTwoReleasesDoNotPublishAtOnce(t *testing.T) {
+	groups := make(map[string]int)
+	for name, jobs := range releaseJobs(t) {
+		for id, j := range jobs {
+			switch {
+			case j.Concurrency.Group == "":
+				t.Errorf(".github/workflows/%s: job %q publishes in no concurrency group, so two releases can be pushing and signing at the same moment",
+					name, id)
+			case strings.Contains(j.Concurrency.Group, "${{"):
+				t.Errorf(".github/workflows/%s: job %q is in concurrency group %q, which expands to something different in every run, so it serialises nothing",
+					name, id, j.Concurrency.Group)
+			default:
+				groups[j.Concurrency.Group]++
+			}
+			// The queue has to wait rather than replace: cancelling a release
+			// between the push and the signature leaves an unsigned image in
+			// the registry under a tag that says it is a release.
+			if truthy(j.Concurrency.CancelInProgress) {
+				t.Errorf(".github/workflows/%s: job %q cancels a release that is already publishing, which can stop it between pushing the image and signing it",
+					name, id)
+			}
+		}
+	}
+	// Groups are repository-wide, so one name shared by both files is what
+	// makes a hand-pushed tag and a release-please release wait for each other
+	// rather than each only for itself.
+	if len(groups) > 1 {
+		t.Errorf("the publishing jobs are spread over %d concurrency groups (%v), and a group serialises only against itself, so the two release paths can still publish at once",
+			len(groups), groups)
+	}
+}
+
+// Renovate merges most of its own pull requests here, so for those the only
+// review a new release gets is that CI compiled it, and CI cannot tell a
+// benign release from a compromised or withdrawn one: the checks build with
+// `push: false` and never sign, so they say nothing at all about the four
+// actions that run in the two jobs above holding `packages: write` and
+// `id-token: write`. The wait is the review. It is a top-level default rather
+// than a rule because a rule covers the managers somebody listed, and the
+// first wait here listed gomod and npm, which left the actions, the builder
+// image and the tool versions the workflows pin inline free to merge
+// themselves the day they were published.
+func TestNoDependencyMergesItselfTheDayItIsPublished(t *testing.T) {
+	// Rules are read as raw values keyed by name, because the way to switch
+	// the wait off is to set it to null, which is what vulnerabilityAlerts
+	// does by default, and a null decoded into any typed field is the same nil
+	// as a rule that never mentioned the field at all.
+	var cfg struct {
+		MinimumReleaseAge json.RawMessage              `json:"minimumReleaseAge"`
+		PackageRules      []map[string]json.RawMessage `json:"packageRules"`
+	}
+	if err := json.Unmarshal([]byte(repoFile(t, "renovate.json")), &cfg); err != nil {
+		t.Fatalf("parse renovate.json: %v", err)
+	}
+
+	if len(cfg.MinimumReleaseAge) == 0 || mergesOnPublicationDay(cfg.MinimumReleaseAge) {
+		t.Errorf("renovate.json sets minimumReleaseAge to %s at the top level, so an update automerges as soon as CI is green and a compromised release reaches main on the day it is published",
+			orNothing(cfg.MinimumReleaseAge))
+	}
+
+	// A rule may lengthen the wait; nothing may switch it off, which is how
+	// the previous one came to cover two of the managers in use.
+	for i, r := range cfg.PackageRules {
+		age, set := r["minimumReleaseAge"]
+		if !set {
+			continue
+		}
+		if mergesOnPublicationDay(age) {
+			t.Errorf("renovate.json packageRules[%d] sets minimumReleaseAge to %s, which turns the wait off for what it matches, so those updates merge themselves unreviewed",
+				i, orNothing(age))
+		}
+	}
+}
+
+// mergesOnPublicationDay reports whether a minimumReleaseAge value lets an
+// update merge the day it was published: an explicit null, which clears an
+// inherited wait, a zero, or a duration counted from zero. A duration arrives
+// quoted, so the leading zero is found in the decoded string rather than in
+// the raw bytes.
+func mergesOnPublicationDay(age json.RawMessage) bool {
+	switch strings.TrimSpace(string(age)) {
+	case "null", "0":
+		return true
+	}
+	var wait string
+	if err := json.Unmarshal(age, &wait); err != nil {
+		return false
+	}
+	return wait == "" || strings.HasPrefix(wait, "0")
+}
+
+func orNothing(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "nothing"
+	}
+	return string(raw)
 }
