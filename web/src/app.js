@@ -301,6 +301,13 @@
       'b.shown': '{a} of {b} lines',
       'b.up': 'Move line up',
       'b.down': 'Move line down',
+      'b.sortby': 'Sort by {a}',
+      'b.sortaz': 'Sorted by {a}, A to Z',
+      'b.sortza': 'Sorted by {a}, Z to A',
+      'b.sortlow': 'Sorted by {a}, lowest first',
+      'b.sorthigh': 'Sorted by {a}, highest first',
+      'b.sortoff': 'Plan’s order',
+      'b.sortofftip': 'Back to the order the plan is in, the one a line can be moved in',
       'b.add': 'Add budget line',
       'b.reset': 'Reset column & row sizes',
       'b.del': 'Remove budget line',
@@ -479,6 +486,13 @@
       'b.shown': '{a} van {b} posten',
       'b.up': 'Post omhoog',
       'b.down': 'Post omlaag',
+      'b.sortby': 'Sorteren op {a}',
+      'b.sortaz': 'Gesorteerd op {a}, A tot Z',
+      'b.sortza': 'Gesorteerd op {a}, Z tot A',
+      'b.sortlow': 'Gesorteerd op {a}, laagste eerst',
+      'b.sorthigh': 'Gesorteerd op {a}, hoogste eerst',
+      'b.sortoff': 'Volgorde van het plan',
+      'b.sortofftip': 'Terug naar de volgorde van het plan, de volgorde waarin een post te verplaatsen is',
       'b.add': 'Post toevoegen',
       'b.reset': 'Kolom- en rijafmetingen herstellen',
       'b.del': 'Post verwijderen',
@@ -656,6 +670,13 @@
       'b.shown': '{a} dari {b} baris',
       'b.up': 'Naikkan baris',
       'b.down': 'Turunkan baris',
+      'b.sortby': 'Urutkan menurut {a}',
+      'b.sortaz': 'Diurutkan menurut {a}, A ke Z',
+      'b.sortza': 'Diurutkan menurut {a}, Z ke A',
+      'b.sortlow': 'Diurutkan menurut {a}, terkecil dulu',
+      'b.sorthigh': 'Diurutkan menurut {a}, terbesar dulu',
+      'b.sortoff': 'Urutan rencana',
+      'b.sortofftip': 'Kembali ke urutan rencana, urutan tempat baris bisa dipindahkan',
       'b.add': 'Tambah baris anggaran',
       'b.reset': 'Atur ulang ukuran kolom & baris',
       'b.del': 'Hapus baris anggaran',
@@ -5548,12 +5569,19 @@
     b.appendChild(moveIcon(delta < 0));
     b.title = t(delta < 0 ? 'b.up' : 'b.down');
     b.setAttribute('aria-label', b.title);
-    b.disabled = atTheEnd;
+    // Off while a column is sorting the grid: up and down mean the plan's own
+    // order, and that is not the order on the screen. The line beside the
+    // search says so, and the button next to it puts the grid back.
+    b.disabled = atTheEnd || !!budgetSort;
     b.addEventListener('click', function () { moveLine(item, delta); });
     return b;
   }
 
   function moveLine(item, delta) {
+    // The other half of the disabled button above, and the half that matters:
+    // a move renumbers the whole list from where the rows sit, so one made in
+    // a sorted view would write that sort into everybody's plan.
+    if (budgetSort) return;
     var shown = shownBudgetItems();
     var at = shown.indexOf(item);
     var to = at + delta;
@@ -5586,7 +5614,7 @@
    * focus, and the one pointing back takes it instead.
    */
   function focusMoveButton(item, delta) {
-    var tr = document.querySelectorAll('#budgetBody tr')[shownBudgetItems().indexOf(item)];
+    var tr = document.querySelectorAll('#budgetBody tr')[budgetRowsOnScreen().indexOf(item)];
     if (!tr) return;
     var same = tr.querySelector(delta < 0 ? '.mv-up' : '.mv-down');
     var back = tr.querySelector(delta < 0 ? '.mv-down' : '.mv-up');
@@ -5594,10 +5622,151 @@
     if (el) el.focus();
   }
 
+  /* ---------- Reading the grid in the order of a column ----------
+   * A view of the ledger, like the search above it and for the same reason: it
+   * is a variable beside `state` rather than in it, because everything in
+   * `state` is saved, sent and merged, and one person reading the lines by
+   * what is still owed on them must not reorder the grid for everybody else.
+   * `position`, which is the order the plan is in, is never written here.
+   *
+   * Which is also why the arrows in the last cell are off while this is on:
+   * they move a line in the plan's order, and that is not the order being
+   * looked at.
+   */
+  var budgetSort = null;   // { col: one of BUDGET_SORTS, dir: 1 up, -1 down }
+
+  /* The columns that can be read in an order of their own, by the place their
+   * heading sits in the row: index.html has a button in each of these eight
+   * and nothing in the ninth, which holds the row's own controls.
+   *
+   * A column says which kind it is rather than being guessed at: money read
+   * as words puts 1,000 before 900, and the money here is read in whole minor
+   * units, the same figures the row and the totals are drawn from, so the
+   * order on the screen is the order of what the screen is showing.
+   */
+  var BUDGET_SORTS = [
+    { name: 'c.item', text: function (i) { return i.item; } },
+    { name: 'c.unit', num: function (i) { return toMinor(i.unit); } },
+    { name: 'c.qty', num: function (i) { return Number(i.qty) || 0; } },
+    { name: 'f.committed', num: lineTotalMinor },
+    { name: 'f.paid', num: function (i) { return toMinor(i.paid); } },
+    { name: 'f.outstanding', num: function (i) { return lineTotalMinor(i) - toMinor(i.paid); } },
+    { name: 'c.by', text: function (i) { return itemCodes(i).join(' '); } },
+    { name: 'c.remarks', text: function (i) { return i.note; } }
+  ];
+
+  function eachSortHeading(fn) {
+    Array.prototype.forEach.call(document.querySelectorAll('#budgetTable thead th'), function (th, at) {
+      var btn = th.querySelector('.sort-btn');
+      if (btn && BUDGET_SORTS[at]) fn(th, btn, BUDGET_SORTS[at]);
+    });
+  }
+
+  eachSortHeading(function (th, btn, col) {
+    btn.addEventListener('click', function () { sortBudgetBy(col); });
+  });
+
+  /* Three presses and back where it started. A column that could only be read
+   * one way round and never put back would be a grid somebody had to reload
+   * the page to get out of.
+   */
+  function sortBudgetBy(col) {
+    if (!budgetSort || budgetSort.col !== col) budgetSort = { col: col, dir: 1 };
+    else if (budgetSort.dir > 0) budgetSort.dir = -1;
+    else budgetSort = null;
+    renderBudgetTable();
+  }
+
+  function clearBudgetSort() { budgetSort = null; }
+
+  document.getElementById('budgetSortOff').addEventListener('click', function () {
+    var was = budgetSort;
+    clearBudgetSort();
+    renderBudgetTable();
+    // This button goes when the sort does, and focus would fall to <body>.
+    // Back to the heading the order came from, which is where the next press
+    // would be made anyway.
+    if (was) focusSortHeading(was.col);
+  });
+
+  function focusSortHeading(col) {
+    var target = null;
+    eachSortHeading(function (th, btn, c) { if (c === col) target = btn; });
+    // A phone does not draw the heading row at all, so on one there is nothing
+    // to go back to: the search is drawn at every width and takes the keyboard
+    // rather than leaving it on <body>.
+    if (target && target.offsetParent) target.focus();
+    else budgetSearchBox.focus();
+  }
+
+  /* The lines as the screen is showing them. Deliberately not the same list as
+   * shownBudgetItems(), which stays in the plan's order: that one is what a
+   * move works in, and the two must not become one function that means both.
+   */
+  function budgetRowsOnScreen() {
+    var rows = shownBudgetItems();
+    if (!budgetSort) return rows;
+    var col = budgetSort.col;
+    var dir = budgetSort.dir;
+    // Decorated with the place each line has in the plan. Array.sort is not
+    // required to be stable in every browser this is written for, and two
+    // lines a column cannot tell apart have to stay in the order the rest of
+    // the plan has them in.
+    return rows.map(function (row, at) { return { row: row, at: at }; })
+      .sort(function (a, b) { return compareLines(col, a.row, b.row, dir) || a.at - b.at; })
+      .map(function (e) { return e.row; });
+  }
+
+  function compareLines(col, a, b, dir) {
+    if (col.num) return (col.num(a) - col.num(b)) * dir;
+    var x = String(col.text(a) == null ? '' : col.text(a)).trim();
+    var y = String(col.text(b) == null ? '' : col.text(b)).trim();
+    // A line nobody has filled that column in on is not the first word in it
+    // and not the last: it is unfilled, and it goes to the bottom whichever
+    // way round the column is being read. A spreadsheet does the same.
+    if (!x || !y) return x ? -1 : y ? 1 : 0;
+    // The language the page is in rather than the locale the figures are in:
+    // this is about words, and which letter follows which is a language's
+    // business.
+    return x.localeCompare(y, LANG) * dir;
+  }
+
+  function renderBudgetSort() {
+    eachSortHeading(function (th, btn, col) {
+      var on = budgetSort && budgetSort.col === col;
+      th.setAttribute('aria-sort', on ? (budgetSort.dir > 0 ? 'ascending' : 'descending') : 'none');
+      btn.title = t('b.sortby', { a: t(col.name) });
+      // The mark is the same chevron the row's own arrows are drawn with, and
+      // it is drawn rather than written: a heading's textContent is the name
+      // of the column and nothing else.
+      var mark = btn.querySelector('.sort-mark');
+      mark.textContent = '';
+      if (on) mark.appendChild(moveIcon(budgetSort.dir > 0));
+    });
+
+    var off = document.getElementById('budgetSortOff');
+    off.hidden = !budgetSort;
+    off.title = t('b.sortofftip');
+
+    /* Said in words as well as in `aria-sort`, because the rows are redrawn
+     * under a reader that is somewhere else on the page entirely. Written only
+     * when it has really changed: this runs on every render, and a live region
+     * rewritten by a plan arriving from the server would read the order out
+     * again to somebody who had not touched it.
+     */
+    var line = document.getElementById('budgetSorted');
+    var saying = budgetSort
+      ? t(budgetSort.col.num
+        ? (budgetSort.dir > 0 ? 'b.sortlow' : 'b.sorthigh')
+        : (budgetSort.dir > 0 ? 'b.sortaz' : 'b.sortza'), { a: t(budgetSort.col.name) })
+      : '';
+    if (line.textContent !== saying) line.textContent = saying;
+  }
+
   function renderBudgetTable() {
     var body = document.getElementById('budgetBody');
     body.innerHTML = '';
-    var shown = shownBudgetItems();
+    var shown = budgetRowsOnScreen();
     if (!state.budgetItems.length) {
       emptyRow(body, 9, t('b.empty'));
     } else if (!shown.length) {
@@ -5752,6 +5921,7 @@
       refreshRow(tr, item);
     });
     renderBudgetTools(shown.length);
+    renderBudgetSort();
     relock();
     syncEmptyState();
     fitBudgetText();
@@ -5806,8 +5976,11 @@
 
   document.getElementById('addBudgetRow').addEventListener('click', function () {
     // A new line is empty, so it answers to no search: leaving one on would
-    // make this a button that adds a line nobody can see or type into.
+    // make this a button that adds a line nobody can see or type into. A
+    // column sorting the grid is the same button by another route: an empty
+    // line read by what is owed on it lands at an end nobody is looking at.
     clearBudgetSearch();
+    clearBudgetSort();
     state.budgetItems.push({
       id: uid('b'), item: '', unit: 0, qty: 1, paid: 0,
       sponsors: [], note: '', vendor: '', lockBy: '',

@@ -866,6 +866,7 @@ table.budget tbody td.del-cell { padding-left: 2px; padding-right: 2px; }
 .grid-tools {
   display: flex;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: 14px;
   margin-bottom: 14px;
 }
@@ -883,6 +884,11 @@ table.budget tbody td.del-cell { padding-left: 2px; padding-right: 2px; }
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
+/* Beside the count rather than under the heading it undoes, and with the
+   margin the other buttons carry to clear the thing above them taken off:
+   there is nothing above it here. A touchscreen gives it back its padding
+   from the block that does that to every button on the page. */
+.sort-off { margin-top: 0; margin-bottom: 1px; padding: 6px 12px; }
 
 /* --- Tables ---
    border-collapse stays separate so the frozen first column keeps its own
@@ -981,6 +987,31 @@ table.budget tfoot th {
   box-shadow: 1px 0 0 var(--rule-mid);
 }
 table.budget thead th:first-child { background: var(--tint); z-index: 3; }
+
+/* --- A column as the way into its own order ---
+   The heading is the control, which is where a spreadsheet has taught
+   everybody to look for it. So it has to go on reading as the heading it
+   replaced: no frame, no fill, the type it had, and the alignment of the
+   column it stands over, which `inherit` takes from the th rather than
+   repeating the .right rule here. */
+.sort-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  /* The th clips what overflows it, and a ring drawn on the outside of the
+     button would be a ring with its sides cut off. */
+  outline-offset: -2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sort-btn:hover { color: var(--ink); }
+.sort-mark svg { margin-left: 5px; vertical-align: middle; }
 
 .col-grip, .row-grip {
   position: absolute;
