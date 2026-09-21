@@ -574,7 +574,12 @@ the account id. There is no access log here to join a bare "api request failed"
 against, and the metrics carry no id to match a line to. A caller that hung up
 mid-read is answered `499` instead: nobody receives it, and it is what keeps a
 phone that locked its screen out of the 5xx rate it would otherwise be counted
-in.
+in. The session middleware answers the same event the same way. It meets that
+event a query earlier, and a bare return there left the request counted as one
+this server served, because a response nothing wrote a status on is recorded as
+`200`. Both are read as a cancelled query and a request context that is done,
+so that a database failing while somebody happens to close a tab is still a
+failure.
 
 A value the database refused as a data exception (SQLSTATE class 22) is
 answered `400`, which is the right answer to a figure past what its column

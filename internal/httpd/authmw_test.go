@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Yornik/soiree/internal/store"
@@ -95,9 +96,10 @@ func TestACookieThatNoLongerResolvesIsCleared(t *testing.T) {
 }
 
 // Somebody closing a tab mid-request cancels the lookup, and that lands in the
-// same branch as an outage. Nobody is there to read an answer, so the two
-// things worth pinning are that the log does not call it a database fault, and
-// that the request goes no further.
+// same branch as an outage. Nobody is there to read an answer, so what is
+// pinned is that the log does not call it a database fault, that the request
+// goes no further, and that it is counted as the 499 the API answers the same
+// event with rather than as a request this server served.
 func TestACallerWhoHungUpIsNotLoggedAsAnOutage(t *testing.T) {
 	h, a, pool := newAPIServerParts(t, "EUR")
 	h = authedAs(t, h, store.New(pool), a, store.RoleEditor)
@@ -109,7 +111,8 @@ func TestACallerWhoHungUpIsNotLoggedAsAnOutage(t *testing.T) {
 	cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/plan", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
+	m := NewMetrics("test", "none")
+	m.instrument(h).ServeHTTP(rec, req)
 
 	if bytes.Contains(logged.Bytes(), []byte(`"level":"ERROR"`)) {
 		t.Errorf("a cancelled request was logged as an error:\n%s", logged.String())
@@ -119,5 +122,15 @@ func TestACallerWhoHungUpIsNotLoggedAsAnOutage(t *testing.T) {
 	}
 	if rec.Body.Len() != 0 {
 		t.Errorf("a cancelled request was carried on to a handler, which answered:\n%s", rec.Body)
+	}
+	if rec.Code != statusClientClosedRequest {
+		t.Errorf("status = %d, want %d for a caller that is no longer there", rec.Code, statusClientClosedRequest)
+	}
+
+	scrape := httptest.NewRecorder()
+	m.Handler().ServeHTTP(scrape, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	want := `soiree_http_requests_total{method="GET",route="api-plan",status="499"} 1`
+	if !strings.Contains(scrape.Body.String(), want) {
+		t.Errorf("no %s in the exposition, so a caller who walked away reads as one this server served", want)
 	}
 }
