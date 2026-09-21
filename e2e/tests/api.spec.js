@@ -2667,6 +2667,61 @@ test('the paperclip can be seen and pressed, on a line with a long name too, in 
   await expect(page.locator('.files-pop')).toBeVisible();
 });
 
+/*
+ * A bar that moves must not rebuild the list it is drawn in.
+ *
+ * Every progress event redrew the whole popover, which parks focus on the
+ * dialog and replaces every row in it — twenty times a second on a fast link,
+ * and for the whole of a slow one, which is the case the bar exists for at
+ * all. Tabbing to "Add files" while a file was going up was undone before it
+ * could be pressed, and a button replaced between mousedown and mouseup never
+ * fires its click.
+ */
+test('the list holds still while a file is going up', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await savedLine(page, request, 'Marquee');
+  await openFiles(page);
+
+  // The browser's own throttle: the file goes straight to the bucket, so
+  // there is nothing here to stand in front of it. Slow enough that the
+  // upload is still running several assertions later.
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: 64 * 1024,
+  });
+
+  await page.setInputFiles('body > input[type=file]', {
+    name: 'floor plan.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(512 * 1024, 7),
+  });
+  const bar = page.locator('.files-pending progress');
+  await expect(bar).toBeVisible();
+  // A percentage of nothing otherwise: the name is in the span beside it.
+  await expect(bar).toHaveAttribute('aria-label', 'floor plan.pdf');
+
+  // From here: count what the list loses, and stand on the one control
+  // somebody would reach for while a file is going up.
+  const started = await page.evaluate(() => {
+    const probe = { removed: 0, add: document.querySelector('.files-add') };
+    new MutationObserver((records) => {
+      records.forEach((r) => { probe.removed += r.removedNodes.length; });
+    }).observe(document.querySelector('.files-list'), { childList: true });
+    window.filesProbe = probe;
+    probe.add.focus();
+    return Number(document.querySelector('.files-pending progress').value);
+  });
+
+  await expect.poll(async () => (await bar.count())
+    ? bar.evaluate((el) => Number(el.value))
+    : 100).toBeGreaterThan(started + 3);
+
+  expect(await page.evaluate(() => ({
+    removed: window.filesProbe.removed,
+    stillOnAddFiles: document.activeElement === window.filesProbe.add,
+  }))).toEqual({ removed: 0, stillOnAddFiles: true });
+});
+
 test('a deployment with no bucket draws no paperclip at all', async ({ page }) => {
   const { BASE_URL } = require('../servers');
   await page.goto(BASE_URL + '/');

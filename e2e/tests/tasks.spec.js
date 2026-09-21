@@ -168,3 +168,30 @@ test('a row shows its state, and the filters say how many of each there are', as
   expect((await state())[3]).toEqual(['not-started', false]);
 });
 
+
+/*
+ * The deployment with no event date, which is a supported one: the countdown
+ * is simply not drawn, and "late" falls back to the reader's own today.
+ *
+ * The Tasks tab did that. Up next computed the day where the event is inline
+ * and, with no event to compute it from, marked nothing at all — so a task six
+ * years overdue sat in the overview looking like any other while the table two
+ * tabs away had it in the alarm colour.
+ */
+test('with no event date, an overdue task is late in the overview as well as the table', async ({ page }, testInfo) => {
+  await page.goto(testInfo.config.metadata.altBaseURL + '/');
+  await expect(page.locator('body')).toHaveClass(/is-empty/);
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Call the hall', due: '2020-01-01' });
+
+  await expect(page.locator('#tasksBody tr').first()).toHaveClass(/late/);
+  // Colour and weight are not read out and do not survive forced colours, so
+  // the date field's name says it too.
+  await expect(page.locator('#tasksBody tr').first().locator('input[type="date"]'))
+    .toHaveAttribute('aria-label', 'Due date, late');
+
+  await gotoTab(page, 'overview');
+  const due = page.locator('#upNextList .due').first();
+  await expect(due).toHaveClass(/late/);
+  await expect(due.locator('.sr-only')).toHaveText('late');
+});

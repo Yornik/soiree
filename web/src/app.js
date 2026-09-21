@@ -236,6 +236,7 @@
       'k.notstarted': 'Not started',
       'k.inprogress': 'In progress',
       'k.done': 'Done',
+      'k.late': 'late',
       'k.add': 'Add task',
       'k.empty': 'No tasks yet. Add the first one below.',
       'k.nofilter': 'No tasks with that status.',
@@ -395,6 +396,7 @@
       'k.notstarted': 'Nog niet begonnen',
       'k.inprogress': 'Bezig',
       'k.done': 'Klaar',
+      'k.late': 'te laat',
       'k.add': 'Taak toevoegen',
       'k.empty': 'Nog geen taken. Voeg hieronder de eerste toe.',
       'k.nofilter': 'Geen taken met die status.',
@@ -553,6 +555,7 @@
       'k.notstarted': 'Belum mulai',
       'k.inprogress': 'Sedang dikerjakan',
       'k.done': 'Selesai',
+      'k.late': 'terlambat',
       'k.add': 'Tambah tugas',
       'k.empty': 'Belum ada tugas. Tambahkan yang pertama di bawah.',
       'k.nofilter': 'Tidak ada tugas dengan status itu.',
@@ -3439,11 +3442,16 @@
       li.appendChild(cell('span', '', t3.name || t('un.untitled')));
       li.appendChild(cell('span', 'who', t3.owner || ''));
       var dueCell = cell('span', 'due', t3.due || '');
-      // Late is late where the event is, as everywhere else on this page.
-      if (t3.due && EVENT) {
-        var thereNow = new Date(Date.now() + EVENT.offsetMinutes * 60000);
-        var todayThere = thereNow.toISOString().slice(0, 10);
-        if (String(t3.due) < todayThere) dueCell.classList.add('late');
+      // Late is late where the event is, as everywhere else on this page -
+      // and on a planner with no date, where the reader is. This used to
+      // compute the first of those inline and skip the second, so a task six
+      // years overdue read as ordinary here while the Tasks tab had it in the
+      // alarm colour.
+      if (t3.due && String(t3.due) < todayISO()) {
+        dueCell.classList.add('late');
+        // Colour and a heavier weight are the whole of it otherwise, and
+        // neither is there to hear or left in forced colours.
+        dueCell.appendChild(cell('span', 'sr-only', ' ' + t('k.late')));
       }
       li.appendChild(dueCell);
       list.appendChild(li);
@@ -3484,9 +3492,11 @@
       });
 
       var del = delButton(t('w.del'), function () {
+        var at = Array.prototype.indexOf.call(row.parentNode.children, row);
         dropRow(state.notes, note);
         save();
         renderNotes();
+        focusAfterRemove(at, '#watchList .flag', 'textarea', 'addWatch');
       });
 
       row.appendChild(ta);
@@ -3520,6 +3530,26 @@
     b.setAttribute('aria-label', label);
     b.addEventListener('click', onClick);
     return b;
+  }
+
+  /* Where the keyboard goes when a row has been removed.
+   *
+   * Every list on this page is redrawn from nothing, so the button that was
+   * just pressed no longer exists and focus falls to <body> - the top of the
+   * document, which from line thirty-seven of a budget is the whole journey
+   * back. So the list says where to go instead: the first field of the row
+   * that took its place, the last row's if the one removed was the last, and
+   * the button that starts another when the list is now empty.
+   *
+   * Never the next delete button. A row goes without being asked twice and
+   * nothing brings it back, so a key held a moment too long would take the
+   * neighbour with it.
+   */
+  function focusAfterRemove(at, rowSel, fieldSel, addId) {
+    var rows = document.querySelectorAll(rowSel);
+    var row = rows[Math.min(at, rows.length - 1)];
+    var el = (row && row.querySelector(fieldSel)) || document.getElementById(addId);
+    if (el) el.focus();
   }
 
   document.getElementById('addWatch').addEventListener('click', function () {
@@ -3627,6 +3657,7 @@
           return (i.sponsors || []).indexOf(id) !== -1;
         }).length;
         if (attributed && !confirmLoss(t('sp.confirmdel', { n: attributed }))) return;
+        var at = Array.prototype.indexOf.call(row.parentNode.children, row);
         dropRow(state.sponsors, sp);
         state.budgetItems.forEach(function (i) {
           i.sponsors = (i.sponsors || []).filter(function (x) { return x !== id; });
@@ -3635,6 +3666,7 @@
         renderSponsors();
         renderBudgetTable();
         renderSplit();
+        focusAfterRemove(at, '#sponsorGrid .sponsor-row', '.code-input', 'addSponsor');
       });
 
       row.appendChild(code);
@@ -3929,6 +3961,10 @@
   function setByLabel(btn, item) {
     var codes = itemCodes(item);
     btn.textContent = codes.length ? codes.join(' · ') : t('sp.unassigned');
+    // "Rose" is a name, not an instruction. The column says what it means of
+    // it, and the visible text stays inside the label so voice control still
+    // reaches the button by what is written on it.
+    btn.setAttribute('aria-label', t('c.by') + ': ' + btn.textContent);
     btn.classList.toggle('none', !codes.length);
   }
 
@@ -4203,14 +4239,17 @@
     function uploadRow(u) {
       var li = document.createElement('li');
       li.className = 'files-row files-pending';
+      u.ui = null;
       var name = document.createElement('span');
       name.className = 'files-name';
       name.textContent = u.name;
       li.appendChild(name);
 
+      // Deliberately not a live region. One inserted with its text already in
+      // it is announced by nothing, and one that stays put while the number
+      // climbs would read out every percent of a slow upload.
       var status = document.createElement('span');
       status.className = 'files-meta';
-      status.setAttribute('role', 'status');
       li.appendChild(status);
 
       if (u.phase === 'failed') {
@@ -4231,12 +4270,17 @@
       } else if (u.phase === 'checking') {
         status.textContent = t('f.checking');
       } else {
-        var pct = u.size ? Math.min(100, Math.floor((u.sent / u.size) * 100)) : 0;
+        var pct = pctOf(u);
         status.textContent = t('f.sending', { n: pct });
         var bar = document.createElement('progress');
         bar.max = 100;
         bar.value = pct;
+        // The name is in the span beside it, which is near the bar without
+        // naming it: unlabelled, this is a percentage of nothing.
+        bar.setAttribute('aria-label', u.name);
         li.appendChild(bar);
+        // Kept so the next tick can move the bar where it stands.
+        u.ui = { status: status, bar: bar, pct: pct };
       }
       return li;
     }
@@ -4267,6 +4311,30 @@
   }
 
   function redrawFiles() { if (filesView) filesView.draw(); }
+
+  function pctOf(u) { return u.size ? Math.min(100, Math.floor((u.sent / u.size) * 100)) : 0; }
+
+  /* A bar that moves moves one number, and moves it where it already is.
+   *
+   * draw() parks focus on the popup and replaces every row in it. That is
+   * right when a row appears or goes, and wrong twenty times a second: it
+   * takes the keyboard off whatever was tabbed to, so "Add files" and "Try
+   * again" on another row cannot be pressed at all, and a button replaced
+   * between mousedown and mouseup never fires its click. Progress is the one
+   * change that alters nothing but a figure, so it is written in place -
+   * which is also why it is written only when the whole percent has moved.
+   */
+  function showProgress(u) {
+    var ui = u.ui;
+    // Not on the screen: no popup open, one open on another row, or one
+    // redrawn since. There is nothing to write to and nothing to rebuild for.
+    if (!ui || !ui.bar.isConnected) return;
+    var pct = pctOf(u);
+    if (pct === ui.pct) return;
+    ui.pct = pct;
+    ui.bar.value = pct;
+    ui.status.textContent = t('f.sending', { n: pct });
+  }
 
   function startUpload(kind, row, file) {
     var u = { key: fileKey(kind, row.id), name: file.name, size: file.size, sent: 0,
@@ -4317,7 +4385,7 @@
       xhr.upload.onprogress = function (e) {
         if (!e.lengthComputable) return;
         u.sent = e.loaded;
-        redrawFiles();
+        showProgress(u);
       };
       xhr.onload = function () {
         if (xhr.status >= 200 && xhr.status < 300) { confirmUpload(u, 0); return; }
@@ -4500,11 +4568,18 @@
     state.budgetItems.forEach(function (item) {
       var tr = document.createElement('tr');
 
-      function textCell(key, cls) {
+      /* `nameKey` is the column's heading, on the field rather than above it.
+       * A cell is named by the <th> above it only while the table is read as a
+       * table: tabbing along the row, and on a phone where the row is a card
+       * and the heading is not drawn at all, the field is announced with no
+       * name - three money spinners in a row and nothing saying which is
+       * which. So every field carries the name itself. */
+      function textCell(key, nameKey, cls) {
         var td = document.createElement('td');
         if (cls) td.className = cls;
         var inp = document.createElement('textarea');
         inp.rows = 1;
+        inp.setAttribute('aria-label', t(nameKey));
         inp.value = item[key] || '';
         inp.addEventListener('input', function () {
           item[key] = inp.value;
@@ -4518,12 +4593,13 @@
       // `hold` is the column's own limit, for the one figure here that is
       // neither money nor read back through a money parser: without it the
       // total on this screen is computed from a number the plan cannot store.
-      function numCell(key, step, hold) {
+      function numCell(key, nameKey, step, hold) {
         var td = document.createElement('td');
         td.className = 'num-cell';
         var inp = document.createElement('input');
         inp.type = 'number';
         inp.min = '0';
+        inp.setAttribute('aria-label', t(nameKey));
         if (step) inp.step = step;
         inp.value = Number(item[key]) || 0;
         inp.addEventListener('input', function () {
@@ -4537,17 +4613,22 @@
         return td;
       }
 
-      var tdItem = textCell('item', 'item-cell');
-      var tdUnit = numCell('unit', '1');
+      var tdItem = textCell('item', 'c.item', 'item-cell');
+      // Money steps by "any". A quote with cents is an ordinary quote, and a
+      // whole-unit step made every one of them a step mismatch: the browser
+      // then reports a good figure as invalid, which a screen reader reads
+      // out, and the spinner arrows round it away. The arrows still move by a
+      // whole unit either way.
+      var tdUnit = numCell('unit', 'c.unit', 'any');
       // Three decimals rather than whole cases: a third of a case and a
       // per-head figure divided out are both ordinary, and the column keeps
       // them.
-      var tdQty = numCell('qty', '0.001', toQty);
+      var tdQty = numCell('qty', 'c.qty', '0.001', toQty);
 
       var tdTotal = document.createElement('td');
       tdTotal.className = 'calc strong';
 
-      var tdPaid = numCell('paid', '1');
+      var tdPaid = numCell('paid', 'f.paid', 'any');
 
       var tdOwing = document.createElement('td');
       tdOwing.className = 'calc';
@@ -4565,7 +4646,7 @@
       });
       tdBy.appendChild(byBtn);
 
-      var tdNote = textCell('note', 'note-cell');
+      var tdNote = textCell('note', 'c.remarks', 'note-cell');
 
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
@@ -4590,11 +4671,13 @@
         if (filesUncounted(item.id)) {
           if (!confirmLoss(t('b.confirmdelunknown'))) return;
         } else if (files && !confirmLoss(t('b.confirmdel', { n: files }))) return;
+        var at = Array.prototype.indexOf.call(tr.parentNode.children, tr);
         dropRow(state.budgetItems, item);
         save();
         renderBudgetTable();
         renderBudgetTotals();
         renderOverview();
+        focusAfterRemove(at, '#budgetBody tr', 'textarea', 'addBudgetRow');
       }));
 
       addFilesButton(tdItem, 'budget', item);
@@ -4673,8 +4756,14 @@
    * change of status or date repaints one row and not the table under a
    * cursor. */
   function markTaskRow(tr, task) {
+    var late = !!task.due && task.status !== 'done' && String(task.due) < todayISO();
     tr.setAttribute('data-status', task.status || 'not-started');
-    tr.classList.toggle('late', !!task.due && task.status !== 'done' && String(task.due) < todayISO());
+    tr.classList.toggle('late', late);
+    // The alarm colour on the date is the only thing that says the day has
+    // passed, and a colour is neither read out nor kept in forced colours, so
+    // the field's own name carries the word as well.
+    var due = tr.querySelector('input[type="date"]');
+    if (due) due.setAttribute('aria-label', late ? t('k.due') + ', ' + t('k.late') : t('k.due'));
   }
 
   // How many of each, beside the filter that would show them.
@@ -4699,6 +4788,7 @@
       var tdName = document.createElement('td');
       var nameInput = document.createElement('input');
       nameInput.type = 'text';
+      nameInput.setAttribute('aria-label', t('k.task'));
       nameInput.value = task.name;
       nameInput.addEventListener('input', function () {
         task.name = nameInput.value;
@@ -4709,6 +4799,7 @@
       var tdOwner = document.createElement('td');
       var ownerInput = document.createElement('input');
       ownerInput.type = 'text';
+      ownerInput.setAttribute('aria-label', t('k.owner'));
       ownerInput.value = task.owner || '';
       ownerInput.addEventListener('input', function () {
         task.owner = ownerInput.value;
@@ -4720,6 +4811,7 @@
       var tdDue = document.createElement('td');
       var dueInput = document.createElement('input');
       dueInput.type = 'date';
+      dueInput.setAttribute('aria-label', t('k.due'));
       dueInput.value = task.due || '';
       dueInput.addEventListener('input', function () {
         task.due = dueInput.value;
@@ -4735,6 +4827,7 @@
       var tdStatus = document.createElement('td');
       var statusSelect = document.createElement('select');
       statusSelect.className = 'status-select';
+      statusSelect.setAttribute('aria-label', t('k.status'));
       Object.keys(STATUS_KEYS).forEach(function (key) {
         var opt = document.createElement('option');
         opt.value = key;
@@ -4748,7 +4841,14 @@
         markTaskRow(tr, task);
         renderTaskCounts();
         renderOverview();
-        if (currentFilter !== 'all') renderTasksTable();
+        if (currentFilter !== 'all') {
+          // The row has left the view this filter describes, so there is no
+          // row to go back to. The filter that excluded it is where the
+          // person is now standing.
+          renderTasksTable();
+          var pill = document.querySelector('#taskFilters .pill.active');
+          if (pill) pill.focus();
+        }
       });
       tdStatus.appendChild(statusSelect);
 
@@ -4759,20 +4859,24 @@
         if (filesUncounted(task.id)) {
           if (!confirmLoss(t('k.confirmdelunknown'))) return;
         } else if (files && !confirmLoss(t('k.confirmdel', { n: files }))) return;
+        var at = Array.prototype.indexOf.call(tr.parentNode.children, tr);
         dropRow(state.tasks, task);
         save();
         renderTasksTable();
         renderOverview();
+        focusAfterRemove(at, '#tasksBody tr', 'input', 'addTaskRow');
       }));
 
       addFilesButton(tdName, 'task', task);
-      markTaskRow(tr, task);
 
       tr.appendChild(tdName);
       tr.appendChild(tdOwner);
       tr.appendChild(tdDue);
       tr.appendChild(tdStatus);
       tr.appendChild(tdDel);
+      // After the cells are in it, because the mark reaches into the row for
+      // the date field it names.
+      markTaskRow(tr, task);
       body.appendChild(tr);
     });
     if (!shown) {
