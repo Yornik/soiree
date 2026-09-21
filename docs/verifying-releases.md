@@ -104,9 +104,12 @@ field carries the `version` that was asked for and the commit it was built
 from. A non-zero exit means the image is not signed by that identity, or is not
 the release you asked for — treat it as untrusted.
 
-The release workflow runs these same three commands against the image it just
+Each release workflow runs these same commands against the image it just
 pushed, and fails if any of them does, so this page cannot quietly drift out of
-step with what is actually published.
+step with what is actually published. Two of the three, to be exact: the
+exact-identity form for its own identity, against the digest and against the
+tag, and then the regexp form against the digest. The other workflow's identity
+is not one it could have signed with.
 
 Note the case: the repository is `Yornik/soiree`, so the certificate identity is
 capitalised, while the image path `ghcr.io/yornik/soiree` is lowercase because

@@ -123,7 +123,17 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 
 	mux.Handle(apiPrefix, noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), guarded)))
 
-	// Push is a subtree of its own rather than a hole in the guard above.
+	// The activity feed is an exact path rather than part of the subtree above,
+	// because its rule is stricter than the subtree's: admins only. Go's mux
+	// prefers the more specific pattern, so this is what answers a GET; any
+	// other method falls through to the subtree, which has no such route.
+	if s.auth != nil {
+		mux.Handle("GET "+apiPrefix+"activity",
+			noStore(s.auth.RequireRole(store.RoleAdmin)(http.HandlerFunc(s.serveActivity))))
+	}
+
+	// Push is a subtree of its own rather than a hole in the guard over
+	// apiPrefix.
 	//
 	// It already decides its own authorisation, and decides it differently on
 	// purpose: any live session may subscribe, because who *receives* a digest
@@ -135,15 +145,6 @@ func (s *Server) routeAPI(mux *http.ServeMux) {
 	// property of where the routes live rather than a path exception inside the
 	// middleware — the thing RequireWrite's own comment warns turns into an
 	// unguarded route later.
-	// The activity feed is an exact path rather than part of the subtree above,
-	// because its rule is stricter than the subtree's: admins only. Go's mux
-	// prefers the more specific pattern, so this is what answers a GET; any
-	// other method falls through to the subtree, which has no such route.
-	if s.auth != nil {
-		mux.Handle("GET "+apiPrefix+"activity",
-			noStore(s.auth.RequireRole(store.RoleAdmin)(http.HandlerFunc(s.serveActivity))))
-	}
-
 	push := http.NewServeMux()
 	s.routePush(push)
 	mux.Handle(apiPrefix+"push/", noStore(http.StripPrefix(strings.TrimSuffix(apiPrefix, "/"), push)))
@@ -665,7 +666,9 @@ func writeJSONCompressed(w http.ResponseWriter, r *http.Request, status int, pay
 func writeJSONBody(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json; charset=utf-8")
-	// Never cached: this is shared state that two people are editing.
+	// Never cached: this is shared state that two people are editing, and the
+	// accounts routes answer through here too, where everything is either a
+	// credential exchange or a list of accounts.
 	h.Set("Cache-Control", "no-store")
 
 	// A nil payload means a bodiless response — 204 from a delete, or a

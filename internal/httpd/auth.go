@@ -1505,8 +1505,6 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeJSON writes a response that no cache may keep. Everything on this
-// surface is either a credential exchange or an account list.
 func tooManyRequests(w http.ResponseWriter) {
 	// No Retry-After with a real number: the bucket refills continuously, and
 	// a precise answer would only help somebody pacing an attack against it.

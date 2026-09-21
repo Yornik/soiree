@@ -57,14 +57,19 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       # -timeout, because Go's default is ten minutes per package and
-      # internal/httpd reached it. Nothing hung: under the race detector that
-      # package took 522 s, then 554 s, and the activity tests took it past
-      # 600, where Go kills the binary and reports whichever test happened to
-      # be running - one second into it - as if it were the culprit. The
-      # limit has to be somewhere the suite is not. Why the package is that
-      # slow under -race is a separate question, and not the first guess:
-      # a fresh database and its migrations cost 0.23 s a test, measured,
-      # which is a twentieth of the total.
+      # internal/httpd reached it. Nothing hung: every test built a server of
+      # its own, and each one recompressed the embedded assets at the highest
+      # brotli and gzip settings, 8.4 s apiece under the race detector across
+      # about sixty-five tests. At the limit Go kills the binary and reports
+      # whichever test happened to be running - one second into it - as if it
+      # were the culprit, so the limit has to be somewhere the suite is not.
+      # eed4c0d made that compression happen once per process, keyed by the
+      # content (internal/httpd/assets.go), and the package now runs here in
+      # 60 to 90 s under -race, whichever runner it lands on. The headroom
+      # stays all the same: what it is for is keeping a suite that has merely
+      # grown slow from being reported as one unrelated test failing, and a
+      # return of that compression is caught by name in assets_cache_test.go
+      # rather than here.
       - run: go test -race -cover -coverprofile=cover.out -timeout 25m ./...
 
       # The percentages used to reach the log and nowhere else, so a drop
