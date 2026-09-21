@@ -2945,6 +2945,39 @@ test('a line moved up the grid is moved for everybody', async ({ page, request, 
 });
 
 /*
+ * And sorting the grid is not moving anything.
+ *
+ * A heading puts the lines in that column's order on the screen it was pressed
+ * on. `position` is untouched, so nothing is patched, nothing is sent, and the
+ * next person's grid is in the order they left it in.
+ */
+test('a column sorted on one screen is sorted on that screen only', async ({ page, request, browser }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await addBudgetLine(page, { item: 'Catering', unit: 45, qty: 40 });
+
+  const onTheServer = async () => (await apiPlan(request)).budgetItems.map((i) => i.item);
+  await expect.poll(onTheServer).toEqual(['Venue deposit', 'Catering']);
+
+  // 1800 before 2500: this screen is reading the column, not moving the lines.
+  await page.locator('#budgetTable thead th').nth(3).locator('button').click();
+  await expect(budgetRow(page, 0).item).toHaveValue('Catering');
+
+  const elsewhere = await browser.newContext({ baseURL: API_URL, serviceWorkers: 'block' });
+  const other = await elsewhere.newPage();
+  try {
+    await openSharedPlanner(other);
+    await gotoTab(other, 'budget');
+    await expect(budgetRow(other, 0).item).toHaveValue('Venue deposit');
+    await expect(budgetRow(other, 1).item).toHaveValue('Catering');
+  } finally {
+    await elsewhere.close();
+  }
+  expect(await onTheServer()).toEqual(['Venue deposit', 'Catering']);
+});
+
+/*
  * And the release that gave the page the order must not reorder anybody by
  * arriving.
  *

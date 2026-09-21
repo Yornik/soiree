@@ -513,6 +513,28 @@ the list: the two part company the moment a line is deleted, and numbering by
 the list would be a move of everybody's rows, made by a page nobody had
 touched.
 
+Reading the grid by a column is not that at all. Every heading that stands
+over something worth ordering (the item, the unit, the quantity, the three
+money columns, the cost-by and the remark) is a button, and pressing it runs
+the rows through that column: ascending, then descending, then the plan's own
+order again, so there is always a way back out. The column is read as what it
+is, money in whole minor units and words by `localeCompare` in the language
+the page is in, with the lines that have that column empty at the bottom
+whichever way round it is being read; two lines a column cannot tell apart
+keep the order the plan has them in. What it does not touch is `position`:
+nothing is saved, nothing is patched, and the next person's grid is in the
+order they left it. `aria-sort` on the header cell says which column and which
+way, and the line beside the search says it in words, because the rows are
+redrawn under a reader who is somewhere else on the page.
+
+The arrows are therefore off while a column is sorting the grid. Up and down
+mean the plan's own order, and a move renumbers the whole list from where the
+rows sit: made in a sorted view, one press would write that sort into
+everybody's plan from a button that says it moves one line. The way back is
+the third press on the heading, or the button beside the search, which is the
+only one of the two a phone has, because the heading row is not drawn below
+720px at all.
+
 The search above the grid is in none of that. It is a variable beside `state`
 and deliberately not in it, because everything in `state` is saved, sent and
 merged, and one person looking for the caterer must not narrow the grid for

@@ -511,6 +511,101 @@ test('a line moves up the grid, and the keyboard stays on the button that moved 
     .toEqual([['Venue deposit', 0], ['Flowers', 1], ['Catering', 2]]);
 });
 
+/*
+ * The third way around it: reading the grid in the order of a column.
+ *
+ * A sort is a view and nothing else. The order the plan is in is `position`,
+ * which is everybody's; the order a heading was pressed into is this screen's,
+ * so nothing here may reach `position` or leave the browser.
+ */
+const budgetOrder = (page) => page.locator('#budgetBody tr td:first-child textarea')
+  .evaluateAll((els) => els.map((el) => /** @type {HTMLTextAreaElement} */ (el).value));
+
+const sortStates = (page) => page.locator('#budgetTable thead th')
+  .evaluateAll((ths) => ths.map((th) => th.getAttribute('aria-sort')));
+
+test('a heading reads the grid in that column’s order and the plan keeps its own', async ({ page }) => {
+  // Three figures in an order that is none of the three: the plan has 1800,
+  // 2500, 300, so neither way round the column is read gives the plan back.
+  await addBudgetLine(page, { item: 'Catering', unit: 45, qty: 40, paid: 0 });
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 0 });
+  expect(await budgetOrder(page)).toEqual(['Catering', 'Venue deposit', 'Flowers']);
+
+  const committed = page.locator('#budgetTable thead th').nth(3);
+  const sorted = page.locator('#budgetSorted');
+  const off = page.locator('#budgetSortOff');
+
+  // Money sorts as money: as text "2,500" would lead and "300" would trail.
+  await committed.locator('button').click();
+  expect(await budgetOrder(page)).toEqual(['Flowers', 'Catering', 'Venue deposit']);
+  await expect(sorted).toHaveText('Sorted by Committed, lowest first');
+  // One column at a time, said where a reader is told it: on the header cell.
+  expect(await sortStates(page))
+    .toEqual(['none', 'none', 'none', 'ascending', 'none', 'none', 'none', 'none', null]);
+
+  await committed.locator('button').click();
+  expect(await budgetOrder(page)).toEqual(['Venue deposit', 'Catering', 'Flowers']);
+  await expect(sorted).toHaveText('Sorted by Committed, highest first');
+
+  // The arrows move a line in the plan's order, which is not the order on the
+  // screen, so they wait until it is back. The middle row is the control: it
+  // has somewhere to go both ways when nothing is sorting the grid.
+  await expect(budgetRow(page, 1).moveUp).toBeDisabled();
+  await expect(budgetRow(page, 1).moveDown).toBeDisabled();
+
+  // Three presses and back where it started, and the way out is also a button
+  // of its own: a phone draws no heading row at all to press a third time.
+  await expect(off).toBeVisible();
+  await committed.locator('button').click();
+  expect(await budgetOrder(page)).toEqual(['Catering', 'Venue deposit', 'Flowers']);
+  await expect(sorted).toBeEmpty();
+  await expect(off).toBeHidden();
+  await expect(budgetRow(page, 1).moveUp).toBeEnabled();
+  expect(await sortStates(page)).toEqual(
+    ['none', 'none', 'none', 'none', 'none', 'none', 'none', 'none', null],
+  );
+
+  // And the button hands the keyboard back to the heading the order came from.
+  await committed.locator('button').click();
+  await off.click();
+  await expect(committed.locator('button')).toBeFocused();
+
+  // The plan is where it was throughout: `position` is what is saved, sent and
+  // merged, and a way of reading the ledger must not write it.
+  await flushToStorage(page);
+  const stored = await readStored(page);
+  expect(stored.budgetItems.map((i) => [i.item, i.position]))
+    .toEqual([['Catering', 0], ['Venue deposit', 1], ['Flowers', 2]]);
+});
+
+test('words sort as words, the unfilled lines sink, and the keyboard does all of it', async ({ page }) => {
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await addBudgetLine(page, { item: '', unit: 0, qty: 1 });
+  await addBudgetLine(page, { item: 'Catering', unit: 45, qty: 40 });
+
+  const item = page.locator('#budgetTable thead th').nth(0).locator('button');
+
+  // The heading is static markup, so the press that redraws every row leaves
+  // the keyboard on it: a second Enter is the other way round the column.
+  await item.focus();
+  await page.keyboard.press('Enter');
+  expect(await budgetOrder(page)).toEqual(['Catering', 'Venue deposit', '']);
+  await expect(page.locator('#budgetSorted')).toHaveText('Sorted by Item, A to Z');
+
+  await page.keyboard.press('Enter');
+  // A line nobody has named yet is not the last word alphabetically, it is an
+  // unfilled one: it stays at the bottom whichever way the column is read.
+  expect(await budgetOrder(page)).toEqual(['Venue deposit', 'Catering', '']);
+  await expect(page.locator('#budgetSorted')).toHaveText('Sorted by Item, Z to A');
+
+  // A new line is empty, so a sorted grid would put it at an end nobody is
+  // looking at. Adding one puts the grid back the way the search does.
+  await page.locator('#addBudgetRow').click();
+  await expect(page.locator('#budgetSorted')).toBeEmpty();
+  expect(await budgetOrder(page)).toEqual(['Venue deposit', '', 'Catering', '']);
+});
+
 test('the search shows the lines that match and leaves the totals alone', async ({ page }) => {
   await addSponsor(page, { code: 'North', name: 'Ada' });
   await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });

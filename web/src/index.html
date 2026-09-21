@@ -323,21 +323,49 @@
         <datalist id="budgetNames"></datalist>
       </div>
       <p class="grid-count" id="budgetShown" role="status"></p>
+      <!-- The order the grid is being read in, and the way back out of it.
+           Both sit here rather than by the headings that set them, because a
+           phone draws no heading row at all: this row is the one place a sort
+           can be seen and undone at every width. -->
+      <p class="grid-count" id="budgetSorted" role="status"></p>
+      <button class="ghost-btn sort-off" type="button" id="budgetSortOff" data-i18n="b.sortoff" hidden>Plan’s order</button>
     </div>
 
     <div class="table-wrap">
       <table class="budget" id="budgetTable">
         <colgroup id="budgetCols"></colgroup>
         <thead>
+          <!-- Every heading that means something is a button: a press reads
+               the grid in that column's order, on this screen alone. The key
+               sits on a span inside rather than on the th, because
+               applyStrings() writes textContent and on the th that would take
+               the button (and the resize handle) with it. app.js matches each
+               button to a column by the place its th sits in this row. -->
           <tr>
-            <th scope="col" data-i18n="c.item">Item</th>
-            <th scope="col" class="right"><span data-i18n="c.unit">Unit</span> (<span class="cur-code">–</span>)</th>
-            <th scope="col" class="right" data-i18n="c.qty">Qty</th>
-            <th scope="col" class="right" data-i18n="f.committed">Committed</th>
-            <th scope="col" class="right" data-i18n="f.paid">Paid</th>
-            <th scope="col" class="right" data-i18n="f.outstanding">Outstanding</th>
-            <th scope="col" data-i18n="c.by">Cost by</th>
-            <th scope="col" data-i18n="c.remarks">Remarks</th>
+            <th scope="col" aria-sort="none">
+              <button type="button" class="sort-btn"><span data-i18n="c.item">Item</span><span class="sort-mark"></span></button>
+            </th>
+            <th scope="col" class="right" aria-sort="none">
+              <button type="button" class="sort-btn"><span data-i18n="c.unit">Unit</span> (<span class="cur-code">–</span>)<span class="sort-mark"></span></button>
+            </th>
+            <th scope="col" class="right" aria-sort="none">
+              <button type="button" class="sort-btn"><span data-i18n="c.qty">Qty</span><span class="sort-mark"></span></button>
+            </th>
+            <th scope="col" class="right" aria-sort="none">
+              <button type="button" class="sort-btn"><span data-i18n="f.committed">Committed</span><span class="sort-mark"></span></button>
+            </th>
+            <th scope="col" class="right" aria-sort="none">
+              <button type="button" class="sort-btn"><span data-i18n="f.paid">Paid</span><span class="sort-mark"></span></button>
+            </th>
+            <th scope="col" class="right" aria-sort="none">
+              <button type="button" class="sort-btn"><span data-i18n="f.outstanding">Outstanding</span><span class="sort-mark"></span></button>
+            </th>
+            <th scope="col" aria-sort="none">
+              <button type="button" class="sort-btn"><span data-i18n="c.by">Cost by</span><span class="sort-mark"></span></button>
+            </th>
+            <th scope="col" aria-sort="none">
+              <button type="button" class="sort-btn"><span data-i18n="c.remarks">Remarks</span><span class="sort-mark"></span></button>
+            </th>
             <th scope="col"><span class="sr-only" data-i18n="c.rowtools">Order and remove</span></th>
           </tr>
         </thead>
