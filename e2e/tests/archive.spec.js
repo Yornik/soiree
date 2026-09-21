@@ -13,7 +13,7 @@
  * has nothing to do with the archive.
  */
 const { test, expect } = require('@playwright/test');
-const { STORAGE_KEY, gotoTab, money, readSponsorGrid, readStored } = require('./helpers');
+const { STORAGE_KEY, expectAmount, gotoTab, money, readSponsorGrid, readStored } = require('./helpers');
 
 // The fixture instance is dated 2030-06-12.
 const EVENT_DAY = '2030-06-12T09:00:00Z';
@@ -206,12 +206,19 @@ test('a closed ledger offers nothing to edit, but everything to read', async ({ 
   // and copyable — which is most of what an archive is for.
   const cell = page.locator('#budgetBody tr').first().locator('td').nth(1).locator('input');
   await expect(cell).toHaveAttribute('readonly', '');
-  await expect(cell).toHaveValue('2000');
+  await expectAmount(cell, 2000);
   // The user's own path: put the caret in the field and type. A readonly input
   // takes focus and takes nothing else.
   await cell.click();
   await page.keyboard.type('9999');
-  await expect(cell).toHaveValue('2000');
+  await expectAmount(cell, 2000);
+  // And leaving it again says nothing. A money field shows the currency while
+  // nobody is typing in it and the bare figure while somebody is; one nobody
+  // can type in stays as it is drawn, rather than being read back as though
+  // it had been typed and marked as a figure the page cannot understand.
+  await cell.blur();
+  await expectAmount(cell, 2000);
+  await expect(cell).not.toHaveAttribute('aria-invalid', 'true');
 
   await expect(page.locator('#splitEvenly')).toBeDisabled();
   await expect(page.locator('#budgetBody .by-btn').first()).toBeDisabled();

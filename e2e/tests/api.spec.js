@@ -59,6 +59,7 @@ const {
   addTask,
   apiPlan,
   budgetRow,
+  expectAmount,
   expectFigures,
   flushToStorage,
   gotoTab,
@@ -117,7 +118,7 @@ test('an edit reaches the server, and from there the next person', async ({ page
 
     await gotoTab(other, 'budget');
     await expect(budgetRow(other, 0).item).toHaveValue('Venue deposit');
-    await expect(budgetRow(other, 0).paid).toHaveValue('500');
+    await expectAmount(budgetRow(other, 0).paid, 500);
   } finally {
     await elsewhere.close();
   }
@@ -156,14 +157,14 @@ test('an edit crosses to the other browser with nobody reloading', async ({ page
     // The other sees it appear. Not a figure they had to ask for, not after a
     // reload: the row, the money on it, and the headline totals it moves.
     await expect(budgetRow(other, 0).item).toHaveValue('Venue deposit', { timeout: 15_000 });
-    await expect(budgetRow(other, 0).paid).toHaveValue('500');
+    await expectAmount(budgetRow(other, 0).paid, 500);
     await expectFigures(other, { committed: 2500, paid: 500, outstanding: 2000, forecast: 2500 });
 
     // And it travels the other way, on a row that already exists. The caret
     // goes somewhere harmless first, for the reason in the comment above.
     await page.locator('#ceilingInput').click();
     await budgetRow(other, 0).unit.fill('2600');
-    await expect(budgetRow(page, 0).unit).toHaveValue('2600', { timeout: 15_000 });
+    await expectAmount(budgetRow(page, 0).unit, 2600, { timeout: 15_000 });
     await expectFigures(page, { committed: 2600, paid: 500, outstanding: 2100, forecast: 2600 });
 
     // Including the removal. A line that is gone has to *go*: a delete
@@ -355,7 +356,7 @@ test("someone else's edit to the same line is merged, not overwritten", async ({
   // so the rebuild waits rather than interrupting.
   await page.locator('#ceilingInput').click();
   await expect(budgetRow(page, 0).note).toHaveValue('Deposit already wired');
-  await expect(budgetRow(page, 0).unit).toHaveValue('2500');
+  await expectAmount(budgetRow(page, 0).unit, 2500);
 });
 
 /*
@@ -420,7 +421,7 @@ test("someone else's edit that arrives before ours is taken in without a word", 
   // earlier would be asserting nothing.
   await expect(page.locator('#dataMsg')).not.toHaveText(/Both sets of changes have been kept/);
   await expect(budgetRow(page, 0).note).toHaveValue('Deposit already wired');
-  await expect(budgetRow(page, 0).unit).toHaveValue('2500');
+  await expectAmount(budgetRow(page, 0).unit, 2500);
 });
 
 /*
@@ -1004,7 +1005,7 @@ test('a create answered a second time keeps the correction somebody else made me
   // was answered late is told their line was written by somebody else rather
   // than left to notice it in the total.
   await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
-  await expect(budgetRow(page, 0).unit).toHaveValue('250');
+  await expectAmount(budgetRow(page, 0).unit, 250);
   await expect(page.locator('#dataMsg')).toHaveText(/Both sets of changes have been kept/);
   await expectFigures(page, { committed: 250, paid: 0, outstanding: 250, forecast: 250 });
   await expect
@@ -1082,7 +1083,7 @@ test('a create answered a second time also keeps what was typed here while it wa
   // on the screen and then on the plan: the correction goes up as the patch
   // that follows, at the revision their note gave the line.
   await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
-  await expect(budgetRow(page, 0).unit).toHaveValue('2600');
+  await expectAmount(budgetRow(page, 0).unit, 2600);
   await expect(budgetRow(page, 0).note).toHaveValue('invoice attached');
   await expectFigures(page, { committed: 2600, paid: 0, outstanding: 2600, forecast: 2600 });
   await expect
@@ -1203,7 +1204,7 @@ test('an edit made while the origin is away is still there after a reload, and g
   await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
   await page.reload();
   await gotoTab(page, 'budget');
-  await expect(budgetRow(page, 0).paid).toHaveValue('750');
+  await expectAmount(budgetRow(page, 0).paid, 750);
   await expect(budgetRow(page, 1).item).toHaveValue('Flowers');
   await expect(page.locator('#dataMsg')).toHaveText(/not reaching the server/, { timeout: 15_000 });
 
@@ -1594,7 +1595,7 @@ test('a session that ends mid-edit asks for a sign-in, and the edit goes up afte
       message: 'the edit made while signed out should go up on sign-in, without being edited again',
     })
     .toEqual(['750.00']);
-  await expect(budgetRow(page, 0).paid).toHaveValue('750');
+  await expectAmount(budgetRow(page, 0).paid, 750);
 });
 
 test('a refused write opens the sign-in screen by itself, without asking the server a second time', async ({ page, request }) => {
@@ -1782,7 +1783,7 @@ test('a reopened tab that was edited while signed out does not overwrite a week 
       message: 'only what was edited here should go up; the rest is a week out of date',
     })
     .toEqual([['Venue deposit', '750.00', 'The Orangery', '2600.00']]);
-  await expect(budgetRow(page, 0).unit).toHaveValue('2600');
+  await expectAmount(budgetRow(page, 0).unit, 2600);
 });
 
 /*
@@ -1863,7 +1864,7 @@ test('signing out removes this browser\'s copy of the plan, and signing in bring
   await signInThroughTheForm(page, request, 'linus');
   await gotoTab(page, 'budget');
   await expect(budgetRow(page, 0).item).toHaveValue('Venue deposit');
-  await expect(budgetRow(page, 0).paid).toHaveValue('500');
+  await expectAmount(budgetRow(page, 0).paid, 500);
 });
 
 // Found in production on the first day: an admin signed out and back in,
@@ -2026,7 +2027,7 @@ test('signing out with changes that never reached the server asks first', async 
   await signOutButton(page).click();
   await expect.poll(() => asked).toContain('have not reached the server');
   await expect(page.locator('body')).toHaveClass(/signed-in/);
-  await expect(budgetRow(page, 0).paid).toHaveValue('750');
+  await expectAmount(budgetRow(page, 0).paid, 750);
   expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toContain('750');
 
   // Accepted: it is their planner and their decision.
