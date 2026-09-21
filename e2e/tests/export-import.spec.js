@@ -225,3 +225,50 @@ test('a file that is not planner data is refused, and nothing is lost', async ({
   await expect(page.locator('#dataMsg')).toHaveText('Could not read that file.');
   expect(dialogs).toEqual([]);
 });
+
+/*
+ * The copy an import takes on its way through is the only way back: the
+ * server keeps no undo, and the files on the rows it removes are in neither
+ * the export nor the backup. The dialog says the copy has been taken, and a
+ * browser that cannot make a blob for it (a quota, an extension in the way)
+ * made that a promise the page did not keep, then replaced the planner
+ * anyway. The export button has always reported the same failure.
+ */
+test('an import whose copy cannot be saved replaces nothing', async ({ page }, testInfo) => {
+  // Where downloadPlan fails. A download the person cancels does not throw
+  // and is not this case.
+  await page.addInitScript(() => {
+    URL.createObjectURL = () => { throw new Error('no object URLs here'); };
+  });
+  await buildPlanner(page);
+
+  const incoming = testInfo.outputPath('replacement.json');
+  await fs.writeFile(
+    incoming,
+    JSON.stringify({
+      ceiling: 999,
+      inflationPct: 0,
+      fxRate: 0,
+      splitEvenly: false,
+      sponsors: [],
+      budgetItems: [{ id: 'b1', item: 'Something else entirely', unit: 1, qty: 1, paid: 0, sponsors: [], note: '' }],
+      tasks: [],
+      notes: [],
+    }),
+  );
+
+  const dialogs = watchDialogs(page, 'accept');
+  const chooserPromise = page.waitForEvent('filechooser');
+  await page.locator('#importData').click();
+  await (await chooserPromise).setFiles(incoming);
+
+  await expect.poll(() => dialogs.length, { message: 'import must ask before replacing' }).toBe(1);
+  await expect(page.locator('#dataMsg'))
+    .toHaveText('Could not export automatically — copy the JSON from the console instead.');
+
+  // Said yes to a replacement that did not happen, which is the right way
+  // round: the planner is still here and so is the way back to it.
+  await expect(page.locator('#ceilingInput')).toHaveValue('10000');
+  await expect(page.locator('#budgetBody tr')).toHaveCount(2);
+  await expectFigures(page, { committed: 4000, paid: 500, outstanding: 3500, forecast: 4160 });
+});

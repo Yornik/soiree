@@ -4879,7 +4879,13 @@
         if (keepCopy) parts.push(t('d.confirmcopy'));
         parts.push(t('d.confirm'));
         if (!confirmLoss(parts.join(' '))) return;
-        if (keepCopy) downloadPlan();
+        // The copy is the way back from a replacement the server keeps no undo
+        // of, and the dialog they have just agreed to says it was taken. A
+        // browser that would not make the blob has not taken it, so the
+        // replacement stops here rather than proceeding on a promise nobody
+        // kept. Reported in the words the export button uses, because the
+        // fallback is the same one: the planner is in the console.
+        if (keepCopy && !downloadPlan()) { flash(t('d.exportfail')); return; }
 
         // `forgotten` is cleared here because this path calls flushSave()
         // directly and save() is the only other place that clears it. On a
