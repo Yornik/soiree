@@ -1285,6 +1285,14 @@ body.is-archived .when-data { display: block; }
   /* A step above the 16px floor the touch block gives every other field, so
      the item still leads the entry rather than merely matching it. */
   table.budget td.item-cell textarea { font-size: 18px; font-weight: 600; }
+  /* The vendor-and-date button is the last thing on the line the item leads,
+     not a mark over it. It cannot stay where it sits on a desk: this cell is
+     out of the frozen column here and is no longer a containing block, so an
+     absolutely placed button would land in the same corner of the panel for
+     every line, one on top of the next. Written to outrank the touch block
+     below, which a phone matches too. */
+  table.budget tbody td.item-cell .det-btn { position: static; }
+  table.budget tbody td.item-cell textarea { width: auto; flex: 1 1 auto; }
   table.budget textarea { height: auto; min-height: 44px; }
   table.budget tbody td.calc { padding: 2px 0; }
   table.budget td.empty-cell { display: block; min-height: 0; padding: 18px 0; }
@@ -1387,13 +1395,14 @@ body.is-archived .when-data { display: block; }
   .del-btn { min-width: 44px; min-height: 44px; }
   .files-btn { min-width: 44px; height: 44px; top: 0; right: 0; justify-content: center; }
   td.has-files textarea, td.has-files input[type="text"] { width: calc(100% - 48px); }
-  /* Stacked, the entry is a flex line and the button is simply the last thing
-     on it. It cannot stay where it is on a desk: the cell drops out of the
-     frozen column here and stops being a containing block, which would put
-     every line's button in the same corner of the panel, one on top of the
-     next. */
-  .det-btn { position: static; min-width: 44px; height: 44px; }
-  table.budget td.item-cell textarea { width: auto; flex: 1 1 auto; }
+  /* A thumb's worth of button, and the name gives up the width for it. This
+     block is also the one a touchscreen laptop matches at full width, where
+     the grid is still a grid, so the reservation belongs here rather than
+     with the stacking. */
+  .det-btn { min-width: 44px; height: 44px; }
+  table.budget td.item-cell textarea { width: calc(100% - 48px); }
+  table.budget td.item-cell.has-files textarea { width: calc(100% - 96px); }
+  table.budget td.item-cell.has-files .det-btn { right: 48px; }
   /* The item leads its entry and the fields below it carry labels of their
      own, so the popup's do not need the small print they get on a desk. */
   .det-pop .det-field { font-size: 13px; }

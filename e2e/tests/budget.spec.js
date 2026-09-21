@@ -296,6 +296,28 @@ test('the grid keeps the width a five-figure amount and a five-word remark need'
   expect(await row.note.evaluate((el) => el.scrollHeight)).toBe(oneLine);
 });
 
+/*
+ * A touchscreen laptop answers yes to (pointer: coarse) at a width where the
+ * grid is still a grid, and the suite's other browsers never do. That is why
+ * the rule giving the button a thumb's worth of target and the rules that
+ * unwind the entry on a phone are in different media blocks: applied here,
+ * the stacking put the button on a line of its own inside the cell and made
+ * every line 44px taller.
+ */
+test.describe('on a touchscreen at desk width', () => {
+  test.use({ hasTouch: true });
+
+  test('the button sits beside the item name, not under it', async ({ page }) => {
+    const row = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 0 });
+    const name = await row.item.boundingBox();
+    const btn = await row.details.boundingBox();
+
+    // Beside: on the same line as the name, and clear of its right edge.
+    expect(btn.y).toBeLessThan(name.y + name.height);
+    expect(name.x + name.width).toBeLessThanOrEqual(btn.x);
+  });
+});
+
 test('a figure with cents is a valid figure, not one the browser calls invalid', async ({ page }) => {
   // The same 45.33 the line above reckons with. The field used to declare a
   // step of one whole unit, which makes every price with cents a step
