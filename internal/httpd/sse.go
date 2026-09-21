@@ -476,6 +476,45 @@ func changeFrame(n store.ChangeNotice) ([]byte, bool) {
 	return fmt.Appendf(nil, "event: change\ndata: %s\n\n", body), true
 }
 
+// helloFrame names the build that is answering this stream.
+//
+// A planner is opened once and then left open for days, so nothing in the page
+// learns that the deployment changed under it. The shell and its scripts are
+// revalidated on the next visit, and a tab nobody revisits goes on running the
+// JavaScript it started with, which is how a fix that shipped a week ago still
+// has not reached somebody. The stream is the one thing here that notices a
+// deploy without being asked: it drops when the old process goes away and is
+// reopened against the new one, so a build named on every open arrives exactly
+// when it changes and costs one frame per connection.
+//
+// What a client does with it is its own business, and one that ignores the
+// frame is no worse off than before: an unknown event name is dropped by
+// EventSource rather than mistaken for a change.
+//
+// `version` is the release, the same string GET /version answers; this stream
+// is behind the same session guard, so it discloses nothing that endpoint does
+// not. `build` is the content-hashed URL of the page's script, which is the
+// only build id a page can compare against itself, because it is written into
+// the shell it loaded. That is also why naming it here gives away nothing: it
+// is in the public shell already.
+//
+// Not pre-encoded with the frames above, because unlike them it varies: the
+// release is set at link time and the script belongs to this server's assets.
+// One open is one tab rather than one change, so encoding it here is free.
+func (s *Server) helloFrame() ([]byte, bool) {
+	body, err := json.Marshal(struct {
+		Version string `json:"version"`
+		Build   string `json:"build"`
+	}{Version: Version, Build: s.assets.URL("app.js")})
+	if err != nil {
+		// Two strings cannot fail to marshal. A stream is worth more than the
+		// notice it opens with, so the impossible case costs the frame rather
+		// than the connection.
+		return nil, false
+	}
+	return fmt.Appendf(nil, "event: hello\ndata: %s\n\n", body), true
+}
+
 // withJitter spreads retries so that several replicas losing the database at
 // the same moment do not all reconnect on the same tick.
 func withJitter(d time.Duration) time.Duration {
@@ -551,11 +590,19 @@ func (s *Server) serveEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Two frames before anything else: the reconnect interval, and a standing
-	// instruction to refetch. Every connection starts by assuming the client's
-	// copy of the plan is stale, because it usually is — and because that one
-	// rule is the whole of what a client has to do about missed events.
-	if !writeFrame(rc, w, retryFrame) || !writeFrame(rc, w, resyncFrame) {
+	// Three frames before anything else: the reconnect interval, which build is
+	// answering, and a standing instruction to refetch. Every connection starts
+	// by assuming the client's copy of the plan is stale, because it usually is
+	// — and because that one rule is the whole of what a client has to do about
+	// missed events. The hello comes before the resync so that a page knows
+	// which build will answer the read it is about to make.
+	if !writeFrame(rc, w, retryFrame) {
+		return
+	}
+	if hello, ok := s.helloFrame(); ok && !writeFrame(rc, w, hello) {
+		return
+	}
+	if !writeFrame(rc, w, resyncFrame) {
 		return
 	}
 

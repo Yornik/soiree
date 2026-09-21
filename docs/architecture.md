@@ -1434,17 +1434,36 @@ Three properties everything is arranged around:
   changes and is told to refetch on connect, rather than being handed a cursor
   that implies the gap can be filled.
 
-Every connection therefore opens with two frames: the reconnect interval, and a
-`resync` telling the client its copy of the plan is stale. It usually is, and
-that one rule is the whole of what a client has to do about missed events. A
-`resync` is also broadcast whenever the listening connection is re-established —
-without it, a client that stayed connected through a failover would keep a stale
-plan indefinitely, which is the precise failure this feature exists to prevent.
+Every connection therefore opens with three frames: the reconnect interval, a
+`hello` naming the build that is answering, and a `resync` telling the client
+its copy of the plan is stale. It usually is, and that one rule is the whole of
+what a client has to do about missed events. A `resync` is also broadcast
+whenever the listening connection is re-established — without it, a client that
+stayed connected through a failover would keep a stale plan indefinitely, which
+is the precise failure this feature exists to prevent.
 
-Events are named (`change`, `resync`) rather than default, so a client registers
-for each separately and an unknown future event name is ignored by an old client
-instead of being mistaken for a change. A `change` frame carries the notice
-described under *Change fan-out*.
+`hello` carries `version` and `build`: the release, and the content-hashed URL
+of the page's script. A planner is opened once and then left open for days, so
+nothing else in the page ever learns that the deployment changed under it. The
+shell is revalidated on the next visit and a tab nobody revisits keeps running
+the JavaScript it started with, which is how a fix that shipped a week ago has
+still not reached somebody. The stream is the one thing that notices a deploy
+without being asked, because it drops with the old process and is reopened
+against the new one. The build id is the script URL rather than a hash of its
+own, because that is the only identifier a page can compare against itself: it
+is written into the shell it loaded. Both values are already readable by a
+signed-in caller, through `GET /version` and the shell itself, and the stream
+is behind the same session guard, so the frame discloses nothing new. The page
+does not read the frame yet; a notice saying the site was updated, which leaves
+the reload to the reader, is the other half of it. A notice rather than a
+reload for the reason the `notificationclick` handler in `sw.js` gives: nothing
+here may take away the screen somebody is on, and whatever they were half way
+through typing with it.
+
+Events are named (`change`, `resync`, `hello`) rather than default, so a client
+registers for each separately and an unknown future event name is ignored by an
+old client instead of being mistaken for a change. A `change` frame carries the
+notice described under *Change fan-out*.
 
 Two mechanics exist for the network in between rather than for this
 application. A comment is written into an idle stream every 20 seconds, because

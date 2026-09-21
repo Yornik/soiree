@@ -1050,7 +1050,7 @@ paths:
         The stream carries identifiers. It never carries a row. Every event
         ends in the same act: call `GET /plan` again, and merge the answer.
 
-        The stream carries two event names. Register for each by name. The
+        The stream carries three event names. Register for each by name. The
         server sends nothing as the default `message` event.
 
         `change` carries a `ChangeNotice`: the entity, the id, the action and
@@ -1060,6 +1060,14 @@ paths:
         arrives on every connect. It arrives again when the server connects to
         the database again, because changes happened in that gap and nobody
         announced them. There is no replay and no `Last-Event-ID`.
+
+        `hello` carries `version` and `build`: the release, and the URL of the
+        page's script as this build serves it. It arrives on every connect,
+        before the `resync`. Compare `build` with the script you are running.
+        They differ when the deployment changed under an open page, which is
+        the only way a page that is never reloaded finds out. Say so, and
+        leave the reload to the reader: reloading by yourself takes away what
+        they were typing.
 
         ## The rule a client obeys
 
@@ -1111,6 +1119,21 @@ paths:
                 resync:
                   type: object
                   maxProperties: 0
+                hello:
+                  type: object
+                  additionalProperties: false
+                  required: [version, build]
+                  properties:
+                    version:
+                      type: string
+                      description: The release, as `GET /version` answers it.
+                      example: 1.2.1
+                    build:
+                      type: string
+                      description: |
+                        The URL of the page's script in this build. Compare it
+                        with the script you are running.
+                      example: /assets/app.7d3801be.js
               schema:
                 type: string
                 description: |
@@ -1119,6 +1142,9 @@ paths:
                 examples:
                   - |
                     retry: 3000
+
+                    event: hello
+                    data: {"version":"1.2.1","build":"/assets/app.7d3801be.js"}
 
                     event: resync
                     data: {}

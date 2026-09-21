@@ -492,16 +492,25 @@ curl -N -b cookies.txt -H 'Accept: text/event-stream' \
 
 The stream is under the same guard, so without the cookie jar this is a `401`
 and nothing is opened. With it, a working stream answers immediately with a
-retry interval and a `resync`, then a `: ping` comment every twenty seconds:
+retry interval, a `hello` and a `resync`, then a `: ping` comment every twenty
+seconds:
 
 ```
 retry: 3000
+
+event: hello
+data: {"version":"1.2.1","build":"/assets/app.7d3801be.js"}
 
 event: resync
 data: {}
 
 : ping
 ```
+
+The `hello` names the build answering this connection: the release, and the
+script the page it serves would load. Two pods of the same build are
+indistinguishable in it, so it says which build a client reached during a
+rollout rather than which pod.
 
 Change something through the API from another terminal and an `event: change`
 frame should appear within the same second. The server logs
