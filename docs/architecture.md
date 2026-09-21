@@ -1520,8 +1520,13 @@ whatever subscription already exists rather than minting a new one, and the
 correct client posts on every page load. Both endpoints require a session: a
 subscription belongs to an account, and an unauthenticated `POST` here would be
 an open invitation to fill the table. The endpoint must be an absolute `https`
-URL, which is also the line that stops an authenticated account from pointing
-the digest sender at something inside the network.
+URL whose host is not `localhost` and not a loopback, private, link-local or
+unspecified address: the digest run posts to whatever is stored, from inside
+the network this server runs in, so the account that stores a row must not
+choose a target on that network. Written addresses only — a name that resolves
+to a private address still passes, and `internal/push` follows redirects — so
+it is a fence rather than a wall, and what it leaves is a push service reached
+over the public internet.
 
 **`404` or `410` from a push service means permanently gone, and the row must be
 deleted.** Storage was cleared, the app was uninstalled, permission was revoked,
