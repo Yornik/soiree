@@ -2,6 +2,7 @@
 #
 #   docker compose up --build
 #   -> http://localhost:8080
+#   -> sign in at /#/login as admin@example.test / local-development-only
 #
 # The database is deliberately ephemeral. Its data directory is a tmpfs, so
 # `docker compose down` leaves nothing behind and every run starts from the
@@ -42,6 +43,24 @@ services:
       SOIREE_EVENT_NAME: Development Instance
       SOIREE_EVENT_TAGLINE: Local stack, disposable data
       SOIREE_DEMO_DATA: "true"
+      # A DSN mounts the API, every route under it needs a session, and
+      # accounts are made by admins. Without these two the stack therefore
+      # comes up as a planner nobody can sign in to, which is what it was for
+      # several releases. Both are consumed only while no admin exists, so a
+      # restart against a database that already has one changes nothing.
+      #
+      # Writing a password down is safe here and nowhere else: this database is
+      # a tmpfs that `docker compose down` throws away, the stack answers on
+      # localhost, and the line is published in a public repository, so
+      # everybody already knows it. A real deployment picks its own and
+      # replaces it once it is in; docs/operating.md says how.
+      SOIREE_BOOTSTRAP_ADMIN: admin@example.test
+      SOIREE_BOOTSTRAP_PASSWORD: local-development-only
+      # The origin set-password links are built against, and the domain a
+      # passkey is scoped to. `localhost` rather than 127.0.0.1: a relying
+      # party id is a domain, an address is not one, and the server would
+      # leave passkeys off rather than guess.
+      SOIREE_BASE_URL: http://localhost:8080
     ports:
       - "8080:8080"
     depends_on:
