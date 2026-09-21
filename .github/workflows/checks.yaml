@@ -92,9 +92,10 @@ jobs:
   #
   # Blocking, like every other job here, and with no retry budget. The app is
   # static, makes no third-party requests and has no animation, so the usual
-  # sources of browser-test flake are absent; every wait in the suite is on a
-  # condition rather than on a clock. A job that is allowed to fail is a job
-  # nobody reads, and an unread test is a deleted test. If it ever does turn
+  # sources of browser-test flake are absent; waits are on a condition rather
+  # than on a clock wherever there is a condition to wait for, and
+  # playwright.config.js says what the rest are. A job that is allowed to fail
+  # is a job nobody reads, and an unread test is a deleted test. If it turns
   # flaky, `continue-on-error: true` here is the honest stopgap — better than
   # papering over it with retries.
   #
