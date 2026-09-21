@@ -15,9 +15,12 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // PasskeyCeremony names which half of the protocol a challenge was minted for.
@@ -70,28 +73,62 @@ const passkeyCredentialColumns = `id, user_id, credential_id, public_key, sign_c
 	transports, attestation_type, attestation_format, backup_eligible, backup_state,
 	user_present, user_verified, label, created_at, last_used_at`
 
+// recordCredentialChange appends the account's history entry for a credential
+// arriving or going.
+//
+// The shape is the one RevokeCredentials writes, so that the three things that
+// can happen to somebody's credentials read as one kind of event: a single
+// field that is no column of `users`, saying what the act did and nothing
+// about which credential it was, and no revision, because the account's own
+// revision does not move. Null on the old side for the same reason it is there
+// — the entry makes no claim about what the account had before.
+func recordCredentialChange(ctx context.Context, tx pgx.Tx, userID uuid.UUID, what json.RawMessage, actor Actor) error {
+	return insertChange(ctx, tx, EntityUsers, userID, ChangeUpdate, nil,
+		changeSet{"credentials": {Old: jsonNull, New: what}}, actor)
+}
+
 // CreatePasskeyCredential records a registered authenticator.
 //
 // A credential id that is already registered — to this account or to any other
 // — is a unique violation rather than a second row. Use IsUniqueViolation to
 // tell that case from a real failure.
+//
+// A second way into an account is a change to the account, so the account's
+// history gets an entry in the same transaction. It is worth having precisely
+// because registering needs a live session and nothing else: a credential can
+// appear on an account whose owner never registered one, and the activity is
+// the only screen that would say so. What the entry says is that one appeared,
+// never which — there is no admin view of anybody's passkeys, and an entry
+// naming the device would be one.
 func (s *Store) CreatePasskeyCredential(ctx context.Context, in PasskeyCredential) (PasskeyCredential, error) {
-	return queryOne[PasskeyCredential](ctx, s.pool, "passkey_credentials",
-		`INSERT INTO passkey_credentials
-		   (user_id, credential_id, public_key, sign_count, aaguid, transports,
-		    attestation_type, attestation_format, backup_eligible, backup_state,
-		    user_present, user_verified, label)
-		 VALUES ($1, $2, $3, $4,
-		         -- An authenticator may decline to identify its model, and one
-		         -- may report no transports at all. Both are absences rather
-		         -- than nulls, and the columns say so; COALESCE is what lets the
-		         -- caller pass the nil slice it was handed without translating.
-		         COALESCE($5::bytea, '\x'::bytea), COALESCE($6::text[], '{}'::text[]),
-		         $7, $8, $9, $10, $11, $12, $13)
-		 RETURNING `+passkeyCredentialColumns,
-		in.UserID, in.CredentialID, in.PublicKey, in.SignCount, in.AAGUID, in.Transports,
-		in.AttestationType, in.AttestationFormat, in.BackupEligible, in.BackupState,
-		in.UserPresent, in.UserVerified, in.Label)
+	// The account the credential is being added to, which is whose session it
+	// was rather than a claim about who was sitting at it.
+	who := resolveActor(ctx, &in.UserID)
+	return inTx(ctx, s, func(tx pgx.Tx) (PasskeyCredential, error) {
+		row, err := queryOne[PasskeyCredential](ctx, tx, "passkey_credentials",
+			`INSERT INTO passkey_credentials
+			   (user_id, credential_id, public_key, sign_count, aaguid, transports,
+			    attestation_type, attestation_format, backup_eligible, backup_state,
+			    user_present, user_verified, label)
+			 VALUES ($1, $2, $3, $4,
+			         -- An authenticator may decline to identify its model, and one
+			         -- may report no transports at all. Both are absences rather
+			         -- than nulls, and the columns say so; COALESCE is what lets the
+			         -- caller pass the nil slice it was handed without translating.
+			         COALESCE($5::bytea, '\x'::bytea), COALESCE($6::text[], '{}'::text[]),
+			         $7, $8, $9, $10, $11, $12, $13)
+			 RETURNING `+passkeyCredentialColumns,
+			in.UserID, in.CredentialID, in.PublicKey, in.SignCount, in.AAGUID, in.Transports,
+			in.AttestationType, in.AttestationFormat, in.BackupEligible, in.BackupState,
+			in.UserPresent, in.UserVerified, in.Label)
+		if err != nil {
+			return PasskeyCredential{}, err
+		}
+		if err := recordCredentialChange(ctx, tx, in.UserID, json.RawMessage(`"added"`), who); err != nil {
+			return PasskeyCredential{}, err
+		}
+		return row, nil
+	})
 }
 
 // PasskeyCredentials lists one account's credentials, oldest first so the list
@@ -121,16 +158,26 @@ func (s *Store) PasskeyCredentialByCredentialID(ctx context.Context, credentialI
 // somebody else owns matches no rows and comes back as ErrNotFound, which is
 // also the answer for an id that never existed. One response for both, so this
 // cannot be used to find out which of the two it was.
+//
+// Recorded like the registration, and in the same transaction, so that a way
+// into an account arriving and leaving are both in the history rather than
+// only the arrival. A refusal records nothing: there was no change to report,
+// and an entry would say a credential left an account that still has it.
 func (s *Store) DeletePasskeyCredential(ctx context.Context, userID, id uuid.UUID) error {
-	n, err := s.exec(ctx, "passkey_credentials",
-		`DELETE FROM passkey_credentials WHERE id = $1 AND user_id = $2`, id, userID)
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return notFoundErr("passkey_credentials")
-	}
-	return nil
+	who := resolveActor(ctx, &userID)
+	_, err := inTx(ctx, s, func(tx pgx.Tx) (struct{}, error) {
+		var done struct{}
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM passkey_credentials WHERE id = $1 AND user_id = $2`, id, userID)
+		if err != nil {
+			return done, fmt.Errorf("passkey_credentials: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return done, notFoundErr("passkey_credentials")
+		}
+		return done, recordCredentialChange(ctx, tx, userID, json.RawMessage(`"removed"`), who)
+	})
+	return err
 }
 
 // TouchPasskeyCredential records a successful assertion: the counter the

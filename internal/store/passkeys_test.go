@@ -1,7 +1,9 @@
 package store_test
 
 import (
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +160,101 @@ func TestPasskeyCredentialCannotBeDeletedByAnotherAccount(t *testing.T) {
 	}
 	if _, err := s.PasskeyCredentialByCredentialID(t.Context(), []byte("ada-phone")); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("passkey survived its owner deleting it: %v", err)
+	}
+}
+
+// A credential is a way into an account, so adding one changes how that
+// account can be signed in to. The screen somebody reads to find out what has
+// happened to an account is the activity, and what it has to say here is that
+// a credential appeared and on whose account, in the shape a revocation
+// already uses.
+func TestRegisteringAPasskeyIsRecorded(t *testing.T) {
+	s := newStore(t)
+	ada := seedAccount(t, s, "ada@example.test")
+
+	seedPasskey(t, s, ada.ID, "ada-phone", "Ada's phone")
+
+	entries := history(t, s, store.EntityUsers, ada.ID)
+	if len(entries) != 2 {
+		t.Fatalf("history has %d entries, want the create and the registration", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != store.ChangeUpdate {
+		t.Errorf("action = %q, want update", entry.Action)
+	}
+	if entry.ActorID == nil || *entry.ActorID != ada.ID {
+		t.Errorf("actor = %v, want the account the credential was added to", entry.ActorID)
+	}
+	if entry.Revision != nil {
+		t.Errorf("revision = %d, want none: no column of the account moved", *entry.Revision)
+	}
+	added, recorded := entry.Changes["credentials"]
+	if !recorded {
+		t.Fatalf("the entry does not say what was done: %v", entry.Changes)
+	}
+	if asString(t, added.New) != "added" {
+		t.Errorf("credentials = %s, want added", added.New)
+	}
+	// One field and no more, as for a revocation: there is no admin view of
+	// anybody's passkeys, and an entry naming the device would be one.
+	if len(entry.Changes) != 1 {
+		t.Errorf("the entry records %d fields, want the one: %v", len(entry.Changes), entry.Changes)
+	}
+	// Neither the label its owner chose nor the identifier the authenticator
+	// reported, both of which carry "phone" here.
+	blob, err := json.Marshal(entry.Changes)
+	if err != nil {
+		t.Fatalf("marshal the recorded change: %v", err)
+	}
+	if strings.Contains(string(blob), "phone") {
+		t.Errorf("the entry describes the credential: %s", blob)
+	}
+}
+
+// The other side of the same question, and the one somebody asks after a
+// credential goes missing from their account.
+func TestRemovingAPasskeyIsRecorded(t *testing.T) {
+	s := newStore(t)
+	ada := seedAccount(t, s, "ada@example.test")
+	grace := seedAccount(t, s, "grace@example.test")
+	row := seedPasskey(t, s, ada.ID, "ada-phone", "Ada's phone")
+
+	// A refused deletion is not a change to anybody: an entry for it would say
+	// a credential left an account that still has it.
+	if err := s.DeletePasskeyCredential(t.Context(), grace.ID, row.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Grace deleting Ada's passkey: %v, want ErrNotFound", err)
+	}
+	if entries := history(t, s, store.EntityUsers, grace.ID); len(entries) != 1 {
+		t.Fatalf("Grace's history has %d entries, want her create alone", len(entries))
+	}
+	if entries := history(t, s, store.EntityUsers, ada.ID); len(entries) != 2 {
+		t.Fatalf("Ada's history has %d entries, want the create and the registration", len(entries))
+	}
+
+	if err := s.DeletePasskeyCredential(t.Context(), ada.ID, row.ID); err != nil {
+		t.Fatalf("Ada deleting her own passkey: %v", err)
+	}
+
+	entries := history(t, s, store.EntityUsers, ada.ID)
+	if len(entries) != 3 {
+		t.Fatalf("history has %d entries, want the create, the registration and the removal", len(entries))
+	}
+	entry := entries[0]
+	if entry.Action != store.ChangeUpdate {
+		t.Errorf("action = %q, want update", entry.Action)
+	}
+	if entry.ActorID == nil || *entry.ActorID != ada.ID {
+		t.Errorf("actor = %v, want the account the credential was removed from", entry.ActorID)
+	}
+	removed, recorded := entry.Changes["credentials"]
+	if !recorded {
+		t.Fatalf("the entry does not say what was done: %v", entry.Changes)
+	}
+	if asString(t, removed.New) != "removed" {
+		t.Errorf("credentials = %s, want removed", removed.New)
+	}
+	if len(entry.Changes) != 1 {
+		t.Errorf("the entry records %d fields, want the one: %v", len(entry.Changes), entry.Changes)
 	}
 }
 
