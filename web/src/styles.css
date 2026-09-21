@@ -1610,6 +1610,55 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   .auth-link-out input, .person-role, .person-language { font-size: 16px; }
 }
 
+/* --- A forced palette ---
+   Windows High Contrast and the rest of them throw every colour on this page
+   away and redraw it in the four or five the person chose. Everything said
+   with a background or a box-shadow stops being said: three tabs underlined
+   alike, filter and theme pills that all look off, a language switch with no
+   language marked, and a run-up with no line, no marks and no bars under the
+   figures. The figures themselves are text and come through untouched, which
+   is why this is a dozen declarations rather than a second stylesheet.
+
+   System colours only, because the palette is the reader's: Canvas and
+   CanvasText are the page, Highlight and HighlightText are their own colour
+   for "this is the one", ButtonText is the ink of a control.
+
+   The two rules that turn the forcing off do so because the browser draws a
+   backplate in the canvas colour behind every run of text here, to keep text
+   over a picture readable. Text we have deliberately set to the colour of the
+   fill behind it lands on that plate instead and disappears: the name of the
+   filter that is on, and the count inside a mark that stands for several
+   dates. forced-color-adjust is inherited, so the name hanging off a mark
+   asks for the forcing back. */
+@media (forced-colors: active) {
+  .tab-btn { border-bottom-color: Canvas; }
+  .tab-btn.active { border-bottom-color: Highlight; }
+  .pill.active { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  /* The language in use is marked by a box-shadow, and a box-shadow is not
+     drawn here at all. */
+  .flag-btn[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: 1px; }
+
+  .runup-line, .runup-tick, .runup-leader { background: CanvasText; }
+  .runup-mark { forced-color-adjust: none; background: ButtonText; color: Canvas; }
+  .runup-mark .runup-label { forced-color-adjust: auto; }
+  /* Late is a ring around today rather than a mark of its own, so it takes
+     neither the fill above nor the alarm colour it is drawn in on a page that
+     has colours to spend: no fill, and the reader's own ink for the ring. */
+  .runup-mark.late { forced-color-adjust: auto; background: none; }
+  .runup-today { background: Highlight; }
+
+  /* A length says nothing without the whole it is a length of, and the tint
+     those are drawn in is a background like any other. */
+  .moneybar, .gauge-track, .split-list .share { border: 1px solid CanvasText; }
+  .moneybar-paid, .gauge-fill, .split-list .share-fill { background: Highlight; }
+  /* Two colours are all there are, so they go where a bar holds two lengths
+     that have to be told apart: paid from owed, and a sponsor's share from
+     what nobody has taken on. A ceiling that has been crossed is named twice
+     because it is drawn in the alarm colour, which outranks the rest. */
+  .moneybar-owed, .moneybar-ceiling, .moneybar-ceiling.over,
+  .split-list .share-fill.unassigned { background: CanvasText; }
+}
+
 /* --- Paper ---
    A plan is a record, and what people do with a record is print it: hand a
    copy to the venue, keep one with the receipts, post one to the relative who
