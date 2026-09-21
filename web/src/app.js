@@ -293,8 +293,14 @@
       'c.lockhint': 'The date the decision has to be made, not the date the money moves.',
       'c.remarks': 'Remarks',
       'c.remove': 'Remove',
+      'c.rowtools': 'Order and remove',
       't.totals': 'Totals',
       'b.empty': 'No budget lines yet. Add the first one below.',
+      'b.nomatch': 'No lines match that search.',
+      'b.search': 'Search lines',
+      'b.shown': '{a} of {b} lines',
+      'b.up': 'Move line up',
+      'b.down': 'Move line down',
       'b.add': 'Add budget line',
       'b.reset': 'Reset column & row sizes',
       'b.del': 'Remove budget line',
@@ -464,8 +470,14 @@
       'c.lockhint': 'De datum waarop de knoop doorgehakt moet zijn, niet de datum waarop er betaald wordt.',
       'c.remarks': 'Opmerkingen',
       'c.remove': 'Verwijderen',
+      'c.rowtools': 'Volgorde en verwijderen',
       't.totals': 'Totaal',
       'b.empty': 'Nog geen posten. Voeg hieronder de eerste toe.',
+      'b.nomatch': 'Geen posten die daarop passen.',
+      'b.search': 'Posten zoeken',
+      'b.shown': '{a} van {b} posten',
+      'b.up': 'Post omhoog',
+      'b.down': 'Post omlaag',
       'b.add': 'Post toevoegen',
       'b.reset': 'Kolom- en rijafmetingen herstellen',
       'b.del': 'Post verwijderen',
@@ -634,8 +646,14 @@
       'c.lockhint': 'Tanggal keputusan harus diambil, bukan tanggal uangnya keluar.',
       'c.remarks': 'Catatan',
       'c.remove': 'Hapus',
+      'c.rowtools': 'Urutan dan hapus',
       't.totals': 'Total',
       'b.empty': 'Belum ada baris anggaran. Tambahkan yang pertama di bawah.',
+      'b.nomatch': 'Tidak ada baris yang cocok dengan pencarian itu.',
+      'b.search': 'Cari baris',
+      'b.shown': '{a} dari {b} baris',
+      'b.up': 'Naikkan baris',
+      'b.down': 'Turunkan baris',
       'b.add': 'Tambah baris anggaran',
       'b.reset': 'Atur ulang ukuran kolom & baris',
       'b.del': 'Hapus baris anggaran',
@@ -1182,6 +1200,22 @@
     state = emptyState();
   }
 
+  /* Where a budget line sits, for a row saved before the order was a field of
+   * its own, which is every line any browser is holding as this release
+   * arrives and every line in a file exported by one.
+   *
+   * The base is asked first and the list second, and it matters which: the
+   * base holds the number the server gave the row, and numbering a row the
+   * server put at 7 by where it sits in a list two deletions shorter is a move
+   * of somebody else's line, made by a page nobody has touched. A row the base
+   * has never heard of has only where it sits, which is also the order it was
+   * drawn in and therefore the right answer for it.
+   */
+  function positionFor(id, at) {
+    var known = savedBase && savedBase.budgetItems ? savedBase.budgetItems[id] : null;
+    return known && known.row && typeof known.row.position === 'number' ? known.row.position : at;
+  }
+
   /* Normalise anything missing or malformed, whether from an older save or a
    * hand-edited import. A function rather than the run-once block this used to
    * be, because the import is the other way in and had grown a shorter repair
@@ -1212,8 +1246,9 @@
     // then, and one minted after it would have every line stripped off it.
     s.sponsors.forEach(function (sp) { if (!sp.id) sp.id = uid('s'); });
     s.tasks.forEach(function (k) { if (!k.id) k.id = uid('t'); });
-    s.budgetItems.forEach(function (i) {
+    s.budgetItems.forEach(function (i, at) {
       if (!i.id) i.id = uid('b');
+      if (typeof i.position !== 'number') i.position = positionFor(i.id, at);
       if (!Array.isArray(i.sponsors)) i.sponsors = [];
       i.sponsors = i.sponsors.filter(function (id) {
         return s.sponsors.some(function (sp) { return sp.id === id; });
@@ -1425,10 +1460,14 @@
     },
     {
       key: 'budgetItems', route: 'budget-items', entity: 'budget_items', container: 'budgetBody',
+      // `position` is a field here and nowhere else, because this is the one
+      // table with an interface for it. A field is all it takes: moving a line
+      // is then a patch of one number that merges, carries a revision and
+      // reaches the next person exactly as a price does.
       fields: [
         textField('item'), moneyField('unit'), qtyField('qty'),
         moneyField('paid'), textField('note'), idsField('sponsors'),
-        textField('vendor'), dateField('lockBy')
+        textField('vendor'), dateField('lockBy'), numberField('position')
       ],
       render: function () { renderBudgetTable(); renderBudgetTotals(); renderOverview(); }
     },
@@ -1483,6 +1522,30 @@
   function dropRow(list, row) {
     var i = list.indexOf(row);
     if (i !== -1) list.splice(i, 1);
+  }
+
+  /* The order the server reads a collection in, which is `position, id`.
+   *
+   * The page has to sort for itself after a merge: a row somebody else added
+   * arrives on the end of the list whatever its number says, and a row
+   * somebody else moved is a number that changed under a list that did not.
+   * The tie-break is the server's own rather than array order, because two
+   * rows can hold the same position (the column has no unique constraint, and
+   * a row created through the API without one sits at 0), and two browsers
+   * drawing that pair in different orders is two people reading a different
+   * ledger.
+   *
+   * Answers whether anything actually moved, so that a merge which changed no
+   * order does not rebuild a table somebody is reading.
+   */
+  function sortByPosition(list) {
+    var was = list.slice();
+    list.sort(function (a, b) {
+      var d = (Number(a.position) || 0) - (Number(b.position) || 0);
+      if (d) return d;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    return was.some(function (r, at) { return r !== list[at]; });
   }
 
   /* ---------- Wire <-> page ---------- */
@@ -1782,7 +1845,11 @@
     // could not change would carry the refused values up again for ever.
     var body = {};
     c.fields.forEach(function (f) { body[f.name] = f.wire(row); });
-    body.position = nextPosition(c);
+    // A collection that draws its own order carries `position` as a field, so
+    // the row's own number is already in the body above and asking for one
+    // here would put the row somewhere else than where it was added. The rest
+    // have no interface for it and need the end of the list.
+    if (!fieldNamed(c, 'position')) body.position = nextPosition(c);
     body.id = createKeyFor(op.id);
 
     // The row as it was posted the first time, kept because a retry's body
@@ -2923,6 +2990,10 @@
         touched[c.key] = c;
         return false;
       });
+      // Only where the order is a field of the row: elsewhere the list is the
+      // order, and sorting one by a number no interface writes would shuffle
+      // it by id.
+      if (fieldNamed(c, 'position') && sortByPosition(state[c.key])) touched[c.key] = c;
       shadow[c.key] = now;
     });
 
@@ -4415,7 +4486,10 @@
     editingLocked = on;
     var wrap = document.querySelector('.wrap');
     Array.prototype.forEach.call(wrap.querySelectorAll('input, textarea, select'), function (el) {
-      if (el.id === 'importFile') return;
+      // The search is a way of reading the ledger rather than somewhere to
+      // write in it, so a closed one keeps it: a box that takes no typing is
+      // worse than no box at all.
+      if (el.id === 'importFile' || el.id === 'budgetSearch') return;
       if (el.tagName === 'SELECT' || el.type === 'checkbox') el.disabled = on;
       else el.readOnly = on;
     });
@@ -5294,13 +5368,162 @@
     body.appendChild(tr);
   }
 
+  /* ---------- Looking for one line among forty ----------
+   * Not in `state`, and deliberately: everything in there is saved, sent and
+   * merged, so a search box kept in it would narrow the grid for everybody
+   * else in the plan.
+   */
+  var budgetSearch = '';
+
+  function shownBudgetItems() {
+    if (!budgetSearch) return state.budgetItems.slice();
+    return state.budgetItems.filter(function (item) { return lineMatches(item); });
+  }
+
+  /* What a line answers to. The item and the remark are written on it, the
+   * vendor is behind the details button, and the callsigns are whoever is
+   * covering it, so that "everything with this caterer" and "everything I am
+   * paying for" are both a name typed into one box.
+   */
+  function lineMatches(item) {
+    var hay = [item.item, item.note, item.vendor].concat(itemCodes(item));
+    (item.sponsors || []).forEach(function (id) {
+      var sp = sponsorById(id);
+      if (sp) hay.push(sp.name);
+    });
+    return hay.join('\n').toLowerCase().indexOf(budgetSearch) !== -1;
+  }
+
+  // The names already on the lines, offered to the search rather than typed
+  // out: a callsign is then one keystroke, and a vendor written once is not
+  // written a second, slightly different way the search will never join up.
+  function budgetNames() {
+    var out = [];
+    function add(name) {
+      var s = String(name == null ? '' : name).trim();
+      if (s && out.indexOf(s) === -1) out.push(s);
+    }
+    state.sponsors.forEach(function (sp) { add(sp.code); });
+    state.budgetItems.forEach(function (item) { add(item.vendor); });
+    return out;
+  }
+
+  function renderBudgetTools(shown) {
+    var names = document.getElementById('budgetNames');
+    names.innerHTML = '';
+    budgetNames().forEach(function (name) {
+      var option = document.createElement('option');
+      option.value = name;
+      names.appendChild(option);
+    });
+    // Only while something is hidden: a count against every line of the grid
+    // is a figure that says nothing and one more thing to read past.
+    setText('budgetShown', budgetSearch ? t('b.shown', { a: shown, b: state.budgetItems.length }) : '');
+  }
+
+  var budgetSearchBox = document.getElementById('budgetSearch');
+  budgetSearchBox.addEventListener('input', function () {
+    budgetSearch = budgetSearchBox.value.trim().toLowerCase();
+    renderBudgetTable();
+  });
+
+  function clearBudgetSearch() {
+    if (!budgetSearch) return;
+    budgetSearch = '';
+    budgetSearchBox.value = '';
+  }
+
+  /* ---------- Putting the lines in an order ----------
+   * Up and down rather than a drag. A drag wants a pointer, a library and a
+   * table that is not scrolling sideways under it; two buttons are reachable
+   * from the keyboard, which is where a grid of forty lines is worked anyway.
+   */
+  function moveIcon(up) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 12 8');
+    svg.setAttribute('width', '11');
+    svg.setAttribute('height', '7');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    var path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', up ? 'M1 6.2 6 1.6 11 6.2' : 'M1 1.8 6 6.4 11 1.8');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.7');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  // An arrow is a fine thing to look at and a useless one to hear, so each of
+  // these carries a real name, the way the delete does.
+  function moveButton(item, delta, atTheEnd) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'mv-btn ' + (delta < 0 ? 'mv-up' : 'mv-down');
+    b.appendChild(moveIcon(delta < 0));
+    b.title = t(delta < 0 ? 'b.up' : 'b.down');
+    b.setAttribute('aria-label', b.title);
+    b.disabled = atTheEnd;
+    b.addEventListener('click', function () { moveLine(item, delta); });
+    return b;
+  }
+
+  function moveLine(item, delta) {
+    var shown = shownBudgetItems();
+    var at = shown.indexOf(item);
+    var to = at + delta;
+    if (at === -1 || to < 0 || to >= shown.length) return;
+
+    // Past the neighbour that can be seen, which is not always the neighbour
+    // in the list: a line the search is hiding keeps the place it had, because
+    // the renumber below walks the plan in its own order and not this one.
+    var list = state.budgetItems;
+    var target = shown[to];
+    dropRow(list, item);
+    list.splice(list.indexOf(target) + (delta > 0 ? 1 : 0), 0, item);
+
+    // A renumber of the whole list rather than a swap of two numbers. Two rows
+    // can hold the same position (the column has no unique constraint, and a
+    // row created through the API without one sits at 0), so swapping a pair
+    // of equal numbers moves nothing. Only the rows whose number really
+    // changed become a patch, which for a move of one line is two of them.
+    list.forEach(function (row, i) { row.position = i; });
+    save();
+    renderBudgetTable();
+    focusMoveButton(item, delta);
+  }
+
+  /* The table is drawn again from nothing, so the button that was pressed no
+   * longer exists and focus falls to <body>, which from line thirty-seven of
+   * a budget is the whole journey back. Moving a line two places is the usual
+   * case, so the keyboard goes to the same button on the row that moved; where
+   * that one has arrived at the end of the list it is disabled and cannot take
+   * focus, and the one pointing back takes it instead.
+   */
+  function focusMoveButton(item, delta) {
+    var tr = document.querySelectorAll('#budgetBody tr')[shownBudgetItems().indexOf(item)];
+    if (!tr) return;
+    var same = tr.querySelector(delta < 0 ? '.mv-up' : '.mv-down');
+    var back = tr.querySelector(delta < 0 ? '.mv-down' : '.mv-up');
+    var el = same && !same.disabled ? same : back;
+    if (el) el.focus();
+  }
+
   function renderBudgetTable() {
     var body = document.getElementById('budgetBody');
     body.innerHTML = '';
+    var shown = shownBudgetItems();
     if (!state.budgetItems.length) {
       emptyRow(body, 9, t('b.empty'));
+    } else if (!shown.length) {
+      // A grid that has gone empty under a search reads as a planner that has
+      // lost the lines, unless it says which of the two this is.
+      emptyRow(body, 9, t('b.nomatch'));
     }
-    state.budgetItems.forEach(function (item) {
+    shown.forEach(function (item, at) {
       var tr = document.createElement('tr');
 
       /* `nameKey` is the column's heading, on the field rather than above it.
@@ -5397,8 +5620,19 @@
       label(tdOwing, 'f.outstanding');
       label(tdBy, 'c.by');
       label(tdNote, 'c.remarks');
-      label(tdDel, 'c.remove');
-      tdDel.appendChild(delButton(t('b.del'), function () {
+      // Three buttons under one heading now, which is what the heading says.
+      // A phone draws this cell as the foot of the entry, where that heading
+      // is the only thing naming what the three of them are for.
+      label(tdDel, 'c.rowtools');
+      var tools = document.createElement('div');
+      tools.className = 'row-tools';
+      var stack = document.createElement('div');
+      stack.className = 'mv-stack';
+      stack.appendChild(moveButton(item, -1, at === 0));
+      stack.appendChild(moveButton(item, 1, at === shown.length - 1));
+      tools.appendChild(stack);
+      tdDel.appendChild(tools);
+      tools.appendChild(delButton(t('b.del'), function () {
         // The row's files go with it, out of the plan and then out of the
         // bucket, and they are in neither the export nor the backup. Asked
         // either way where they cannot be counted: the delete is queued
@@ -5435,6 +5669,7 @@
       attachRowGrip(tdItem, tr, item);
       refreshRow(tr, item);
     });
+    renderBudgetTools(shown.length);
     relock();
     syncEmptyState();
     fitBudgetText();
@@ -5475,10 +5710,28 @@
     return !!item.lockBy && !(Number(item.paid) || 0) && String(item.lockBy) < todayISO();
   }
 
+  // After every line there is, rather than the length of the list: the two
+  // part company the moment a plan holds a row the API created without a
+  // position of its own.
+  function endPosition(list) {
+    var max = -1;
+    list.forEach(function (row) {
+      var p = Number(row.position) || 0;
+      if (p > max) max = p;
+    });
+    return max + 1;
+  }
+
   document.getElementById('addBudgetRow').addEventListener('click', function () {
+    // A new line is empty, so it answers to no search: leaving one on would
+    // make this a button that adds a line nobody can see or type into.
+    clearBudgetSearch();
     state.budgetItems.push({
       id: uid('b'), item: '', unit: 0, qty: 1, paid: 0,
-      sponsors: [], note: '', vendor: '', lockBy: ''
+      sponsors: [], note: '', vendor: '', lockBy: '',
+      // The end of the order, which is the end of the list only until
+      // somebody moves a line.
+      position: endPosition(state.budgetItems)
     });
     save();
     renderBudgetTable();

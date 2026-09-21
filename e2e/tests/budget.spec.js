@@ -12,7 +12,7 @@
 const { test, expect } = require('@playwright/test');
 const {
   addBudgetLine, addSponsor, budgetRow, expectFigures, flushToStorage, gotoTab, money,
-  openLineDetails, openPlanner, tagLine,
+  openLineDetails, openPlanner, readStored, tagLine,
 } = require('./helpers');
 const { BASE_URL } = require('../servers');
 
@@ -467,5 +467,102 @@ test('who is covering what is drawn as shares, and a line paid in full says so',
   expect(await settled()).toEqual([true, true]);
   await budgetRow(page, 0).paid.fill('2999');
   expect(await settled()).toEqual([false, true]);
+});
+
+/*
+ * Finding your way around a grid of forty lines.
+ *
+ * Both controls below are drawn from what the plan already holds: the order is
+ * the `position` every row has carried since the schema did, and the names the
+ * search offers are the ones typed onto the lines themselves.
+ */
+test('a line moves up the grid, and the keyboard stays on the button that moved it', async ({ page }) => {
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await addBudgetLine(page, { item: 'Catering', unit: 45, qty: 40 });
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1 });
+
+  const order = () => page.locator('#budgetBody tr td:first-child textarea')
+    .evaluateAll((els) => els.map((el) => /** @type {HTMLTextAreaElement} */ (el).value));
+  expect(await order()).toEqual(['Venue deposit', 'Catering', 'Flowers']);
+
+  // The line added last is the one that has to be able to leave the bottom.
+  await budgetRow(page, 2).moveUp.click();
+  expect(await order()).toEqual(['Venue deposit', 'Flowers', 'Catering']);
+
+  // The table is drawn again from nothing on every move, so moving a line two
+  // places means the focus has to come with it. Enter rather than a second
+  // click: a mouse would find the button wherever it had landed.
+  await page.keyboard.press('Enter');
+  expect(await order()).toEqual(['Flowers', 'Venue deposit', 'Catering']);
+
+  // At the top there is nowhere up to go, and the same at the bottom.
+  await expect(budgetRow(page, 0).moveUp).toBeDisabled();
+  await expect(budgetRow(page, 2).moveDown).toBeDisabled();
+
+  await budgetRow(page, 0).moveDown.click();
+  expect(await order()).toEqual(['Venue deposit', 'Flowers', 'Catering']);
+
+  // The order is the plan's rather than this table's: what is kept is a number
+  // on every row, which is the number the API carries.
+  await flushToStorage(page);
+  const stored = await readStored(page);
+  expect(stored.budgetItems.map((i) => [i.item, i.position]))
+    .toEqual([['Venue deposit', 0], ['Flowers', 1], ['Catering', 2]]);
+});
+
+test('the search shows the lines that match and leaves the totals alone', async ({ page }) => {
+  await addSponsor(page, { code: 'North', name: 'Ada' });
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await addBudgetLine(page, { item: 'Catering', unit: 45, qty: 40, note: 'Per head' });
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 300 });
+  await tagLine(budgetRow(page, 0), ['North']);
+  const details = await openLineDetails(budgetRow(page, 1));
+  await details.vendor.fill('Rosewood Kitchen');
+  await page.keyboard.press('Escape');
+  await expect(details.pop).toHaveCount(0);
+
+  const rows = page.locator('#budgetBody tr:not(:has(td.empty-cell))');
+  const search = page.locator('#budgetSearch');
+
+  await search.fill('flow');
+  await expect(rows).toHaveCount(1);
+  await expect(page.locator('#budgetShown')).toHaveText('1 of 3 lines');
+
+  // The figures are the plan's and not the screen's: a search is a way of
+  // reading the ledger, never a way of changing what it comes to.
+  await expectFigures(page, { committed: 4600, paid: 800, outstanding: 3800, forecast: 4600 });
+
+  // A name typed onto a line finds it: the vendor behind the details button,
+  // and the callsign of whoever is covering it.
+  await search.fill('rosewood');
+  await expect(rows).toHaveCount(1);
+  await expect(budgetRow(page, 0).item).toHaveValue('Catering');
+  await search.fill('North');
+  await expect(rows).toHaveCount(1);
+  await expect(budgetRow(page, 0).item).toHaveValue('Venue deposit');
+
+  // Those names are offered rather than remembered, so a second line with the
+  // same vendor is one keystroke instead of a second spelling of it.
+  expect(await page.locator('#budgetNames option')
+    .evaluateAll((os) => os.map((o) => /** @type {HTMLOptionElement} */ (o).value)))
+    .toEqual(['North', 'Rosewood Kitchen']);
+
+  // Nothing matching says so where the rows were, rather than reading like a
+  // planner that has lost them.
+  await search.fill('zzz');
+  await expect(rows).toHaveCount(0);
+  await expect(page.locator('#budgetBody .empty-cell')).toHaveText('No lines match that search.');
+
+  await search.fill('');
+  await expect(rows).toHaveCount(3);
+  await expect(page.locator('#budgetShown')).toBeEmpty();
+
+  // A new line is empty and answers to no search, so adding one puts the grid
+  // back rather than adding a line nobody can see or type into.
+  await search.fill('flow');
+  await expect(rows).toHaveCount(1);
+  await page.locator('#addBudgetRow').click();
+  await expect(rows).toHaveCount(4);
+  await expect(search).toHaveValue('');
 });
 

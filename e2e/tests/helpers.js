@@ -64,7 +64,11 @@ function budgetRow(page, index) {
     by: row.locator('td').nth(6).locator('button.by-btn'),
     note: row.locator('td').nth(7).locator('textarea'),
     details: row.locator('td').nth(0).locator('button.det-btn'),
-    remove: row.locator('td').nth(8).locator('button'),
+    // Three buttons share the last cell now, so each is asked for by name
+    // rather than by being the only one there.
+    moveUp: row.locator('td').nth(8).locator('button.mv-up'),
+    moveDown: row.locator('td').nth(8).locator('button.mv-down'),
+    remove: row.locator('td').nth(8).locator('button.del-btn'),
   };
 }
 

@@ -76,7 +76,9 @@ test('every figure keeps the name of the column it came from', async ({ page }) 
     'Outstanding',
     'Cost by',
     'Remarks',
-    'Remove',
+    // The last cell holds the two arrows as well as the cross, and on a phone
+    // this label is the only thing naming what the three of them are for.
+    'Order and remove',
   ]);
 
   // And they are actually drawn, not merely present as attributes.

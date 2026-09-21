@@ -751,7 +751,7 @@ input[type="text"], textarea,
 /* email and password join the list rather than taking a treatment of their
    own: a field is a field, and the accounts screen is the same document. */
 input[type="text"], input[type="number"], input[type="date"],
-input[type="email"], input[type="password"], select, textarea {
+input[type="email"], input[type="password"], input[type="search"], select, textarea {
   font: inherit;
   font-size: 14px;
   color: var(--ink);
@@ -807,6 +807,58 @@ input:focus, select:focus, textarea:focus { background: var(--raise); border-col
   border-radius: 2px;
 }
 .del-btn:hover { color: var(--alarm); }
+
+/* Order and removal share the last cell, which is 40px wide and stays that
+   way: DEFAULT_COL_WIDTHS adds up to the page, so a wider one here is paid for
+   out of the remark or the money. The two arrows stack in the width the × is
+   not using, which is the whole reason they are 11px chevrons rather than
+   buttons with words on them. */
+.row-tools { display: flex; align-items: center; justify-content: center; }
+.mv-stack { display: flex; flex-direction: column; }
+/* Both of these are drawn narrower than they are anywhere else on the page,
+   and the cell gives back the padding it was keeping for a cross on its own:
+   40px is what the column has, DEFAULT_COL_WIDTHS says where more would have
+   to come from, and a cross and a pair of arrows have to fit in it. */
+table.budget tbody td.del-cell { padding-left: 2px; padding-right: 2px; }
+.row-tools .del-btn { padding: 6px 3px; }
+.mv-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  line-height: 0;
+  padding: 3px 2px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.mv-btn:hover { color: var(--ink); background: var(--tint); }
+.mv-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+/* Still drawn at the ends of the list rather than taken away, so the column
+   does not change width under a row that happens to be first or last. */
+.mv-btn:disabled { opacity: 0.25; cursor: default; }
+.mv-btn:disabled:hover { color: var(--ink-2); background: none; }
+
+/* --- Looking for a line -------------------------------------------------- */
+.grid-tools {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+/* Framed standing still, which no other field here is: every one of those
+   holds a figure that draws itself, and this one is empty until somebody has
+   already found it. */
+.grid-tools input[type="search"] {
+  width: 240px;
+  border-color: var(--rule-mid);
+  background: var(--raise);
+}
+.grid-count {
+  margin: 0 0 7px;
+  font-size: 13px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
 
 /* --- Tables ---
    border-collapse stays separate so the frozen first column keeps its own
@@ -1205,6 +1257,9 @@ body.is-reopened .countdown-date {
    selectable and copyable — but they stop looking like somewhere to type. */
 body.is-archived .add-row-btn,
 body.is-archived .del-btn,
+/* The search stays: reading a closed ledger is the whole of what is left to
+   do with it, and finding a line in forty is part of reading it. */
+body.is-archived .mv-btn,
 body.is-archived .size-tools,
 body.is-archived .col-grip,
 body.is-archived .row-grip { display: none; }
@@ -1342,6 +1397,11 @@ body.is-archived .when-data { display: block; }
     padding-top: 4px;
     border-top: 1px solid var(--rule);
   }
+  /* Three targets across the foot of the entry rather than a stack of
+     chevrons beside a cross: a card has the width the 40px column never had,
+     and a thumb cannot hit an 11px arrow. */
+  table.budget td.del-cell .mv-stack { flex-direction: row; }
+  table.budget td.del-cell .mv-btn { min-width: 44px; min-height: 44px; }
 
   /* The totals close the statement the way they close the table: labelled,
      in the same money column, under the same double rule. */
@@ -1426,7 +1486,7 @@ body.is-archived .when-data { display: block; }
      three at the foot of this file, outrank it and would otherwise go on
      setting their own 13px. */
   input[type="text"], input[type="number"], input[type="date"],
-  input[type="email"], input[type="password"], select, textarea { min-height: 44px; font-size: 16px; }
+  input[type="email"], input[type="password"], input[type="search"], select, textarea { min-height: 44px; font-size: 16px; }
   table.budget td.note-cell textarea { font-size: 16px; }
   .toggle-line input, .sp-pop input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; }
   .del-btn { min-width: 44px; min-height: 44px; }
@@ -1735,6 +1795,7 @@ body.showing-auth #plannerWrap { display: none; }
    today, and the interface saying so is the honest version of this. */
 body.role-viewer #plannerWrap .add-row-btn,
 body.role-viewer #plannerWrap .del-btn,
+body.role-viewer #plannerWrap .mv-btn,
 /* The archive unlock among them: it unlocks nothing for a viewer, whose
    fields are locked again a moment later, and it takes away the reckoning
    they came to read, which is drawn only while the planner is closed. */
@@ -1899,8 +1960,10 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   .filter-pills,
   .data-tools,
   .size-tools,
+  .grid-tools,
   .add-row-btn,
   .del-btn,
+  .mv-btn,
   .files-btn,
   .det-btn,
   .col-grip,
