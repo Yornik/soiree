@@ -252,7 +252,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/User'
+                $ref: '#/components/schemas/Session'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -295,7 +295,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/User'
+                $ref: '#/components/schemas/Session'
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -600,7 +600,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/User'
+                $ref: '#/components/schemas/Session'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -3098,6 +3098,42 @@ components:
         createdAt: { type: string, format: date-time }
         revision: { $ref: '#/components/schemas/Revision' }
         updatedAt: { type: string, format: date-time }
+
+    Session:
+      description: |
+        The account of the current session, and on some deployments the event
+        this planner is for.
+
+        Everything in `User`, plus `event`. The three answers that sign
+        somebody in or say who is signed in return this.
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          properties:
+            event: { $ref: '#/components/schemas/Event' }
+
+    Event:
+      type: object
+      description: |
+        The event this deployment is planning.
+
+        Present only where the page does not say. A deployment that treats the
+        event as personal sets `SOIREE_PUBLIC_EVENT_DETAILS=false`, which takes
+        the name, the tagline and the date out of the HTML shell and the
+        manifest, both of which are served to anybody who has the address, and
+        sends them here instead. Use it for the heading and the countdown; the
+        page already carries them where this is absent.
+      required: [name, tagline, date]
+      properties:
+        name: { type: string }
+        tagline: { type: string }
+        date:
+          type: string
+          description: |
+            The day of the event, RFC3339 and written in the event's own
+            offset, or empty where none is configured. The same value
+            `SOIREE_EVENT_DATE` carries.
+          examples: ['2030-06-12T19:00:00+09:00']
 
     UserPatch:
       type: object

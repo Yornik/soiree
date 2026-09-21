@@ -1061,8 +1061,18 @@
     // that answer — edits that looked saved but reached nobody would be worse
     // than none. Announced from here because this is the one place the session
     // changes, so a sign-out reaches it too.
+    //
+    // `event` is passed on rather than read: a deployment that keeps the
+    // event's name, tagline and date out of the page anybody can fetch sends
+    // them with the account instead, and the planner is what draws them. It is
+    // absent everywhere else, because the page it loaded already says.
     document.dispatchEvent(new CustomEvent('soiree:session', {
-      detail: { signedIn: next === 'in', role: user && user.role, reason: reason || '' }
+      detail: {
+        signedIn: next === 'in',
+        role: user && user.role,
+        reason: reason || '',
+        event: (user && user.event) || null
+      }
     }));
   }
 

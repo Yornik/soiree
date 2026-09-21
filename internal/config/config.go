@@ -62,6 +62,19 @@ type Config struct {
 	Ceiling  int64
 	DemoData bool
 
+	// HideEventDetails keeps the event's name, tagline and date out of the
+	// shell and the manifest, which are served to anybody who has the URL, and
+	// sends them on the session instead. From SOIREE_PUBLIC_EVENT_DETAILS.
+	//
+	// Negative for DisableCSP's reason: the zero value has to be what every
+	// deployment does today, which is a page titled with the event's name.
+	//
+	// It needs a database, and Load refuses it without one. The details reach
+	// a page that did not get them from the shell on a session response, and
+	// with no database nobody signs in, so the page would never learn them at
+	// all, and would have no countdown for ever.
+	HideEventDetails bool
+
 	// AllowIndexing opts this deployment in to search engines. Off by default,
 	// and the default is the interesting part: a planner holds people's names
 	// against amounts of money they owe each other, and none of them chose to
@@ -261,6 +274,11 @@ func (s SMTPConfig) Enabled() bool { return s.Host != "" }
 
 // ClientConfig is the subset handed to the browser. It is marshalled into a
 // JSON data block in the page, so it must contain nothing secret.
+//
+// The page is served to anybody who has the URL, so a deployment that treats
+// the event's identity as personal can keep it out of here: the first four
+// fields are empty when HideEventDetails is set, and a signed-in page is told
+// them on its session instead. See SessionEventDetails.
 type ClientConfig struct {
 	EventName         string `json:"eventName"`
 	Tagline           string `json:"tagline"`
@@ -293,7 +311,7 @@ type ClientConfig struct {
 
 // Client returns the browser-facing view of the configuration.
 func (c Config) Client() ClientConfig {
-	return ClientConfig{
+	cc := ClientConfig{
 		EventName:         c.EventName,
 		Tagline:           c.Tagline,
 		EventDate:         c.EventDate,
@@ -307,6 +325,63 @@ func (c Config) Client() ClientConfig {
 		Passkeys:          c.PasskeysEnabled,
 		Attachments:       c.publishableAttachments(),
 	}
+	// Everything that says whose evening this is, and nothing else. The
+	// capability signals stay: they say what this deployment can do rather
+	// than who it belongs to, and a page that did not know them would draw
+	// controls with nothing behind them. The ceiling goes with the details
+	// because it is a figure about this event. It is only the seed for a
+	// fresh browser, and the stored settings.ceiling behind the API replaces
+	// it as soon as the plan arrives.
+	if c.HideEventDetails {
+		cc.EventName, cc.Tagline, cc.EventDate, cc.Ceiling = "", "", "", 0
+	}
+	return cc
+}
+
+// EventDetails is the event's own identity: what a page needs before it can
+// call itself the planner for this evening rather than for any evening.
+//
+// JSON-tagged because, like ClientConfig, it is handed to the browser: on the
+// session response rather than in the page.
+type EventDetails struct {
+	Name    string `json:"name"`
+	Tagline string `json:"tagline"`
+	Date    string `json:"date"`
+}
+
+// neutralName stands in for the event's name wherever the page needs one and
+// this deployment keeps its own off it. The product's name: it says what the
+// page is without saying whose it is.
+const neutralName = "soiree"
+
+// ShellEventName is what the shell and the manifest are titled with.
+func (c Config) ShellEventName() string {
+	if c.HideEventDetails {
+		return neutralName
+	}
+	return c.EventName
+}
+
+// ShellTagline is the line under that title, and there is none to draw when
+// the title is not the event's.
+func (c Config) ShellTagline() string {
+	if c.HideEventDetails {
+		return ""
+	}
+	return c.Tagline
+}
+
+// SessionEventDetails is what a signed-in page is told about the event, and
+// nil wherever the page it loaded already says.
+//
+// Nil rather than an empty struct, so the response carries the key only on a
+// deployment that asked for this: a page that finds no event on its session is
+// a page whose shell had one.
+func (c Config) SessionEventDetails() *EventDetails {
+	if !c.HideEventDetails {
+		return nil
+	}
+	return &EventDetails{Name: c.EventName, Tagline: c.Tagline, Date: c.EventDate}
 }
 
 // publishableAttachments is the limit, and only when an upload could succeed.
@@ -375,6 +450,17 @@ func Load() (Config, error) {
 		c.Ceiling = n
 	}
 
+	// Spelled as the permission rather than as the restriction, because the
+	// default is the permission: every deployment before this one served a
+	// shell titled with its event, and the README documents that.
+	if v := strings.TrimSpace(os.Getenv("SOIREE_PUBLIC_EVENT_DETAILS")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("SOIREE_PUBLIC_EVENT_DETAILS must be a boolean, got %q", v)
+		}
+		c.HideEventDetails = !b
+	}
+
 	if v := strings.TrimSpace(os.Getenv("SOIREE_ALLOW_INDEXING")); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -420,6 +506,15 @@ func Load() (Config, error) {
 		// everybody, wherever they were. The offset is the only thing that
 		// says which day the event is on, and the page needs it for that.
 		c.EventDate = t.Format(time.RFC3339)
+	}
+
+	// Nothing could carry out the request. A page that did not get the event's
+	// details from its shell is told them on a session response, and with no
+	// database nobody signs in, so the page would stay nameless, with no
+	// countdown and no archive, for ever. Refusing is the honest answer: the
+	// alternative is publishing what somebody has just asked to keep back.
+	if c.HideEventDetails && c.DatabaseURL == "" {
+		return Config{}, errors.New("SOIREE_PUBLIC_EVENT_DETAILS=false needs DATABASE_URL: with no database nobody signs in, so there is no session to send the event's details on and the page would never learn them")
 	}
 
 	// The whole point of the second listener is that the public one cannot

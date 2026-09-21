@@ -143,6 +143,45 @@ event. The event is on a calendar day in a place; the page takes the day from
 the text and reckons "today" at the event's offset, so neither depends on where
 the reader is or on UTC.
 
+### The shell is a page anybody can fetch
+
+Inlining that block also puts the event's name, tagline and date into a page
+served to whoever has the address. For most deployments that is what a masthead
+is for. For a deployment that treats the event's identity as personal it is not:
+the invitation mails are deliberately written to name nothing, so that one sent
+to a mistyped address tells a stranger nothing about whose planner this is (see
+`inviteMessage`), and the link in that mail opened a page titled with the
+event's name. `SOIREE_ALLOW_INDEXING` does not help, because `X-Robots-Tag`
+says nothing to somebody who already has the URL.
+
+So the decision above was revisited and this switch approved, with the default
+left exactly where it was: `SOIREE_PUBLIC_EVENT_DETAILS`, on unless an operator
+turns it off. Off:
+
+- The shell, the manifest and the config block are rendered with the product's
+  name and nothing else, and `ClientConfig` carries no event name, tagline,
+  date or ceiling seed. The capability signals stay, because they say what this
+  deployment can do rather than whose evening it is.
+- `GET /api/v1/auth/session` and the two logins carry an `event` object
+  instead. Those three because the page is waiting for one of them anyway
+  before it knows who is reading, so the round trip the inline block exists to
+  save is still saved. It is a different audience, not a different cost: the
+  shell answers a stranger, this answers a session.
+- The page keeps those fields beside the plan in `localStorage` and reads them
+  before the first render, because it paints the cached copy first and asks
+  afterwards. Without that, a repeat visit flashes a nameless heading; worse,
+  `isPast()` is false while the date is missing, so a settled planner would
+  offer itself as editable to a browser that is offline. They are cleared with
+  the plan when somebody signs out.
+- It needs `DATABASE_URL`. With no accounts nothing could ever deliver them, so
+  the process refuses to start rather than quietly publishing what an operator
+  has just asked to keep back.
+
+Two things the switch cannot do, and both are worth knowing before turning it
+on. The manifest is one rendering for everybody, so an installed app is named
+"soiree". And somebody following a set-password link is not told which event
+they are joining until they are signed in.
+
 ## The `Store` seam
 
 Everything in this section describes `web/src/app.js` as it stands at the 1.0.0

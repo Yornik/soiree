@@ -623,7 +623,7 @@ func (a *Auth) handlePasskeyLoginFinish(w http.ResponseWriter, r *http.Request) 
 	if !a.startSession(w, r, owner, "passkey") {
 		return
 	}
-	writeJSON(w, http.StatusOK, toDTO(owner))
+	writeJSON(w, http.StatusOK, a.session(owner))
 }
 
 // refusePasskeyLogin answers every failed passkey login identically.

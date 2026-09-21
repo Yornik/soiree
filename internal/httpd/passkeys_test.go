@@ -615,6 +615,37 @@ func TestPasskeyRegistrationAndLogin(t *testing.T) {
 	}
 }
 
+// A passkey login answers with the body a password login answers with, down
+// to the event a deployment keeps out of the page it serves everybody. A page
+// that has just signed in does not ask again, so without this it would stay
+// nameless and without a countdown until somebody reloaded it.
+func TestAPasskeyLoginSaysWhoseEveningThisIs(t *testing.T) {
+	f := newPasskeyFixture(t)
+	f.a.event = &config.EventDetails{
+		Name:    "Ada's Retirement",
+		Tagline: "Dinner and speeches",
+		Date:    "2030-01-13T00:00:00+09:00",
+	}
+	f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)
+	cookie := f.login(t, "ada@example.test", goodPassword)
+
+	device := newSoftAuthenticator(t, "ada-phone")
+	_, handle := f.registerPasskey(t, cookie, device, "Ada's phone")
+
+	device.signCount = 1
+	rec := f.loginWithPasskey(t, device, handle)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login/finish: status %d, body %s", rec.Code, rec.Body)
+	}
+	ev := decodeTestBody[sessionJSON](t, rec).Event
+	if ev == nil {
+		t.Fatal("a passkey login says nothing about the event; a password login does")
+	}
+	if *ev != *f.a.event {
+		t.Errorf("it carries %+v, want the event as configured", *ev)
+	}
+}
+
 // The options handed to the browser are the contract the frontend is written
 // from. Pin the parts a frontend would break on.
 func TestPasskeyRegisterBeginOptions(t *testing.T) {
