@@ -52,6 +52,20 @@
         "golang"
       ],
       "groupName": "go toolchain"
+    },
+    {
+      "description": "The floor in go.mod is the third name for that same toolchain, and Renovate leaves the `go` directive alone unless asked to, so the floor is whatever an automerged dependency bump last raised it to: an x/crypto update left it at 1.26.0, a release line below the image and unpatched since the day it shipped. A build from source compiles with whatever local Go clears that floor, so `go run ./cmd/soiree` ran on a toolchain no job here tests, and govulncheck read 26 standard-library vulnerabilities off it while the same scanner on the shipped toolchain read none. It joins the group above so the three move in one pull request: a floor above the pinned builder is what the test in cmd/soiree fails on, and a patch release the builder image or setup-go has not caught up with turns the checks red rather than merging itself, since every automerge here waits for green.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepNames": [
+        "go"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
+      "rangeStrategy": "bump",
+      "groupName": "go toolchain"
     }
   ],
   "customManagers": [

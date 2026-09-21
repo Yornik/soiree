@@ -37,6 +37,10 @@ var leadingVersion = regexp.MustCompile(`^\d+(\.\d+)*`)
 // explicit `toolchain` line.
 var toolchainAsk = regexp.MustCompile(`(?m)^(?:go|toolchain go)\s*(\d\S*)$`)
 
+// goDirective matches the `go` line on its own: the floor a build has to
+// clear, which a `toolchain` line raises for a local build but never lowers.
+var goDirective = regexp.MustCompile(`(?m)^go\s+(\d\S*)$`)
+
 // leadingDigits matches the number at the front of a version component, so a
 // prerelease such as `1.28rc1` still compares as 1.28.
 var leadingDigits = regexp.MustCompile(`^\d+`)
@@ -131,6 +135,28 @@ func TestTheBuilderIsPinnedAndCITestsThatSameToolchain(t *testing.T) {
 			t.Errorf("go.mod asks for Go %q and the pinned builder carries Go %q, so a build would fetch a toolchain no digest names", ask[1], pinnedGo)
 		}
 	}
+
+	// The same claim from below. A floor older than the builder is a toolchain
+	// nobody here tests: README documents `go run ./cmd/soiree`, and whatever
+	// local Go clears the floor is what compiles it. The floor spent a release
+	// line behind the image, which is long enough to matter: govulncheck read
+	// 26 standard-library vulnerabilities off it while the same scanner on the
+	// shipped toolchain read none.
+	floor := goDirective.FindStringSubmatch(repoFile(t, "go.mod"))
+	if floor == nil {
+		t.Fatal("go.mod has no `go` directive, so nothing says which Go a build from source has to clear")
+	}
+	if !sameGoLine(floor[1], pinnedGo) {
+		t.Errorf("go.mod's floor is Go %q and the pinned builder carries Go %q, so a build from source compiles with a toolchain nothing here tests", floor[1], pinnedGo)
+	}
+}
+
+// sameGoLine reports whether two versions name the same line of Go releases,
+// so that a 1.27.0 floor and a 1.27.1 builder agree, the floor being a minimum
+// rather than a pin, while a whole line between them does not.
+func sameGoLine(a, b string) bool {
+	x, y := goVersionNumbers(a), goVersionNumbers(b)
+	return len(x) >= 2 && len(y) >= 2 && x[0] == y[0] && x[1] == y[1]
 }
 
 // compareGoVersions orders two Go versions by their numbers rather than their
