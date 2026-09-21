@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ type workflowFile struct {
 
 type workflowJob struct {
 	Needs jobNames       `yaml:"needs"`
+	If    string         `yaml:"if"`
 	Uses  string         `yaml:"uses"`
 	Steps []workflowStep `yaml:"steps"`
 }
@@ -184,5 +186,50 @@ func TestASignedImageIsNotBuiltFromTheSharedCache(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A green `checks` says the tagged tree passes its own tests. It says nothing
+// about how that tree got there: `v*` is not restricted to commits on main and
+// no ruleset stands behind the tag either, so a tag pushed at a branch that
+// never opened a pull request would be built, pushed as `:latest` and signed
+// with the identity docs/verifying-releases.md tells a third party to trust.
+// The other release path builds what main has just merged, so the assertion is
+// scoped to the job a tag triggers.
+func TestATagOffMainIsNotReleased(t *testing.T) {
+	gated := 0
+	for name, jobs := range releaseJobs(t) {
+		for id, j := range jobs {
+			if !strings.Contains(j.If, "refs/tags/") {
+				continue
+			}
+			gated++
+
+			ancestry, depth := false, "unset"
+			for _, s := range j.Steps {
+				if strings.Contains(s.Run, "merge-base --is-ancestor") {
+					ancestry = true
+				}
+				if strings.HasPrefix(s.Uses, "actions/checkout") {
+					depth = fmt.Sprint(s.With["fetch-depth"])
+				}
+			}
+
+			if !ancestry {
+				t.Errorf(".github/workflows/%s: job %q publishes a tag without checking that its commit is reachable from main, so a tag pushed at any commit in the repository goes out as a signed :latest",
+					name, id)
+			}
+			// The check compares two histories and the default checkout is one
+			// commit deep, which shares none of either. Losing the depth would
+			// not weaken the guard, it would fail every release at the moment
+			// it was cut, so it is asserted next to the check it serves.
+			if depth != "0" {
+				t.Errorf(".github/workflows/%s: job %q checks the tag against main with fetch-depth %s; the two histories have to be present for merge-base to answer",
+					name, id, depth)
+			}
+		}
+	}
+	if gated == 0 {
+		t.Fatal("no publishing job is gated on a tag ref, so this test read nothing")
 	}
 }
