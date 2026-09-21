@@ -1575,9 +1575,10 @@ test('signing back in merges, and does not write a stale copy over everyone else
   await signInThroughTheForm(page, request);
 
   // Ours where we edited, theirs where we did not, and their delete stands.
-  // A browser that let its own copy win would put `vendor` back to empty —
-  // at the current revision, so with no conflict raised — and POST the
-  // flowers back into a budget somebody had just taken them out of.
+  // A browser that let its own copy win would put `vendor` back to the empty
+  // string nobody here typed over, at the current revision, so with no
+  // conflict raised, and POST the flowers back into a budget somebody had
+  // just taken them out of.
   await expect
     .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.paid, i.vendor]), {
       message: 'sign-in should merge against the plan as it now stands',
@@ -1678,9 +1679,10 @@ test('a reopened tab that was edited while signed out does not overwrite a week 
   const before = await apiPlan(request);
   const venue = before.budgetItems.find((i) => i.item === 'Venue deposit');
   const flowers = before.budgetItems.find((i) => i.item === 'Flowers');
-  // `unit` is a field the page draws and `vendor` is one it does not, and a
-  // stale copy damages them differently: the first is PATCHed back to what it
-  // was a week ago, the second is left alone. Both have to survive.
+  // `unit` is a field this browser then edits and `vendor` one nobody here
+  // touches, and a stale copy damages them differently: the first is PATCHed
+  // back to what it was a week ago, the second is left alone. Both have to
+  // survive.
   expect((await request.patch(`${API_URL}/api/v1/budget-items/${venue.id}`, {
     headers, data: { revision: venue.revision, vendor: 'The Orangery', unit: '2600.00' },
   })).status()).toBe(200);
@@ -1836,6 +1838,76 @@ test('an import made after signing out and back in reaches the server', async ({
     .toEqual(['Imported band', 'Imported venue']);
   // And kept in this browser, which the flag also prevented.
   expect(await page.evaluate(() => localStorage.getItem('soiree.v1'))).toContain('Imported venue');
+});
+
+/*
+ * The two fields the reminder digest is built from.
+ *
+ * `lock_by` and `vendor` have been in the schema, the API and
+ * internal/reminders since the plan tables were written, and the grid drew
+ * neither: the digest's "Decisions to lock in" section could only be filled by
+ * somebody writing to /api/v1 by hand, which is nobody. This is the round trip
+ * from the column to the server and back to null.
+ */
+test('a vendor and a decide-by date typed into the grid reach the server', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  const row = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 0 });
+
+  await row.vendor.fill('The Orangery');
+  await row.lockBy.fill('2030-05-01');
+
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.vendor, i.lockBy]), {
+      message: 'the two columns should travel like every other field on the line',
+    })
+    .toEqual([['Venue deposit', 'The Orangery', '2030-05-01']]);
+
+  // An emptied date goes as null, which is how the API is told a decision no
+  // longer has a deadline. "" is not a date and is a 400 that would park the
+  // whole line.
+  await row.lockBy.fill('');
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.lockBy), {
+      message: 'clearing the date should clear the column, not refuse the write',
+    })
+    .toEqual([null]);
+});
+
+/*
+ * And the same two fields arriving the other way. cmd/soiree-import reads a
+ * planning spreadsheet and writes vendor and lockBy into the file the Import
+ * button takes, which is the whole reason those columns are parsed at all. The
+ * page used to drop both on the way to the server, so an imported plan lost
+ * them at the next load, which is the outcome the importer says it exists to
+ * prevent.
+ */
+test('an imported plan keeps the vendor and the decide-by date the importer wrote', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  const plan = {
+    budgetItems: [
+      {
+        id: 'b1', item: 'Imported venue', vendor: 'The Orangery', lockBy: '2030-05-01',
+        unit: 1200, qty: 1, paid: 0, note: '', sponsors: [],
+      },
+    ],
+    tasks: [], sponsors: [], notes: [],
+    ceiling: 0, fxRate: 0, inflationPct: 0, splitEvenly: false,
+  };
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.setInputFiles('#importFile', {
+    name: 'plan.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(plan)),
+  });
+  await expect(budgetRow(page, 0).item).toHaveValue('Imported venue');
+
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.vendor, i.lockBy]), {
+      timeout: 10_000,
+      message: 'the importer\'s columns should reach the server, not only this browser',
+    })
+    .toEqual([['Imported venue', 'The Orangery', '2030-05-01']]);
 });
 
 // Small, at the foot of the screens somebody signed in can open: what to quote

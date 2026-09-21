@@ -174,7 +174,7 @@ test('every field in the grid says which column it is in', async ({ page }) => {
   expect(await gridNames(page, '#tasksBody')).toEqual(['Task', 'Owner', 'Due date', 'Status']);
 
   await gotoTab(page, 'budget');
-  expect(await gridNames(page, '#budgetBody')).toEqual(['Item', 'Unit', 'Qty', 'Paid', 'Remarks']);
+  expect(await gridNames(page, '#budgetBody')).toEqual(['Item', 'Unit', 'Qty', 'Paid', 'Remarks', 'Vendor', 'Decide by']);
 
   // And the button in the middle of the budget row, whose name was the code
   // alone: "Rose" says who, never what about them.
@@ -184,7 +184,7 @@ test('every field in the grid says which column it is in', async ({ page }) => {
   // is the only one there is.
   await page.setViewportSize({ width: 375, height: 720 });
   await expect(page.locator('#budgetTable thead')).toBeHidden();
-  expect(await gridNames(page, '#budgetBody')).toEqual(['Item', 'Unit', 'Qty', 'Paid', 'Remarks']);
+  expect(await gridNames(page, '#budgetBody')).toEqual(['Item', 'Unit', 'Qty', 'Paid', 'Remarks', 'Vendor', 'Decide by']);
 });
 
 /*

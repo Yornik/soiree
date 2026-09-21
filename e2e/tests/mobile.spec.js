@@ -76,6 +76,8 @@ test('every figure keeps the name of the column it came from', async ({ page }) 
     'Outstanding',
     'Cost by',
     'Remarks',
+    'Vendor',
+    'Decide by',
     'Remove',
   ]);
 

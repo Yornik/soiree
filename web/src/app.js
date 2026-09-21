@@ -215,6 +215,8 @@
       'c.unit': 'Unit',
       'c.qty': 'Qty',
       'c.by': 'Cost by',
+      'c.vendor': 'Vendor',
+      'c.lockby': 'Decide by',
       'c.remarks': 'Remarks',
       'c.remove': 'Remove',
       't.totals': 'Totals',
@@ -375,6 +377,8 @@
       'c.unit': 'Stukprijs',
       'c.qty': 'Aantal',
       'c.by': 'Rekening van',
+      'c.vendor': 'Leverancier',
+      'c.lockby': 'Beslissen voor',
       'c.remarks': 'Opmerkingen',
       'c.remove': 'Verwijderen',
       't.totals': 'Totaal',
@@ -534,6 +538,8 @@
       'c.unit': 'Harga satuan',
       'c.qty': 'Jumlah',
       'c.by': 'Ditanggung',
+      'c.vendor': 'Vendor',
+      'c.lockby': 'Putuskan sebelum',
       'c.remarks': 'Catatan',
       'c.remove': 'Hapus',
       't.totals': 'Total',
@@ -722,7 +728,12 @@
   // its gutters: the whole table, Remarks and the remove button included, is on
   // screen at once on a desktop. Widen one without narrowing another and the
   // last columns go back to being reachable only by scrolling sideways.
-  var DEFAULT_COL_WIDTHS = [230, 140, 70, 135, 110, 135, 135, 245, 40];
+  // Vendor and the decide-by date were paid for out of the columns that wrap
+  // or hold a figure narrower than themselves, for the same reason: eleven
+  // columns still have to add up to 1240. The date is the one width here that
+  // was measured rather than chosen, because an <input type="date"> draws the
+  // whole of a date or clips it.
+  var DEFAULT_COL_WIDTHS = [152, 140, 70, 112, 96, 112, 135, 115, 104, 164, 40];
 
   function emptyState() {
     return {
@@ -974,7 +985,10 @@
     if (typeof state.fxRate !== 'number') state.fxRate = 0;
     if (typeof state.splitEvenly !== 'boolean') state.splitEvenly = false;
     if (typeof state.reopened !== 'boolean') state.reopened = false;
-    if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) {
+    // Counted against the defaults rather than a number written out here: a
+    // saved copy from before a column existed has widths for a grid that is
+    // no longer this one, and dropping them costs one drag.
+    if (!Array.isArray(state.colWidths) || state.colWidths.length !== DEFAULT_COL_WIDTHS.length) {
       state.colWidths = DEFAULT_COL_WIDTHS.slice();
     }
     if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
@@ -1186,7 +1200,8 @@
       key: 'budgetItems', route: 'budget-items', entity: 'budget_items', container: 'budgetBody',
       fields: [
         textField('item'), moneyField('unit'), qtyField('qty'),
-        moneyField('paid'), textField('note'), idsField('sponsors')
+        moneyField('paid'), textField('note'), idsField('sponsors'),
+        textField('vendor'), dateField('lockBy')
       ],
       render: function () { renderBudgetTable(); renderBudgetTotals(); renderOverview(); }
     },
@@ -4563,7 +4578,7 @@
     var body = document.getElementById('budgetBody');
     body.innerHTML = '';
     if (!state.budgetItems.length) {
-      emptyRow(body, 9, t('b.empty'));
+      emptyRow(body, 11, t('b.empty'));
     }
     state.budgetItems.forEach(function (item) {
       var tr = document.createElement('tr');
@@ -4648,6 +4663,27 @@
 
       var tdNote = textCell('note', 'c.remarks', 'note-cell');
 
+      var tdVendor = textCell('vendor', 'c.vendor', 'vendor-cell');
+
+      /* The date a decision has to be made, which is not the date the money
+       * moves: a quote expires or a slot goes. It is the column the reminder
+       * digest is built from (every line with a date, nothing paid against it
+       * and the date inside the window, internal/reminders/digest.go), so
+       * until there was a field here that half of the digest had no way of
+       * ever filling. */
+      var tdLock = document.createElement('td');
+      tdLock.className = 'lock-cell';
+      var lockInput = document.createElement('input');
+      lockInput.type = 'date';
+      lockInput.setAttribute('aria-label', t('c.lockby'));
+      lockInput.value = item.lockBy || '';
+      lockInput.addEventListener('input', function () {
+        item.lockBy = lockInput.value;
+        save();
+        refreshRow(tr, item);
+      });
+      tdLock.appendChild(lockInput);
+
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
       // The column heading travels with the cell. A phone stacks this row into
@@ -4660,6 +4696,8 @@
       label(tdOwing, 'f.outstanding');
       label(tdBy, 'c.by');
       label(tdNote, 'c.remarks');
+      label(tdVendor, 'c.vendor');
+      label(tdLock, 'c.lockby');
       label(tdDel, 'c.remove');
       tdDel.appendChild(delButton(t('b.del'), function () {
         // The row's files go with it, out of the plan and then out of the
@@ -4690,6 +4728,8 @@
       tr.appendChild(tdOwing);
       tr.appendChild(tdBy);
       tr.appendChild(tdNote);
+      tr.appendChild(tdVendor);
+      tr.appendChild(tdLock);
       tr.appendChild(tdDel);
       body.appendChild(tr);
 
@@ -4713,10 +4753,18 @@
     // Paid in full: the line is settled, and the figure that said what was
     // owed says so in the colour of money paid rather than as a bare zero.
     tr.classList.toggle('settled', tot > 0 && owing <= 0);
+    // A decide-by date that has gone by with nothing paid against the line,
+    // which is the reminder digest's own rule: money against a line is the
+    // decision having been made, so a paid line is never late for it.
+    tr.classList.toggle('late',
+      !!item.lockBy && !(Number(item.paid) || 0) && String(item.lockBy) < todayISO());
   }
 
   document.getElementById('addBudgetRow').addEventListener('click', function () {
-    state.budgetItems.push({ id: uid('b'), item: '', unit: 0, qty: 1, paid: 0, sponsors: [], note: '' });
+    state.budgetItems.push({
+      id: uid('b'), item: '', unit: 0, qty: 1, paid: 0,
+      sponsors: [], note: '', vendor: '', lockBy: ''
+    });
     save();
     renderBudgetTable();
     renderBudgetTotals();
@@ -5089,7 +5137,7 @@
         state = incoming;
         if (!Array.isArray(state.sponsors)) state.sponsors = [];
         if (!Array.isArray(state.notes)) state.notes = [];
-        if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) state.colWidths = DEFAULT_COL_WIDTHS.slice();
+        if (!Array.isArray(state.colWidths) || state.colWidths.length !== DEFAULT_COL_WIDTHS.length) state.colWidths = DEFAULT_COL_WIDTHS.slice();
         if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
         if (typeof state.fxRate !== 'number') state.fxRate = Number(state.eurRate) || 0;
         if (typeof state.reopened !== 'boolean') state.reopened = false;

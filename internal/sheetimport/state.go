@@ -48,11 +48,14 @@ type Sponsor struct {
 
 // BudgetItem is one line of the budget grid. Line total is unit * qty.
 //
-// vendor, lockBy, phase and children are not in today's export shape: the UI
-// ignores unknown keys and preserves them across an export, and the schema
-// they belong to is already written down (see docs/architecture.md). Dropping
-// columns a planner actually keeps, to match a UI that is mid-migration,
-// would lose the data for good.
+// vendor and lockBy are columns the page draws, so they travel from the file
+// into the plan the way the rest of the line does. phase and children are not
+// in today's export shape: the page carries them as unknown keys, which
+// survive an export but not a database, since it sends the fields it knows
+// and the next plan read replaces the rest. They are written all the same,
+// because dropping columns a planner actually keeps would lose the data for
+// good, and the schema they belong to is already there (see
+// docs/architecture.md).
 type BudgetItem struct {
 	ID       string       `json:"id"`
 	Item     string       `json:"item"`

@@ -10,7 +10,9 @@
  * claims to be.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, addSponsor, budgetRow, expectFigures, gotoTab, money, openPlanner, tagLine } = require('./helpers');
+const {
+  addBudgetLine, addSponsor, budgetRow, expectFigures, flushToStorage, gotoTab, money, openPlanner, tagLine,
+} = require('./helpers');
 const { BASE_URL } = require('../servers');
 
 test.beforeEach(async ({ page }) => {
@@ -223,6 +225,38 @@ test('a line paid to the cent is settled, not a rounding error short', async ({ 
   await expect(row.outstanding).not.toHaveClass(/owing/);
   await expect(page.locator('#sumOwing')).toHaveText('€0');
   await expect(page.locator('#sumOwingAlt')).toHaveText('€0');
+});
+
+/*
+ * The decide-by date is not the date the money moves: a quote expires or a
+ * slot goes, and the line is late for that decision until something is paid
+ * against it. The reminder digest reads the column by exactly that rule
+ * (internal/reminders/digest.go), so the row on screen and the mail say the
+ * same thing about the same line.
+ */
+test('a decide-by date that has gone by marks the line, until something is paid', async ({ page }) => {
+  const row = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 0 });
+
+  await row.vendor.fill('The Orangery');
+  await row.lockBy.fill('2020-01-01');
+  await expect(row.row).toHaveClass(/late/);
+
+  // Money against the line is the decision having been made.
+  await row.paid.fill('500');
+  await expect(row.row).not.toHaveClass(/late/);
+
+  // A date still ahead is not late at all.
+  await row.paid.fill('0');
+  await row.lockBy.fill('2099-01-01');
+  await expect(row.row).not.toHaveClass(/late/);
+
+  // And both are part of the line like every other field, kept in this
+  // browser with the rest of it.
+  await flushToStorage(page);
+  await page.reload();
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).vendor).toHaveValue('The Orangery');
+  await expect(budgetRow(page, 0).lockBy).toHaveValue('2099-01-01');
 });
 
 test('a figure with cents is a valid figure, not one the browser calls invalid', async ({ page }) => {

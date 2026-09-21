@@ -63,7 +63,9 @@ function budgetRow(page, index) {
     outstanding: row.locator('td').nth(5),
     by: row.locator('td').nth(6).locator('button.by-btn'),
     note: row.locator('td').nth(7).locator('textarea'),
-    remove: row.locator('td').nth(8).locator('button'),
+    vendor: row.locator('td').nth(8).locator('textarea'),
+    lockBy: row.locator('td').nth(9).locator('input'),
+    remove: row.locator('td').nth(10).locator('button'),
   };
 }
 

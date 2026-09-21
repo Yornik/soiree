@@ -828,6 +828,14 @@ td.calc.owing { color: var(--owed); }
 table.budget tbody tr.settled td.calc:nth-child(6) { color: var(--paid); font-weight: 600; }
 td.calc.paid { color: var(--paid); }
 td.num-cell input { text-align: right; }
+/* A decision that should have been made by now, in the same alarm colour a
+   late task wears: the two deadlines on this page are read for the same
+   reason, so they look the same. */
+table.budget tbody tr.late input[type="date"] { color: var(--alarm); font-weight: 600; }
+/* The one cell in the row with narrower gutters than the rest: a browser
+   draws the whole of a date or clips it, and the eight pixels are what the
+   column would otherwise have to take from the item beside it. */
+table.budget td.lock-cell { padding-left: 8px; padding-right: 8px; }
 td.del-cell { width: 40px; text-align: center; }
 td.empty-cell { color: var(--ink-2); padding: 18px 12px; }
 .status-select { min-width: 124px; }
@@ -872,7 +880,7 @@ table.budget tbody td.calc { padding-top: 12px; }
 /* No scrollbar: app.js sizes the field to its text (fitText), so there is
    nothing to scroll, and a scrollbar in a cell this narrow covers the words. */
 table.budget textarea { height: 100%; min-height: 32px; resize: none; overflow: hidden; }
-table.budget td.note-cell textarea { font-size: 13px; }
+table.budget td.note-cell textarea, table.budget td.vendor-cell textarea { font-size: 13px; }
 td.item-cell { position: relative; }
 
 /* The item name stays put while the money columns scroll under it: the
@@ -1167,7 +1175,7 @@ body.is-archived .when-data { display: block; }
   .upnext-list .who { white-space: normal; }
 
   /* --- The budget grid, unwound ---
-     Nine columns and a drag handle are a desk interaction. Below this width
+     Eleven columns and a drag handle are a desk interaction. Below this width
      each line becomes one entry in a statement: the item at the head, then
      label on the left and figure on the right, so every number in the panel —
      each line, the totals row, and the repeat below it — sits in one right
@@ -1194,7 +1202,8 @@ body.is-archived .when-data { display: block; }
   }
   table.budget tbody tr:first-child { border-top: 0; }
 
-  table.budget tbody td, table.budget tfoot td, table.budget tfoot th {
+  table.budget tbody td, table.budget tbody td.lock-cell,
+  table.budget tfoot td, table.budget tfoot th {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1331,7 +1340,7 @@ body.is-archived .when-data { display: block; }
      setting their own 13px. */
   input[type="text"], input[type="number"], input[type="date"],
   input[type="email"], input[type="password"], select, textarea { min-height: 44px; font-size: 16px; }
-  table.budget td.note-cell textarea { font-size: 16px; }
+  table.budget td.note-cell textarea, table.budget td.vendor-cell textarea { font-size: 16px; }
   .toggle-line input, .sp-pop input[type="checkbox"] { min-height: 0; width: 22px; height: 22px; }
   .del-btn { min-width: 44px; min-height: 44px; }
   .files-btn { min-width: 44px; height: 44px; top: 0; right: 0; justify-content: center; }
@@ -1865,7 +1874,20 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   #budgetCols col:nth-child(6) { width: 14% !important; }
   #budgetCols col:nth-child(7) { width: 13% !important; }
   #budgetCols col:nth-child(8) { width: 15% !important; }
-  #budgetCols col:nth-child(9) { width: 0 !important; }
+  #budgetCols col:nth-child(9),
+  #budgetCols col:nth-child(10),
+  #budgetCols col:nth-child(11) { width: 0 !important; }
+  /* The vendor and the decide-by date are not on the sheet either, and for a
+     reason worth writing down: they are the fields a planner works in, and
+     the shares above were measured for the columns a ledger is printed for.
+     Fitting eleven of them on A4 takes the room out of the figures, which
+     then print with a digit missing - and a date has no width to give up at
+     all, since a browser draws the whole of it or clips it. Hidden rather
+     than merely narrowed, so nothing is laid out over the column beside it. */
+  table.budget thead th:nth-child(9),
+  table.budget thead th:nth-child(10),
+  table.budget td.vendor-cell,
+  table.budget td.lock-cell { display: none; }
   table.budget tbody tr { height: auto !important; }
   /* Type and gutters both come in a step: nine columns on a sheet have less
      room than nine on a desk, and a ledger is read at arm's length. */
@@ -1900,7 +1922,7 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
      would otherwise keep the gutter the cell has given up and start it past
      the edge of the grid. */
   td.del-cell,
-  table.budget thead th:nth-child(9),
+  table.budget thead th:nth-child(11),
   table.tasks thead th:nth-child(5) { width: 0; padding: 0; }
   .status-select { min-width: 0; }
   table.budget thead th, table.budget td { overflow: visible; }

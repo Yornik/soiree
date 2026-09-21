@@ -358,9 +358,10 @@ units as integers and converts once at the end.
 ```
 {
   ceiling, inflationPct, fxRate, splitEvenly, reopened,
-  colWidths: [9 numbers], rowHeights: { itemId: px },
+  colWidths: [11 numbers], rowHeights: { itemId: px },
   sponsors:    [ { id, code, name } ],
-  budgetItems: [ { id, item, unit, qty, paid, sponsors: [sponsorId], note } ],
+  budgetItems: [ { id, item, vendor, unit, qty, paid,
+                   sponsors: [sponsorId], note, lockBy } ],
   tasks:       [ { id, name, owner, due, status } ],
   notes:       [ { id, text } ]
 }
