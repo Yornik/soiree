@@ -961,32 +961,48 @@
     state = emptyState();
   }
 
-  // Normalise anything missing or malformed, whether from an older save or a
-  // hand-edited import.
-  (function normalise() {
+  /* Normalise anything missing or malformed, whether from an older save or a
+   * hand-edited import. A function rather than the run-once block this used to
+   * be, because the import is the other way in and had grown a shorter repair
+   * of its own beside it. The two had drifted, and the drift was not cosmetic:
+   * a row with no id is drawn like every other row and skipped by everything
+   * that syncs, so an imported one reaches nobody and is replaced by the
+   * server's plan at the next load. One rule, one place, both ways in.
+   */
+  function normalise(s) {
     var base = emptyState();
-    if (!Array.isArray(state.budgetItems)) state.budgetItems = [];
-    if (!Array.isArray(state.tasks)) state.tasks = [];
-    if (!Array.isArray(state.sponsors)) state.sponsors = [];
-    if (!Array.isArray(state.notes)) state.notes = [];
-    if (typeof state.ceiling !== 'number') state.ceiling = base.ceiling;
-    if (typeof state.inflationPct !== 'number') state.inflationPct = 0;
-    if (typeof state.fxRate !== 'number') state.fxRate = 0;
-    if (typeof state.splitEvenly !== 'boolean') state.splitEvenly = false;
-    if (typeof state.reopened !== 'boolean') state.reopened = false;
-    if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) {
-      state.colWidths = DEFAULT_COL_WIDTHS.slice();
+    if (!Array.isArray(s.budgetItems)) s.budgetItems = [];
+    if (!Array.isArray(s.tasks)) s.tasks = [];
+    if (!Array.isArray(s.sponsors)) s.sponsors = [];
+    if (!Array.isArray(s.notes)) s.notes = [];
+    if (typeof s.ceiling !== 'number') s.ceiling = base.ceiling;
+    if (typeof s.inflationPct !== 'number') s.inflationPct = 0;
+    // `eurRate` is what this field was called before the currency became a
+    // setting. No released build has ever written it, so it is here for a file
+    // kept by hand from a copy that predates the name.
+    if (typeof s.fxRate !== 'number') s.fxRate = Number(s.eurRate) || 0;
+    if (typeof s.splitEvenly !== 'boolean') s.splitEvenly = false;
+    if (typeof s.reopened !== 'boolean') s.reopened = false;
+    if (!Array.isArray(s.colWidths) || s.colWidths.length !== DEFAULT_COL_WIDTHS.length) {
+      s.colWidths = DEFAULT_COL_WIDTHS.slice();
     }
-    if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
-    state.budgetItems.forEach(function (i) {
+    if (!s.rowHeights || typeof s.rowHeights !== 'object') s.rowHeights = {};
+    // Sponsors first: the attribution filter below keeps the ids they have by
+    // then, and one minted after it would have every line stripped off it.
+    s.sponsors.forEach(function (sp) { if (!sp.id) sp.id = uid('s'); });
+    s.tasks.forEach(function (k) { if (!k.id) k.id = uid('t'); });
+    s.budgetItems.forEach(function (i) {
       if (!i.id) i.id = uid('b');
       if (!Array.isArray(i.sponsors)) i.sponsors = [];
       i.sponsors = i.sponsors.filter(function (id) {
-        return state.sponsors.some(function (s) { return s.id === id; });
+        return s.sponsors.some(function (sp) { return sp.id === id; });
       });
     });
-    state.notes.forEach(function (n) { if (!n.id) n.id = uid('n'); });
-  })();
+    s.notes.forEach(function (n) { if (!n.id) n.id = uid('n'); });
+    return s;
+  }
+
+  state = normalise(state);
 
   // The planner exactly as this page found it, before anybody touched it. When
   // the plan arrives late — after a sign-in, on a tab reopened a week on — this
@@ -5086,13 +5102,11 @@
         // this browser. Everybody else saw an empty plan.
         forgotten = false;
         dirty = true;
-        state = incoming;
-        if (!Array.isArray(state.sponsors)) state.sponsors = [];
-        if (!Array.isArray(state.notes)) state.notes = [];
-        if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) state.colWidths = DEFAULT_COL_WIDTHS.slice();
-        if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
-        if (typeof state.fxRate !== 'number') state.fxRate = Number(state.eurRate) || 0;
-        if (typeof state.reopened !== 'boolean') state.reopened = false;
+        // The same repair the startup path makes, rather than a shorter one
+        // written out again here. A hand-edited file is exactly what both are
+        // for, and the one thing the copy beside it never did was give a row
+        // an id — which is what everything that syncs goes by.
+        state = normalise(incoming);
         flushSave();
         renderAll();
         flash(t('d.imported', { a: f.name }));
