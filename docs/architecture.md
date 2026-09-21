@@ -21,7 +21,7 @@ internal/httpd/
   attachments.go        the signed upload and download surface
   auth.go               login, set-password, the admin's view of accounts
   authmw.go             session resolution, roles, per-IP limits
-  ratelimit.go          the per-IP buckets those limits are kept in
+  ratelimit.go          the buckets those limits are kept in, and their keys
   passkeys.go           the WebAuthn surface
   push.go               storing and removing a browser's push subscription
   sse.go                the change fan-out behind GET /api/v1/events
@@ -1490,10 +1490,27 @@ and that is the wrong property for a password.
 - Parameters are stored in the encoded hash, so they can be raised later and
   existing passwords are transparently re-hashed on next successful login.
 - Verification is constant-time.
-- Login is rate-limited per account and per IP.
+- Login is rate-limited per account and per IP, and the per-account bucket is
+  keyed on the client's network as well as on the address.
 
 The implementation uses `golang.org/x/crypto/argon2` — no hand-rolled
 cryptography.
+
+**Why the network is in that key.** Keyed on the submitted address alone, the
+per-account bucket is one anybody who knows an address can hold at zero. A
+refused attempt costs its sender nothing, so ten wrong guesses and then a
+request every few seconds answer the owner's own sign-in with a `429`, from
+one client, with no credentials, and from inside the per-address allowance,
+which never comes near firing at that rate. A looser ceiling for the account
+across every network sits behind the tight bucket, and is what a run spread
+over many addresses meets instead. An attempt the tight bucket refused is never
+charged to that ceiling: one client at the per-address rate would otherwise
+empty it by itself and the lockout would be back wearing a bigger number. What
+is left is deliberate and worth writing down: somebody with addresses in
+enough networks can still hold the ceiling at zero. Putting the network in the
+key raises the price of a lockout from one client to many rather than removing
+it, and a passkey, charged to the per-address bucket alone, is the way in that
+remains when somebody pays it.
 
 ### Live sync
 

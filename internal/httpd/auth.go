@@ -82,10 +82,22 @@ const (
 // password they used will not be locked out, and tight enough that nobody is
 // running a dictionary through this.
 const (
-	loginIPBurst    = 20
-	loginIPWindow   = time.Minute
+	loginIPBurst  = 20
+	loginIPWindow = time.Minute
+	// Per account and per client network, both. Keyed on the account alone it
+	// is a bucket anybody who knows an address can hold at zero: a refused
+	// attempt costs its sender nothing, so ten guesses and then one request
+	// every few seconds keep the owner's own sign-in answering 429, from one
+	// client, with no credentials and well inside the per-address allowance.
 	loginAcctBurst  = 10
 	loginAcctWindow = 15 * time.Minute
+	// The account's ceiling across every network, behind the tight one. This
+	// is what a run spread over many addresses meets, and it is ten times as
+	// loose because it is guarding against guessing rather than against
+	// somebody misremembering which password they used: Argon2id is the real
+	// brake, and the ceiling only has to keep the attempt from being free.
+	loginAcctAllBurst  = 100
+	loginAcctAllWindow = 15 * time.Minute
 	// Separate buckets for asking for a link and for redeeming one. Sharing
 	// them means somebody who mistypes a short password three times has spent
 	// a third of their hour's allowance on the endpoint they still need.
@@ -177,6 +189,7 @@ type Auth struct {
 
 	loginIP         *limiter
 	loginAcct       *limiter
+	loginAcctAll    *limiter
 	resetIP         *limiter
 	resetAcct       *limiter
 	redeemIP        *limiter
@@ -220,6 +233,7 @@ func NewAuth(o AuthOptions) *Auth {
 
 		loginIP:         newLimiter(loginIPBurst, loginIPWindow),
 		loginAcct:       newLimiter(loginAcctBurst, loginAcctWindow),
+		loginAcctAll:    newLimiter(loginAcctAllBurst, loginAcctAllWindow),
 		resetIP:         newLimiter(resetIPBurst, resetIPWindow),
 		resetAcct:       newLimiter(resetAcctBurst, resetAcctWindow),
 		redeemIP:        newLimiter(redeemIPBurst, redeemIPWindow),
@@ -366,10 +380,25 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keyed on the submitted address, whether or not it names an account. A
-	// bucket that exists only for real accounts turns 429-versus-401 into the
-	// same disclosure the constant-time work above is avoiding.
-	if !a.loginAcct.allow(email) {
+	// Both buckets are keyed on the submitted address, whether or not it names
+	// an account. A bucket that exists only for real accounts turns
+	// 429-versus-401 into the same disclosure the constant-time work above is
+	// avoiding.
+	//
+	// The tight one carries the caller's network as well, so that somebody
+	// working on an address they know spends their own allowance rather than
+	// its owner's. It is checked first and short-circuits, because an attempt
+	// it refused must not be charged to the ceiling behind it: one client at
+	// the per-address rate would otherwise empty that ceiling by itself, and
+	// the lockout the network in the key is here to stop would be back.
+	ip := clientIP(r, a.trustProxy)
+	if !a.loginAcct.allow(acctKey(ip, email)) || !a.loginAcctAll.allow(email) {
+		// A line, like every other refusal on this route. A 429 left none at
+		// all, so somebody being held out and somebody mistyping looked the
+		// same from the outside and identical from the logs. Nothing has been
+		// looked up yet, and the submitted address is not written down for the
+		// reason it is not written down below.
+		a.log.Info("login refused", "method", "password", "reason", "rate limited")
 		tooManyRequests(w)
 		return
 	}
@@ -572,8 +601,8 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		//
 		// Refusing means issuing nothing at all, so the last link stays the
 		// live one. Somebody who knows an address can use up its allowance,
-		// which is the same trade loginAcct already makes, and an admin's
-		// re-invite is not charged to this bucket.
+		// which is the same trade the account-wide login ceiling makes, and
+		// an admin's re-invite is not charged to this bucket.
 		if !a.resetAcct.allow(user.ID.String()) {
 			return
 		}
@@ -714,7 +743,8 @@ func (a *Auth) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	// Charged to the login buckets, because this asks for exactly what a login
 	// asks for: an Argon2 evaluation against a stored hash, from a caller who
 	// may be holding a session they took rather than one they were given.
-	if !a.loginIP.allow(clientIP(r, a.trustProxy)) || !a.loginAcct.allow(user.Email) {
+	ip := clientIP(r, a.trustProxy)
+	if !a.loginIP.allow(ip) || !a.loginAcct.allow(acctKey(ip, user.Email)) || !a.loginAcctAll.allow(user.Email) {
 		tooManyRequests(w)
 		return
 	}
