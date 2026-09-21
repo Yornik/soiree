@@ -236,6 +236,7 @@
       'k.notstarted': 'Not started',
       'k.inprogress': 'In progress',
       'k.done': 'Done',
+      'k.late': 'late',
       'k.add': 'Add task',
       'k.empty': 'No tasks yet. Add the first one below.',
       'k.nofilter': 'No tasks with that status.',
@@ -395,6 +396,7 @@
       'k.notstarted': 'Nog niet begonnen',
       'k.inprogress': 'Bezig',
       'k.done': 'Klaar',
+      'k.late': 'te laat',
       'k.add': 'Taak toevoegen',
       'k.empty': 'Nog geen taken. Voeg hieronder de eerste toe.',
       'k.nofilter': 'Geen taken met die status.',
@@ -553,6 +555,7 @@
       'k.notstarted': 'Belum mulai',
       'k.inprogress': 'Sedang dikerjakan',
       'k.done': 'Selesai',
+      'k.late': 'terlambat',
       'k.add': 'Tambah tugas',
       'k.empty': 'Belum ada tugas. Tambahkan yang pertama di bawah.',
       'k.nofilter': 'Tidak ada tugas dengan status itu.',
@@ -3439,11 +3442,16 @@
       li.appendChild(cell('span', '', t3.name || t('un.untitled')));
       li.appendChild(cell('span', 'who', t3.owner || ''));
       var dueCell = cell('span', 'due', t3.due || '');
-      // Late is late where the event is, as everywhere else on this page.
-      if (t3.due && EVENT) {
-        var thereNow = new Date(Date.now() + EVENT.offsetMinutes * 60000);
-        var todayThere = thereNow.toISOString().slice(0, 10);
-        if (String(t3.due) < todayThere) dueCell.classList.add('late');
+      // Late is late where the event is, as everywhere else on this page -
+      // and on a planner with no date, where the reader is. This used to
+      // compute the first of those inline and skip the second, so a task six
+      // years overdue read as ordinary here while the Tasks tab had it in the
+      // alarm colour.
+      if (t3.due && String(t3.due) < todayISO()) {
+        dueCell.classList.add('late');
+        // Colour and a heavier weight are the whole of it otherwise, and
+        // neither is there to hear or left in forced colours.
+        dueCell.appendChild(cell('span', 'sr-only', ' ' + t('k.late')));
       }
       li.appendChild(dueCell);
       list.appendChild(li);
@@ -4748,8 +4756,14 @@
    * change of status or date repaints one row and not the table under a
    * cursor. */
   function markTaskRow(tr, task) {
+    var late = !!task.due && task.status !== 'done' && String(task.due) < todayISO();
     tr.setAttribute('data-status', task.status || 'not-started');
-    tr.classList.toggle('late', !!task.due && task.status !== 'done' && String(task.due) < todayISO());
+    tr.classList.toggle('late', late);
+    // The alarm colour on the date is the only thing that says the day has
+    // passed, and a colour is neither read out nor kept in forced colours, so
+    // the field's own name carries the word as well.
+    var due = tr.querySelector('input[type="date"]');
+    if (due) due.setAttribute('aria-label', late ? t('k.due') + ', ' + t('k.late') : t('k.due'));
   }
 
   // How many of each, beside the filter that would show them.
@@ -4854,13 +4868,15 @@
       }));
 
       addFilesButton(tdName, 'task', task);
-      markTaskRow(tr, task);
 
       tr.appendChild(tdName);
       tr.appendChild(tdOwner);
       tr.appendChild(tdDue);
       tr.appendChild(tdStatus);
       tr.appendChild(tdDel);
+      // After the cells are in it, because the mark reaches into the row for
+      // the date field it names.
+      markTaskRow(tr, task);
       body.appendChild(tr);
     });
     if (!shown) {

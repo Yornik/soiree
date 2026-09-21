@@ -99,7 +99,10 @@ test('open tasks are pinned on the run-up where their dates fall, and late ones 
   expect(pinned.map((m) => m.late)).toEqual([true, false, false]);
   expect(pinned[1].label).toBe('Order the cake');
   await expect(page.locator('#runupFrom')).toHaveText('today – 1 overdue');
-  await expect(page.locator('#upNextList .due.late')).toHaveText(['2030-05-20']);
+  // The word is carried in a visually-hidden span beside the date, because
+  // the alarm colour says nothing to a screen reader and does not survive
+  // forced colours.
+  await expect(page.locator('#upNextList .due.late')).toHaveText(['2030-05-20 late']);
 
   // Finishing the late one takes it off the scale and out of the count.
   await gotoTab(page, 'tasks');
