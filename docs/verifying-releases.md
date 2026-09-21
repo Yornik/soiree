@@ -12,7 +12,7 @@ Images are published to `ghcr.io/yornik/soiree`, `linux/amd64` only.
 
 | Artifact | Where it lives | How to check it |
 |---|---|---|
-| Container image | `ghcr.io/yornik/soiree:vX.Y.Z` (and `:latest`) | — |
+| Container image | `ghcr.io/yornik/soiree:vX.Y.Z` (and `:latest`, when that release is the newest one) | — |
 | Cosign signature | Sigstore's transparency log + alongside the image in GHCR | `cosign verify` (below) |
 | SBOM (SPDX) | Attached to the image as a BuildKit attestation, **and** as a release asset `soiree-vX.Y.Z-sbom.spdx.json` on the [GitHub release](https://github.com/Yornik/soiree/releases) | `docker buildx imagetools inspect` (below) |
 | Build provenance (SLSA, `mode=max`) | Attached to the image as a BuildKit attestation | `docker buildx imagetools inspect` (below) |
@@ -103,8 +103,9 @@ cosign verify \
 ```
 
 That digest is an OCI **index** digest: the SBOM and provenance ride along as
-extra manifests beside the image, and the index is what both `:vX.Y.Z` and
-`:latest` point at. Signing the index covers all of it.
+extra manifests beside the image, and the index is what `:vX.Y.Z` points at,
+and what `:latest` points at too when that release is the newest one. Signing
+the index covers all of it.
 
 ## Read the SBOM and the provenance
 

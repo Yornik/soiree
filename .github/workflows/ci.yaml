@@ -38,11 +38,11 @@ jobs:
     # all this group does is keep the two publish jobs out of the registry at
     # the same time, and a group serialises only against itself, so the name is
     # shared with release-please.yaml. It does not make the publish order the
-    # release order — a job joins its group once `needs` is satisfied, so a
-    # re-run of a flaked check joins it long after the later release has landed
-    # (the instruction to re-run one is in release-please.yaml). It sits on the
-    # job rather than on the workflow so that what queues is the push and the
-    # signature, a couple of minutes, rather than the whole check suite: while
+    # release order, because a job joins its group once `needs` is satisfied,
+    # so a re-run of a flaked check joins it long after the later release has
+    # landed (the instruction to re-run one is in release-please.yaml). It sits
+    # on the job rather than on the workflow so that what queues is the push
+    # and the signature, a couple of minutes, rather than the whole suite: while
     # one run waits, a third release joining cancels the one that waits, and
     # that version gets no image at all. cancel-in-progress stays false, since
     # stopping a release between pushing the image and signing it is worse than
@@ -144,7 +144,7 @@ jobs:
       # digest-pinning the action pins cosign too.
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      # Sign the index digest, which is what both tags resolve to.
+      # Sign the index digest, which is what the tags above resolve to.
       - name: Sign the image (keyless, GitHub OIDC)
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

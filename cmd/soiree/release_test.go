@@ -344,9 +344,9 @@ func TestTwoReleasesDoNotPublishAtOnce(t *testing.T) {
 // themselves the day they were published.
 func TestNoDependencyMergesItselfTheDayItIsPublished(t *testing.T) {
 	// Rules are read as raw values keyed by name, because the way to switch
-	// the wait off is to set it to null — what vulnerabilityAlerts does by
-	// default — and a null decoded into any typed field is the same nil as a
-	// rule that never mentioned the field at all.
+	// the wait off is to set it to null, which is what vulnerabilityAlerts
+	// does by default, and a null decoded into any typed field is the same nil
+	// as a rule that never mentioned the field at all.
 	var cfg struct {
 		MinimumReleaseAge json.RawMessage              `json:"minimumReleaseAge"`
 		PackageRules      []map[string]json.RawMessage `json:"packageRules"`
