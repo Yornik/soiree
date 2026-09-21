@@ -178,6 +178,22 @@
       </ol>
     </section>
 
+    <!-- The same moment on a deployment with accounts, with nobody signed in:
+         body.signed-out.is-empty. There is nothing in this browser, but there
+         is a plan, and it is not this visitor's to begin - what the three
+         steps would start is a second one, merged into everybody's at the
+         next sign-in. So the panel says where the plan is and opens the door
+         instead. The rest of the planner is untouched: this browser's own
+         copy is still theirs to see, and is-empty says there is none.
+         Its strings are auth.js's own, like the rest of what a deployment
+         without accounts never draws. -->
+    <section class="first-run-out">
+      <h2 data-i18n-auth="fr.out.title">This event's plan is shared</h2>
+      <p data-i18n-auth="fr.out.body">Nothing of it is kept in this browser. Sign in to see it.</p>
+      <button class="solid-btn" type="button" id="startSignIn" data-auth-goto="login"
+              data-i18n-auth="signin">Sign in</button>
+    </section>
+
     <div class="when-data">
       <!-- The one section that belongs only to a finished event: not what is
            left to do, but what each person took on, paid and still owes. -->

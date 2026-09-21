@@ -2094,7 +2094,13 @@ Principles, in rough priority:
   legible; dark mode is not an inverted afterthought.
 - **The empty state is the first impression.** A fresh instance shows no data
   at all, and a screen that says nothing about what to do next is the one most
-  people see first.
+  people see first. Signed out on a deployment with accounts it is somebody
+  else's first impression too, and there the three steps are the wrong offer:
+  the plan exists, this browser simply has none of it, and a visitor who
+  accepts the offer builds a second plan that is merged into everybody's at
+  the next sign-in. So `body.signed-out.is-empty` shows the way in instead.
+  Only that panel changes: the planner itself stays open signed out, because
+  this browser's own copy is theirs to see.
 
 Explicitly avoided: the generated-template look — a centred hero over three
 equal feature cards, a purple-to-indigo gradient, emoji standing in for icons,
