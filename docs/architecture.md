@@ -459,11 +459,20 @@ a textbook cardinality leak that eventually takes Prometheus down with it.
 The set is `shell`, `asset`, `service-worker`, `healthz`, `readyz`, `metrics`,
 `other`, plus one label per API collection: `api-plan`, `api-settings`,
 `api-events`, `api-budget-items`, `api-sponsors`, `api-tasks`, `api-notes`,
-`api-phases`, `api-programme-entries`, and `api-other` for everything else
-under the prefix. The collection is matched against that map rather than taken
-from the URL, because the segment is caller-controlled and an unknown one must
-never become a label. `/api/v1/auth/...` and `/api/v1/users/...` therefore land
-in `api-other`.
+`api-phases`, `api-programme-entries`, `api-auth`, `api-users`,
+`api-attachments`, `api-push`, `api-activity`, and `api-other` for everything
+else under the prefix, `/api/v1/version` included. The collection is matched
+against that map rather than taken from the URL, because the segment is
+caller-controlled and an unknown one must never become a label.
+
+One second segment is split out by a map of the same kind: `/api/v1/auth/login`
+is `api-auth-login`, while every other `/api/v1/auth/...` path, the passkey
+routes included, is `api-auth`. Login is the route that is rate limited, that
+costs an Argon2id evaluation and whose refusals a ban is built from, and
+`/auth/session` runs on every page load, so one shared label leaves login's
+latency and its 401 and 429 rate unreadable under traffic a hundred times its
+size. A second segment nobody registered falls back to `api-auth`, for the
+reason an unknown collection falls back to `api-other`.
 
 Logs are JSON on stdout via `log/slog`, which is what the cluster's log
 pipeline expects.

@@ -122,7 +122,7 @@ func TestAFormOnASiblingOriginCannotInviteAnAdmin(t *testing.T) {
 	// wrapper would make somebody probing this invisible on the dashboard.
 	out := httptest.NewRecorder()
 	metrics.ServeHTTP(out, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	const want = `soiree_http_requests_total{method="POST",route="api-other",status="403"} 1`
+	const want = `soiree_http_requests_total{method="POST",route="api-users",status="403"} 1`
 	if !strings.Contains(out.Body.String(), want) {
 		t.Errorf("metrics do not count the refusal; want %s", want)
 	}
