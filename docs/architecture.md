@@ -447,6 +447,71 @@ written down in three and the three disagreed.
   origin, so the client's handshake round-trips the full distance anyway. It
   would only pay if the edge terminated TLS and cached.
 
+### The one stall that is not about distance
+
+Everything above is about the distance to the origin. The one measured stall in
+the planner owes nothing to it, and it is written down here so it is not looked
+for on the network. `fitBudgetText()` in `web/src/app.js` sizes every textarea
+in the budget table one field at a time, and `fitText` reads `offsetParent`,
+writes `height: auto`, reads `offsetHeight`, `clientHeight` and `scrollHeight`,
+then writes the height again. Every read follows a write, so the browser has to
+lay the table out again before it can answer, and `table-layout: fixed` lays
+out the whole table. That is two forced layouts per field, so 4n of them for n
+budget lines, each one O(n).
+
+Measured in the suite's Chromium against the real binary, on a seeded plan
+whose names and notes wrap, medians of seven runs at 1400x900. The layout
+counts are `LayoutCount` from the CDP performance metrics; the absolute
+milliseconds are from a busy development machine, so the shape is the finding
+and not the figures.
+
+| Lines | Forced layouts | `fitBudgetText` | The three-pass form below |
+|---|---|---|---|
+| 25 | 100 | 51 ms | 5.3 ms |
+| 50 | 200 | 136 ms | 11.9 ms |
+| 100 | 400 | 427 ms | 21.4 ms |
+| 200 | 800 | 1632 ms | 44.7 ms |
+
+Doubling the lines costs between 2.7 and 3.8 times as much, which is the
+quadratic term showing. The fit is three quarters or more of the handler it
+sits in, so switching to the Budget tab, typing one character into a sponsor's
+callsign and each frame of a column drag all cost within about a fifth of each
+other. The table is also rebuilt whenever somebody else's edit arrives, so on a
+shared plan this is charged to every browser showing the Budget tab, which is
+the most frequent way to meet it. At 390 px the table is a card stack with
+`table-layout: auto`, where the same work costs about a third and grows closer
+to linearly, but a tab switch at 100 lines is still 159 ms and the drag grips
+that a desktop has are hidden there anyway.
+
+The form to write instead: check once that the table is on screen, then set
+`height: auto` on every field, then read every height into an array, then write
+them all. Measured at two forced layouts whatever the size, and byte-identical
+`style.height` on every field at both widths. Hoisting that visibility check
+out of the loop is the half of it that is easy to miss: left per field it is
+itself a read after a write, which still costs a layout per field plus one and
+gives back only half the time. `fitText(ta)` stays as it is for the one field
+being typed into.
+
+`renderAll()` pays for that pass twice. It calls `applyColWidths()`, which ends
+in a fit, and then `renderBudgetTable()`, which empties `#budgetBody`, builds
+the rows again and fits those, so the first pass sizes fields about to be
+thrown away. With the Budget tab on screen at 100 lines, a language switch,
+which is `renderAll()`, forces 827 layouts where a sponsor keystroke, which is
+`renderBudgetTable()` alone, forces 401. It is free only while that tab is
+hidden, which is where every page load starts: the panel is `display: none`, so
+`offsetParent` is null and the same switch forces 28. What is left to pay it is
+a language switch, an import, a sign-out and a plan arriving from a retried
+`connect()`, each with the Budget tab showing. Once the fit is O(n) the wasted
+pass is the table's 21.4 ms at 100 lines, which is not worth a flag on
+`applyColWidths()` to skip.
+
+Set aside on purpose: `field-sizing: content` behind `@supports` would be a
+second sizing path to keep in step with the `height: 100%` rule and with a row
+somebody has dragged taller, for no gain once the fit is O(n); rebuilding
+`<colgroup>` on every drag frame is too small to measure beside this; and
+browsers already coalesce `pointermove` to about one event per frame, so a
+`requestAnimationFrame` guard on the drag saves little.
+
 ## Observability
 
 The application is built to be operated, not just run.
@@ -582,6 +647,10 @@ Open, in the order they matter:
   met by hand-written SQL.
 - **Restore drill.** Backups that have never been restored are not backups.
   Restore into a scratch namespace, confirm the data, write down the steps.
+- **The budget table's sizing pass.** `fitBudgetText()` forces two layouts per
+  field on a fixed-layout table, so a large plan stalls on a tab switch, on a
+  keystroke and on every frame of a column drag. Measured, with the form to
+  write instead, under *The one stall that is not about distance*.
 
 Explicitly out of scope: multi-event tenancy, a plugin system, analytics, and a
 marketing site. This is a tool a dozen people use for one evening.
