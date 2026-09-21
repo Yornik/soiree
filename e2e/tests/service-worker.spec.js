@@ -154,6 +154,44 @@ test('a deploy whose precache cannot finish leaves the copy that works in place'
 });
 
 /*
+ * The half of a deploy the page has to do.
+ *
+ * A worker taking over from another worker is the moment a reload would gain
+ * something: the arriving worker precaches the new shell before it activates,
+ * and activating deletes the cache the outgoing one was served from. Before
+ * that moment a reload is served the same old shell out of the same old cache,
+ * which is how a planner ends up needing two of them.
+ */
+test('a deploy that takes an open planner over says so, once there is something to reload into', async ({ browser, request }) => {
+  const arriving = (await (await request.get('/sw.js')).text())
+    .replace(/var VERSION = "[^"]*"/, 'var VERSION = "the next build"');
+  const context = await browser.newContext({ baseURL: BASE_URL, serviceWorkers: 'allow' });
+  try {
+    const page = await context.newPage();
+    await page.goto('/');
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15000 });
+    // Opened again, so that this page starts its life under a worker. The
+    // first worker a page ever gets claims it exactly as a deploy does, and
+    // that one is not news: there is nothing newer to reload into.
+    await page.reload();
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15000 });
+    await expect(page.locator('#dataMsg')).toHaveText('');
+
+    await context.route(/\/sw\.js\?deploy=2$/, (route) => route.fulfill({ contentType: 'text/javascript', body: arriving }));
+    await page.evaluate(() => navigator.serviceWorker.register('/sw.js?deploy=2').then(() => {}));
+
+    await expect(page.locator('#dataMsg')).toHaveText(/A newer version of the planner is ready/);
+    // And there is: the arriving worker's own cache holds the shell already,
+    // because a precache that has not finished is a worker that has not
+    // activated and cannot have taken anything over.
+    expect(await page.evaluate(() => caches.open('soiree-the next build')
+      .then((c) => c.match('/')).then((hit) => !!hit))).toBe(true);
+  } finally {
+    await context.close();
+  }
+});
+
+/*
  * The two handlers reminders end in: `push` and `notificationclick`.
  *
  * Neither had ever run. They arrived in the same change as the line that

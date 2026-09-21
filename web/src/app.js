@@ -369,6 +369,7 @@
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
       'd.session': 'Your session has ended. Sign in again — what you changed is safe in this browser and is sent as soon as you are back.',
       'd.nostorage': 'This browser is not keeping your changes. Export the planner before you close this tab.',
+      'd.updated': 'A newer version of the planner is ready. Reload this page when it suits you.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
       'ar.reopen': 'Reopen for editing',
       'ar.open': 'Reopened for editing in this browser. Close it again once everything is settled.',
@@ -546,6 +547,7 @@
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
       'd.session': 'Je sessie is verlopen. Meld je opnieuw aan — je wijzigingen staan veilig in deze browser en worden verstuurd zodra je terug bent.',
       'd.nostorage': 'Deze browser bewaart je wijzigingen niet. Exporteer de planner voordat je dit tabblad sluit.',
+      'd.updated': 'Er is een nieuwere versie van de planner klaar. Herlaad deze pagina wanneer het je uitkomt.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
       'ar.reopen': 'Heropenen om te bewerken',
       'ar.open': 'Weer opengesteld in deze browser. Sluit hem weer zodra alles is afgerekend.',
@@ -722,6 +724,7 @@
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
       'd.session': 'Sesimu sudah berakhir. Masuk lagi — perubahanmu aman tersimpan di browser ini dan dikirim begitu kamu kembali.',
       'd.nostorage': 'Browser ini tidak menyimpan perubahanmu. Ekspor perencana sebelum kamu menutup tab ini.',
+      'd.updated': 'Versi perencana yang lebih baru sudah siap. Muat ulang halaman ini saat kamu sempat.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
       'ar.reopen': 'Buka lagi untuk diubah',
       'ar.open': 'Dibuka lagi untuk diubah di browser ini. Tutup lagi setelah semuanya beres.',
@@ -2796,6 +2799,7 @@
     // be deaf.
     live.addEventListener('resync', function () { scheduleResync(); });
     live.addEventListener('change', function (e) { onChange(e.data); });
+    live.addEventListener('hello', function (e) { onHello(e.data); });
     live.onopen = function () { liveWait = 0; };
     live.onerror = function () {
       // CONNECTING means the browser is already reconnecting on the interval
@@ -2844,6 +2848,72 @@
       if (held && n.revision != null && Number(n.revision) <= held.revision) return;
     }
     scheduleResync();
+  }
+
+  /* ---------- Code this page no longer has ----------
+   * A planner is opened once and then left open for days, so nothing in it
+   * ever learns that the deployment changed underneath. The stream is the one
+   * thing here that notices without being asked: it drops with the old process
+   * and is reopened against the new one, so the `hello` it opens with names the
+   * build answering now. That build is the URL of the page's script, which is
+   * the only build id a page can hold up against itself.
+   *
+   * Said rather than acted on, for the reason the notificationclick handler in
+   * sw.js gives: a reload takes away the screen somebody is on, and whatever
+   * they were half way through typing with it.
+   *
+   * And not said until a reload would help. Under a worker the shell comes out
+   * of the cache, so a page told to reload while the old copy is still in there
+   * reloads into the same old code and is told again. Asking the worker to
+   * update and waiting for it to take over is what makes one reload enough: a
+   * worker precaches the new shell before it activates, and activating deletes
+   * the cache the old one was served from. A worker whose install fails never
+   * takes over and nothing is said, which is right: there would be nothing to
+   * reload into.
+   */
+  var MY_BUILD = document.currentScript ? new URL(document.currentScript.src).pathname : '';
+  var askedFor = '';      // the build a worker has already been sent after
+  var controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+
+  function noticeUpdate() {
+    if (updateReady) return;
+    updateReady = true;
+    setSticky(t('d.updated'));
+  }
+
+  function onHello(raw) {
+    if (!MY_BUILD || updateReady) return;
+    var n;
+    try { n = JSON.parse(raw); } catch (e) { return; }
+    if (!n || !n.build || n.build === MY_BUILD || n.build === askedFor) return;
+
+    // Nothing between this page and the server, so the reload it is about to
+    // be offered fetches the new shell itself.
+    if (!controlled) { noticeUpdate(); return; }
+
+    askedFor = n.build;
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+      if (reg) reg.update();
+    }, function () {
+      // A registration that cannot be looked up is not one that is going to
+      // hand over a new shell, and the cached one is all a reload would get.
+    });
+  }
+
+  /* A worker taking over from another worker is a deploy that has landed: the
+   * new shell was precached before it activated, and the cache the old one
+   * served from is gone with it. The first worker a page ever gets claims it
+   * the same way and is not news, so what is compared is the worker before
+   * against the worker after, rather than whether there was one when the page
+   * loaded. A planner opened before it had a worker at all, and still open a
+   * day later, is exactly the page this is for.
+   */
+  if (navigator.serviceWorker) {
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      var replaced = controlled;
+      controlled = !!navigator.serviceWorker.controller;
+      if (replaced) noticeUpdate();
+    });
   }
 
   /* ---------- Re-reading the plan ----------
@@ -5977,6 +6047,7 @@
    */
   var FLASH_MS = 6000;
   var stickyMsg = '';
+  var updateReady = false;   // the server is serving code newer than this page's
   var flashToken = 0;
   var flashUntil = 0;
 
@@ -6005,10 +6076,15 @@
 
   function setSticky(msg) {
     msg = msg || '';
+    // Newer code on the server is the one condition here that nothing on this
+    // page can put right, and it outlives the others: the write loop clears
+    // this slot on every pass that gets through. So it is restored here rather
+    // than restated at each of those places.
+    if (!msg && updateReady) msg = t('d.updated');
     if (stickyMsg === msg) return;
     stickyMsg = msg;
-    // Every sticky message is a problem: they are the conditions that are
-    // still true.
+    // Every sticky message is painted as the same kind of thing: a condition
+    // that is still true, and stays true until somebody acts on it.
     if (Date.now() >= flashUntil) paintMsg(stickyMsg, !!stickyMsg);
   }
 
