@@ -236,9 +236,25 @@ passkey is, with `method=password` and, when the address named an account,
 that account and why it was refused (`wrong password`, `no password set`, or
 the status it has instead of active). An address with no account here leaves
 the line with nothing on it: the address itself is never written down, and
-neither is the password. The two login buckets bound how many of these one
+neither is the password. The three login buckets bound how many of these one
 caller can produce, so a run against the sign-in screen shows up as a burst of
-them rather than as a flood.
+them rather than as a flood. One of the three counts the attempts from the
+caller's address; the other two belong to the account, and the tighter of
+those counts only the attempts made against it from the caller's own network.
+
+A caller either account bucket turned away is that same line with
+`reason="rate limited"`, and that one names no account. Nothing has been
+looked up when it is written, deliberately: looking an address up in order to
+log it would make the `429` say whether the address has an account here, which
+is the question the rest of this route is built not to answer. So it tells an
+operator less than the lines above it. It carries no account, no client
+address and no sign of which of the two buckets refused, and a run of them
+therefore does not by itself separate somebody being held out of their account
+from its owner working through the passwords they might have used. What it
+does say is that a refusal happened before any password was checked, which
+nothing recorded before. A caller the address bucket turned away leaves no
+line at all: that refusal happens in front of the route, and the `429` is all
+there is of it.
 
 ## Generating a VAPID key pair
 
