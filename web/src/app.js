@@ -850,7 +850,16 @@
   // first cell rather than in columns of their own: two more of these, paid
   // for out of Remarks and the money, cost a five-word remark three lines and
   // clipped a five-figure amount.
-  var DEFAULT_COL_WIDTHS = [230, 140, 70, 135, 110, 135, 135, 245, 40];
+  // Paid holds as much as the two computed money columns do. It used to be
+  // the narrowest of the four, which was right while it held bare digits and
+  // wrong the moment it held the currency as well: in a currency whose
+  // ordinary figures run to eight digits, "Rp 12.500.000" in a column sized
+  // for "12500000" is cut at a point where it still reads as a figure, and
+  // "Rp 12.500" is a thousandth of what the line costs. The width comes off
+  // Cost by, which holds one short label and had it to give; not off Remarks,
+  // which needs every pixel it has to keep a five-word remark on one line,
+  // and not off the item, which is the thing an entry is scanned for.
+  var DEFAULT_COL_WIDTHS = [230, 140, 70, 135, 130, 135, 115, 245, 40];
 
   function emptyState() {
     return {
@@ -1242,6 +1251,14 @@
     if (typeof s.splitEvenly !== 'boolean') s.splitEvenly = false;
     if (typeof s.reopened !== 'boolean') s.reopened = false;
     if (!Array.isArray(s.colWidths) || s.colWidths.length !== DEFAULT_COL_WIDTHS.length) {
+      s.colWidths = DEFAULT_COL_WIDTHS.slice();
+    } else if (s.colWidths.join() === '230,140,70,135,110,135,135,245,40') {
+      // The defaults up to 1.3.0, which nobody chose: a planner carrying them
+      // to the character has never had a column edge dragged. Paid is wider
+      // now because it holds the currency, and a planner that kept the old
+      // figure would show a cut one instead. Anybody who moved even one edge
+      // keeps all nine, which is why this is an exact match rather than a
+      // column-by-column one.
       s.colWidths = DEFAULT_COL_WIDTHS.slice();
     }
     if (!s.rowHeights || typeof s.rowHeights !== 'object') s.rowHeights = {};
@@ -3253,6 +3270,21 @@
   function fmtCur(n) { return fmtMoney(Number(n) || 0); }
   function fmtShort(n) { return fmtShortImpl(Number(n) || 0); }
 
+  /* The figure in a money field, for while nobody is typing in it. Same
+   * currency and same grouping as the computed cells beside it, and the
+   * currency's own decimals rather than fmtCur's whole units: a total in a
+   * narrow column is worth rounding, and a field holding what somebody typed
+   * is not, because €45.50 drawn as "€46" hides the cents until the field is
+   * opened again. On a zero-decimal currency the two are the same string.
+   * The fallback goes through the minor-unit helpers for the reason given
+   * there: toFixed would round a float that had already drifted. */
+  var fmtAmountImpl = makeFormat(LOC, {
+    style: 'currency', currency: CUR,
+    minimumFractionDigits: MONEY_EXP, maximumFractionDigits: MONEY_EXP
+  }, function (n) { return CUR + ' ' + formatMinor(toMinor(n)); });
+
+  function fmtAmount(n) { return fmtAmountImpl(Number(n) || 0); }
+
   var SECONDARY = (CONFIG.secondaryCurrency || '').trim();
   var fmtSecondaryImpl = SECONDARY ? makeFormat(CONFIG.secondaryLocale || LOC, {
     style: 'currency', currency: SECONDARY, maximumFractionDigits: 0
@@ -4195,13 +4227,41 @@
   /* Every field that takes a figure is wired here, the three below and the
    * grid's cells alike, so that one typed figure is read one way wherever it
    * is typed. `apply` takes the figure, `shown` spells out what is stored
-   * now. `places` is what the field can carry: see parseAmount.
+   * now. `places` is what the field can carry: see parseAmount. `money` says
+   * the figure is an amount in the plan's currency, which nothing else here
+   * gives away: a quantity carries three decimals of its own and must never
+   * gain a currency mark.
    *
    * Nothing is said about a figure that does not read yet, because a
    * half-typed one comes through on every keystroke: "1.500.000" is not a
    * figure until its last digit. The field is judged when it is left.
    */
-  function wireAmountInput(inp, places, apply, shown) {
+  function wireAmountInput(inp, places, apply, shown, money) {
+    /* What the field says while nobody is in it. An amount says which
+     * currency it is in, because a line that reads "25000" in the field and
+     * "Rp 25.000" in the cell beside it spells one currency two ways, and
+     * the reader has to settle which every time. While somebody is in it the
+     * bare figure is back: the currency mark is not what anybody would type,
+     * and parseAmount does not read it. */
+    function settled() { return money ? fmtAmount(shown()) : shown(); }
+
+    inp.addEventListener('focus', function () {
+      // A readonly copy takes the caret and nothing else, and a figure left
+      // with a typo in it is kept as typed by the blur handler below.
+      // Putting the stored figure over either would undo what the reader did.
+      if (inp.readOnly || inp.getAttribute('aria-invalid') === 'true') return;
+      var now = String(shown());
+      // Nothing to put back on a field that was already showing the bare
+      // figure, and returning here leaves whatever is selected selected.
+      if (now === inp.value) return;
+      inp.value = now;
+      // Writing to value collapses the caret to the end and takes the
+      // selection with it, including the select-all a browser makes of its
+      // own accord when a field is tabbed into. Put back, or tabbing into a
+      // money field and typing would append to the figure instead of
+      // replacing it.
+      inp.setSelectionRange(0, now.length);
+    });
     inp.addEventListener('input', function () {
       var v = parseAmount(inp.value, places);
       if (v === null) return;
@@ -4209,6 +4269,10 @@
       apply(v);
     });
     inp.addEventListener('blur', function () {
+      // Nothing can have been typed into a readonly field, so there is
+      // nothing to read back. Reading what is drawn in one would mark an
+      // archive nobody touched as a figure the page cannot understand.
+      if (inp.readOnly) { inp.value = settled(); return; }
       if (parseAmount(inp.value, places) === null) {
         // Left as it was typed rather than put back: a figure with a typo
         // in it is quicker to correct than to type again. What the plan
@@ -4221,8 +4285,11 @@
       inp.removeAttribute('aria-invalid');
       // What was understood, spelled the way every render spells it, so
       // "45,50" comes back as the figure it became.
-      inp.value = shown();
+      inp.value = settled();
     });
+    // Drawn here as well, so that what a field says before anybody has been
+    // near it is decided in the same place as what it says afterwards.
+    inp.value = settled();
   }
 
   // ---------- Budget settings ----------
@@ -5630,10 +5697,13 @@
         return td;
       }
 
-      // `hold` is the column's own limit, for the one figure here that is
-      // neither money nor read back through a money parser: without it the
-      // total on this screen is computed from a number the plan cannot store.
-      function numCell(key, nameKey, places, hold) {
+      // `money` is the column's, said outright rather than read off `places`,
+      // which the one column here that is not money shares the shape of.
+      // `hold` is the column's own limit, for that same figure, the one here
+      // that is neither money nor read back through a money parser: without
+      // it the total on this screen is computed from a number the plan cannot
+      // store.
+      function numCell(key, nameKey, places, money, hold) {
         var td = document.createElement('td');
         td.className = 'num-cell';
         var inp = document.createElement('input');
@@ -5645,14 +5715,13 @@
         inp.inputMode = 'decimal';
         inp.autocomplete = 'off';
         inp.setAttribute('aria-label', t(nameKey));
-        inp.value = Number(item[key]) || 0;
         wireAmountInput(inp, places, function (v) {
           item[key] = hold ? hold(v) : v;
           save();
           refreshRow(tr, item);
           renderBudgetTotals();
           renderOverview();
-        }, function () { return Number(item[key]) || 0; });
+        }, function () { return Number(item[key]) || 0; }, money);
         td.appendChild(inp);
         return td;
       }
@@ -5661,16 +5730,17 @@
       // Money carries the currency's own decimals: a quote with cents is an
       // ordinary quote, and a field that reads two of them as a thousands
       // group would turn one into a hundred.
-      var tdUnit = numCell('unit', 'c.unit', MONEY_EXP);
+      var tdUnit = numCell('unit', 'c.unit', MONEY_EXP, true);
       // Three decimals rather than whole cases: a third of a case and a
       // per-head figure divided out are both ordinary, and the column keeps
-      // them.
-      var tdQty = numCell('qty', 'c.qty', 3, toQty);
+      // them. Not money, so no currency: three of these are a quantity and
+      // never three tenths of a cent.
+      var tdQty = numCell('qty', 'c.qty', 3, false, toQty);
 
       var tdTotal = document.createElement('td');
       tdTotal.className = 'calc strong';
 
-      var tdPaid = numCell('paid', 'f.paid', MONEY_EXP);
+      var tdPaid = numCell('paid', 'f.paid', MONEY_EXP, true);
 
       var tdOwing = document.createElement('td');
       tdOwing.className = 'calc';

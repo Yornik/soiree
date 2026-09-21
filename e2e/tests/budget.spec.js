@@ -11,7 +11,8 @@
  */
 const { test, expect } = require('@playwright/test');
 const {
-  addBudgetLine, addSponsor, budgetRow, expectFigures, flushToStorage, gotoTab, money,
+  addBudgetLine, addSponsor, budgetRow, expectAmount, expectFigures, flushToStorage, gotoTab,
+  money,
   openLineDetails, openPlanner, readStored, tagLine,
 } = require('./helpers');
 const { BASE_URL } = require('../servers');
@@ -206,9 +207,9 @@ test('the totals below the table are the same totals as inside it', async ({ pag
 test('the first row of a fresh grid starts at zero rather than at NaN', async ({ page }) => {
   await page.locator('#addBudgetRow').click();
   const row = budgetRow(page, 0);
-  await expect(row.unit).toHaveValue('0');
+  await expectAmount(row.unit, 0);
   await expect(row.qty).toHaveValue('1');
-  await expect(row.paid).toHaveValue('0');
+  await expectAmount(row.paid, 0);
   await expect(row.committed).toHaveText('€0');
   await expectFigures(page, { committed: 0, paid: 0, outstanding: 0, forecast: 0 });
 });
@@ -380,7 +381,7 @@ test('a figure with cents is a valid figure, not one the browser calls invalid',
   // rounded away by a control that had opinions about whole units.
   await row.unit.click();
   await row.unit.blur();
-  await expect(row.unit).toHaveValue('45.33');
+  await expectAmount(row.unit, 45.33);
   await expect(row.committed).toHaveText('€113');
 });
 

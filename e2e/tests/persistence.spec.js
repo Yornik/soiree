@@ -27,6 +27,7 @@ const {
   addSponsor,
   addTask,
   budgetRow,
+  expectAmount,
   expectFigures,
   expectStored,
   flushToStorage,
@@ -107,8 +108,8 @@ test('a full planner comes back after a reload', async ({ page }) => {
 
   const first = budgetRow(page, 0);
   await expect(first.item).toHaveValue('Venue deposit');
-  await expect(first.unit).toHaveValue('2500');
-  await expect(first.paid).toHaveValue('500');
+  await expectAmount(first.unit, 2500);
+  await expectAmount(first.paid, 500);
   await expect(first.committed).toHaveText('€2,500');
 
   await gotoTab(page, 'tasks');

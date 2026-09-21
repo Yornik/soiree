@@ -920,7 +920,14 @@ td.calc.owing { color: var(--owed); }
 td.calc.over { color: var(--alarm); }
 table.budget tbody tr.settled td.calc:nth-child(6) { color: var(--paid); font-weight: 600; }
 td.calc.paid { color: var(--paid); }
-td.num-cell input { text-align: right; }
+/* A field that is not being typed in shows the same money the calc cells
+   beside it show, so it is set the way they are: one width per digit, or a
+   column of figures reading down to a total is a ragged one. The left gutter
+   goes with it. A figure is drawn from the right, so that space is reached
+   only by one long enough to need it, and a currency mark in front of grouped
+   thousands is what made figures that long ordinary. */
+td.num-cell { padding-left: 0; }
+td.num-cell input { text-align: right; font-variant-numeric: tabular-nums; }
 td.del-cell { width: 40px; text-align: center; }
 td.empty-cell { color: var(--ink-2); padding: 18px 12px; }
 .status-select { min-width: 124px; }
@@ -2054,14 +2061,24 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
      five digits and two decimals is 67px of type at this size, a heading has
      to hold its longest word whole, and what those leave over goes to the
      item and the remark, which wrap. The last column is the one that removed
-     a line, which is not on the sheet at all. */
+     a line, which is not on the sheet at all.
+
+     The two money fields carry the currency now, which is wider than the
+     figure alone by a mark and its space, and the share Paid had could not
+     hold one at all. Most of that comes out of the gutters of those two cells
+     below, because the one thing a money column does not need is room on the
+     left of a figure drawn from the right; the rest is two points from the
+     item, which wraps and pays in height rather than in a cut figure. A
+     currency whose ordinary figures run to eight digits does not fit this
+     grid on a sheet either way, and did not before the fields carried the
+     mark. */
   .table-wrap { overflow: visible; }
   table.budget { width: 100% !important; }
-  #budgetCols col:nth-child(1) { width: 17% !important; }
+  #budgetCols col:nth-child(1) { width: 15% !important; }
   #budgetCols col:nth-child(2) { width: 13% !important; }
   #budgetCols col:nth-child(3) { width: 6% !important; }
   #budgetCols col:nth-child(4) { width: 12% !important; }
-  #budgetCols col:nth-child(5) { width: 10% !important; }
+  #budgetCols col:nth-child(5) { width: 12% !important; }
   #budgetCols col:nth-child(6) { width: 14% !important; }
   #budgetCols col:nth-child(7) { width: 13% !important; }
   #budgetCols col:nth-child(8) { width: 15% !important; }
@@ -2073,6 +2090,10 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   table input, table textarea, table select, table .by-btn { font-size: 12px; }
   table.budget td.note-cell textarea { font-size: 11px; }
   table th, table td { padding-left: 8px; padding-right: 8px; }
+  /* Both gutters of a money cell, for the currency mark: the left one is
+     already gone on screen, and on a sheet the right one is worth more to the
+     figure than to the white between the columns. */
+  table.budget td.num-cell { padding-right: 2px; }
   /* The grid's own fields, said again here because a column on a sheet is
      narrower than the 70px every field is given to be aimed at, and the
      selector that gives them that is typed and outweighs the bare `input` in

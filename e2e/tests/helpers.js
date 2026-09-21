@@ -33,6 +33,21 @@ function money(text) {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Asserts the figure a money field is showing, rather than the way it spells
+ * it: a field carries the currency while nobody is typing in it, and ICU is
+ * free to change its mind about the space after the symbol. Polls, so it
+ * stands in for the toHaveValue it replaced at a site that is waiting for an
+ * edit to arrive from somewhere else.
+ *
+ * @param {import('@playwright/test').Locator} field
+ * @param {number} amount
+ * @param {{timeout?: number}} [options]
+ */
+async function expectAmount(field, amount, options) {
+  await expect.poll(async () => money(await field.inputValue()), options).toBe(amount);
+}
+
 /** Opens a planner with empty storage. @param {import('@playwright/test').Page} page */
 async function openPlanner(page) {
   await page.goto('/');
@@ -523,6 +538,7 @@ module.exports = {
   addTask,
   budgetRow,
   duplicatedFigures,
+  expectAmount,
   expectFigures,
   expectStored,
   flushToStorage,
