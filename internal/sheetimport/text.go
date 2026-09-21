@@ -127,20 +127,34 @@ func breakdownNote(children []BudgetItem) string {
 	return "includes " + strings.Join(parts, "; ")
 }
 
-// statusWords maps what people write into the three states the UI allows.
-// Unrecognised words are reported rather than mapped by similarity: guessing
-// that "cancelled" means "done" would be a lie in the wrong direction.
+// statusWords maps what people write into the three states the UI allows, in
+// the three languages the interface ships in: a status column is written in
+// whatever language the sheet is, and every word missing from here imports as
+// not-started with a warning beside it. Unrecognised words are reported
+// rather than mapped by similarity: guessing that "cancelled" means "done"
+// would be a lie in the wrong direction.
 var statusWords = map[string]string{
 	"done": "done", "complete": "done", "completed": "done", "finished": "done",
 	"closed": "done", "paid": "done", "yes": "done", "ok": "done", "y": "done",
+	"klaar": "done", "gereed": "done", "afgerond": "done", "gedaan": "done",
+	"voldaan": "done", "betaald": "done", "ja": "done",
+	"selesai": "done", "sudah": "done", "sudah selesai": "done", "beres": "done",
+	"lunas": "done", "dibayar": "done", "ya": "done",
 
 	"in progress": "in-progress", "in-progress": "in-progress", "inprogress": "in-progress",
 	"ongoing": "in-progress", "started": "in-progress", "doing": "in-progress",
 	"wip": "in-progress", "partial": "in-progress",
+	"bezig": "in-progress", "mee bezig": "in-progress", "loopt": "in-progress",
+	"in behandeling": "in-progress", "proses": "in-progress", "berjalan": "in-progress",
+	"sedang proses": "in-progress", "sedang berjalan": "in-progress", "dikerjakan": "in-progress",
 
 	"not started": "not-started", "not-started": "not-started", "notstarted": "not-started",
 	"todo": "not-started", "to do": "not-started", "open": "not-started",
 	"pending": "not-started", "new": "not-started", "no": "not-started", "n": "not-started",
+	"te doen": "not-started", "nog te doen": "not-started", "niet gestart": "not-started",
+	"nog niet gestart": "not-started", "nee": "not-started",
+	"belum": "not-started", "belum mulai": "not-started", "belum dimulai": "not-started",
+	"tidak": "not-started",
 }
 
 // normalizeStatus maps a written status onto the UI's three values. ok is
