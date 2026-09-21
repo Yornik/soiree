@@ -1478,12 +1478,40 @@
     return api('POST', '/' + c.route, body).then(function (res) {
       // 200 is this same create answered a second time: the first attempt
       // committed and its answer was lost, so what comes back is the row as
-      // stored rather than a second one. Anything typed since is a difference
-      // from it, and goes up as the next pass's patch.
+      // stored rather than a second one.
+      //
+      // Whether the row as stored is still the row this browser posted is its
+      // revision. At 1 nobody has written it since, so the answer and the POST
+      // say the same thing, and anything typed here since is a difference from
+      // both that goes up as the next pass's patch.
+      //
+      // Above 1 somebody else wrote the line while the answer was not
+      // arriving, and taking their row as the agreed version is what makes
+      // that difference dangerous: this browser's copy, untouched since it was
+      // typed, becomes a difference against the revision that now stands, so
+      // the patch that follows puts the values of a row nobody has looked at
+      // since over theirs and cannot 409. It is the one place the resync gate
+      // cannot cover, because this is the write pass. So their row is
+      // reconciled against the row as posted, the way a 409 is: a field only
+      // they changed stays theirs, a field changed here since goes again, and
+      // they are told rather than quietly overwritten.
       if ((res.status === 201 || res.status === 200) && res.body && res.body.id) {
         adoptServerId(c, op.id, res.body.id);
         delete createKeys[op.id];
-        shadowPut(c, res.body);
+        if (res.status === 200 && (Number(res.body.revision) || 0) > 1) {
+          // The version both edits started from is the body that was posted,
+          // so that is what the merge is given as the agreed one. Its revision
+          // is never read: reconcile replaces it with the one that came back.
+          shadow[c.key][res.body.id] = { row: rowFromWire(c, body), revision: 0 };
+          reconcile({ kind: 'update', coll: c, id: res.body.id, fields: [] }, res.body);
+          // What shadowPut keeps for a create that landed, and for the same
+          // reason: the row is in the state and the shadow under the server's
+          // id, and a page that came back holding only the state would post it
+          // all over again.
+          Store.keep();
+        } else {
+          shadowPut(c, res.body);
+        }
         return true;
       }
       return writeFailed(op, res);

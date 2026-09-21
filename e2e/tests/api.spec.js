@@ -880,6 +880,74 @@ test('a create whose answer is lost does not leave two rows under one id', async
 });
 
 /*
+ * The same lost answer, with somebody else at the other end of it.
+ *
+ * The create commits, the answer does not arrive, and before the retry goes a
+ * second participant corrects the figure on the line it made: 2,500 was typed
+ * from memory and the invoice says 250. The retry is then answered with the
+ * row as stored, at the revision their correction gave it, so this browser's
+ * copy of the line, untouched since it was typed, becomes a difference
+ * against a revision that is current, and the patch that follows lands with
+ * no conflict to stop it. The correction is gone, nobody is asked and nobody
+ * is told: the committed figure everybody reads goes back to the wrong number.
+ */
+test('a create answered a second time keeps the correction somebody else made meanwhile', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  // The origin hears the create and the browser hears nothing back, for as
+  // long as `offline` says so, which is the staging the two specs above use.
+  let plays = 0;
+  let committed = 0;
+  let offline = true;
+  await page.route('**/api/v1/budget-items', async (route) => {
+    if (!offline || route.request().method() !== 'POST') return route.continue();
+    if (plays === 0) {
+      plays = 1;
+      const upstream = await request.post(`${API_URL}/api/v1/budget-items`, {
+        headers: await apiAuth(request),
+        data: JSON.parse(route.request().postData() || '{}'),
+      });
+      committed = upstream.status();
+    }
+    return route.abort('internetdisconnected');
+  });
+
+  const line = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+  await expect.poll(() => committed, { message: 'the first create should have committed' }).toBe(201);
+
+  // Somebody else has the invoice in front of them and corrects the deposit on
+  // the row this browser is still trying to create.
+  const stored = (await apiPlan(request)).budgetItems[0];
+  expect((await request.patch(`${API_URL}/api/v1/budget-items/${stored.id}`, {
+    headers: await apiAuth(request),
+    data: { revision: stored.revision, unit: '250.00' },
+  })).status(), 'the correction lands').toBe(200);
+
+  // Nothing is typed here meanwhile, and the caret leaves the table: a table
+  // somebody is inside is redrawn when they are not.
+  await line.paid.blur();
+
+  const answered = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && r.url().endsWith('/api/v1/budget-items'),
+    { timeout: 30_000 },
+  );
+  offline = false;
+  expect((await answered).status(), 'a create this server has already done').toBe(200);
+
+  // The correction stands, here as well as there, and the person whose create
+  // was answered late is told their line was written by somebody else rather
+  // than left to notice it in the total.
+  await expect(page.locator('#budgetBody tr:not(:has(td.empty-cell))')).toHaveCount(1);
+  await expect(budgetRow(page, 0).unit).toHaveValue('250');
+  await expect(page.locator('#dataMsg')).toHaveText(/Both sets of changes have been kept/);
+  await expectFigures(page, { committed: 250, paid: 0, outstanding: 250, forecast: 250 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.unit]), { timeout: 20_000 })
+    .toEqual([['Venue deposit', '250.00']]);
+});
+
+/*
  * The same outage, met from the other end: the origin is already away when the
  * page opens. That is the ordinary start for an installed planner, because the
  * service worker paints the shell with no network at all, and it is also a pod
