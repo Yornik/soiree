@@ -411,3 +411,71 @@ test('a browser that keeps nothing says so rather than looking saved', async ({ 
   );
   expect(await readStored(page)).toBeNull();
 });
+
+/*
+ * Two tabs of one planner, in the deployment where the key is the planner.
+ *
+ * Each tab holds the whole state in memory and each save writes the whole of
+ * it, so there is nothing in a write that says which parts of it are new. With
+ * a database that does not matter — the server settles it row by row — but
+ * here the last write is simply what is there now, and a tab that had not
+ * heard about the other one put its own copy back over the work.
+ *
+ * An installed planner beside a browser tab is the ordinary way to arrive at
+ * two of them.
+ */
+test('a planner saved in one tab is read by the other, not overwritten by it', async ({ page, context }) => {
+  await openPlanner(page);
+  // Opened before anything is typed, so this is the tab holding the older
+  // copy: an empty planner, where the other is about to hold a line.
+  const other = await context.newPage();
+  await openPlanner(other);
+  await localOnly(page);
+  await localOnly(other);
+
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+  await expectStored(page, (s) => !!s && s.budgetItems.length === 1, 'the first tab saves its line');
+
+  // The second tab reads what was saved rather than going on drawing a planner
+  // that no longer exists.
+  await expect(other.locator('body')).not.toHaveClass(/is-empty/);
+  await expect(other.locator('#budgetBody tr')).toHaveCount(1);
+  await gotoTab(other, 'budget');
+  await expect(budgetRow(other, 0).item).toHaveValue('Venue deposit');
+
+  // And leaving it does not put the empty planner back.
+  await flushToStorage(other);
+  const stored = await readStored(page);
+  expect(stored.budgetItems.map((i) => i.item)).toEqual(['Venue deposit']);
+});
+
+test('a tab that has typed nothing writes nothing when it is left', async ({ page }) => {
+  await openPlanner(page);
+  await localOnly(page);
+
+  // The key changes under a tab that never hears about it — one the browser
+  // had frozen in the background, say. Written from this page on purpose: a
+  // document is never told about its own write, so this is the blind spot
+  // itself rather than a simulation of it.
+  const elsewhere = {
+    ceiling: 0,
+    inflationPct: 0,
+    fxRate: 0,
+    splitEvenly: false,
+    sponsors: [],
+    budgetItems: [{ id: 'b1', item: 'Venue deposit', unit: 2500, qty: 1, paid: 500, sponsors: [], note: '' }],
+    tasks: [],
+    notes: [],
+  };
+  await page.evaluate(
+    ([key, payload]) => localStorage.setItem(key, payload),
+    [STORAGE_KEY, JSON.stringify(elsewhere)],
+  );
+
+  // Switching away from it, or closing it, is the moment the whole state went
+  // back over whatever was there.
+  await flushToStorage(page);
+  const stored = await readStored(page);
+  expect(stored.budgetItems.map((i) => i.item)).toEqual(['Venue deposit']);
+});

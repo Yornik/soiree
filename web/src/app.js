@@ -2202,14 +2202,44 @@
   window.soiree = window.soiree || {};
   window.soiree.beforeSignOut = beforeSignOut;
 
-  // Another tab signed out. This one still holds the plan in memory and would
-  // write it straight back the next time it saved or was closed, so it lets go
-  // of it too, and asks auth.js to look at the session — which is gone.
+  /* Another tab wrote the key, or removed it.
+   *
+   * Removed is a sign-out. This tab still holds the plan in memory and would
+   * write it straight back the next time it saved or was closed, so it lets go
+   * of it too, and asks auth.js to look at the session — which is gone.
+   *
+   * Written is another tab saving. With a database that settles itself: the
+   * server is the planner and the stream says what changed. With none, the key
+   * is the planner and each tab writes the whole of it, so what the other tab
+   * saved is simply what there now is, and going on drawing the copy it
+   * replaced is how work disappears without either tab saying anything.
+   *
+   * On the latched 404 only, and `apiMode` is not that question: it is also
+   * false on a deployment that has an API before the first plan arrives,
+   * during a 401 hold, and after a sign-out — and drawing another tab's cached
+   * ledger is the wrong answer to every one of those.
+   *
+   * Not while this tab has a keystroke of its own inside the debounce, either:
+   * that write is the newer one and is about to land.
+   */
   window.addEventListener('storage', function (e) {
-    if (!e || e.key !== STORAGE_KEY || e.newValue !== null || forgotten) return;
-    if (apiMode) haltSync();
-    forgetPlan();
-    doubtSession();
+    if (!e || e.key !== STORAGE_KEY || forgotten) return;
+    if (e.newValue === null) {
+      if (apiMode) haltSync();
+      forgetPlan();
+      doubtSession();
+      return;
+    }
+    if (!(window.soiree && window.soiree.apiAvailable === false) || saveTimer) return;
+    var incoming;
+    try { incoming = JSON.parse(e.newValue); } catch (err) { return; }
+    if (!incoming || typeof incoming !== 'object') return;
+    // A page that had a merge base wrote the state inside a wrapper, which no
+    // local-only one does. Read the way Store.read has to read it anyway.
+    if (incoming.state && incoming.shadow) incoming = incoming.state;
+    state = normalise(incoming);
+    loaded = JSON.parse(JSON.stringify(state));
+    renderAll();
   });
 
   // The digest is pushed to active admins and to nobody else (the store's
@@ -2705,9 +2735,23 @@
     else if (stickyMsg === t('d.nostorage')) setSticky('');
   }
 
-  window.addEventListener('pagehide', flushSave);
+  /* Leaving carries only what this tab has not written yet.
+   *
+   * flushSave() writes the whole state, and in the deployment with no database
+   * the key is the planner: a tab that was merely looked at and switched away
+   * from wrote its own copy over whatever another tab had saved meanwhile, and
+   * the last one hidden or closed won. A pending debounce is the whole of what
+   * "this tab is holding something" means — save() arms it on every mutation,
+   * flushSave() disarms it — so with none there is nothing here to keep and
+   * writing can only take something away.
+   */
+  function leaving() {
+    if (saveTimer) flushSave();
+  }
+
+  window.addEventListener('pagehide', leaving);
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'hidden') flushSave();
+    if (document.visibilityState === 'hidden') leaving();
   });
 
   /* ---------- Money formatting ----------

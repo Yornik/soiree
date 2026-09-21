@@ -158,8 +158,10 @@ Store.keep()        // persist it again, because the merge base moved
 ```
 
 Nothing else touches `localStorage`. `save()` wraps `Store.write` and is
-debounced by 500 ms, flushed on `pagehide` and on `visibilitychange`. That seam
-is what let the network be added behind it without touching any of the ~28
+debounced by 500 ms, flushed on `pagehide` and on `visibilitychange` — but only
+where a debounce is actually pending, because the write is the whole state and
+a tab that has typed nothing has nothing to add to what is already there. That
+seam is what let the network be added behind it without touching any of the ~28
 mutation sites: they call `save()` and know nothing about where the state goes.
 
 A `setItem` the browser refuses is answered rather than swallowed. Site data
@@ -223,7 +225,10 @@ never asked about twice.
 
 - **No API.** `localStorage` is the planner. One browser, one copy, no network
   after the probe. A self-hoster without Postgres, and `docker run` with no
-  arguments, both land here and both work.
+  arguments, both land here and both work. One copy means one copy between the
+  tabs too: each holds the whole state and each save writes the whole of it, so
+  a tab that hears another one save reads what is now there rather than going
+  on drawing what it replaced — see the `storage` event below.
 - **API.** The server is the planner. `localStorage` stays as the cached copy
   that paints before the plan arrives, plus the handful of fields that have no
   column behind them, plus the shadow that copy was last agreed against — see
@@ -243,6 +248,15 @@ server's plan rather than a merge against a shadow of something it no longer
 holds. Other tabs of the same browser hear about it through the `storage` event
 and let go as well; otherwise the first one to save would write it straight
 back.
+
+The same listener answers the other thing that event reports, a tab that
+*wrote* the key. With a database that settles itself and is ignored here: the
+server is the planner and the stream says what changed. With none it is adopted
+— parsed, normalised and drawn — because the key is the planner, and the tab
+that wrote it last is simply what there now is. On the latched `404` only, not
+on `apiMode`, which is also false before the first plan arrives and during a
+`401` hold; and not while this tab has a keystroke of its own inside the
+debounce, since that write is the newer one.
 
 It is the one action in the page that can destroy an edit, so it goes in a fixed
 order. `auth.js` asks `window.soiree.beforeSignOut()`, which flushes the
