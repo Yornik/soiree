@@ -2,6 +2,8 @@ package mailer
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"net"
 	"net/textproto"
 	"strconv"
@@ -26,13 +28,33 @@ type fakeSMTP struct {
 	// the acceptance — what a relay says when it has read the message and
 	// decided against it.
 	rejectAtDot string
-	// offerStartTLS advertises an extension this fake cannot actually perform;
-	// used only to check that a client with credentials insists on it.
+	// offerStartTLS advertises the extension and then performs the upgrade,
+	// which is what a client carrying credentials insists on. Without
+	// tlsConfig it is only the advertisement, which no test wants.
 	offerStartTLS bool
+	// tlsConfig is the certificate this fake presents, and implicitTLS wraps
+	// the accepted connection in it before the greeting, the way a listener on
+	// 465 does. Both are nil and false for a conversation in the clear.
+	tlsConfig   *tls.Config
+	implicitTLS bool
 
 	mu       sync.Mutex
 	received string
 	rcpts    []string
+	// sni is the name the client asked for in its ClientHello, recorded even
+	// when it goes on to refuse the certificate.
+	sni string
+	// auths is every AUTH the server was offered, in order, with the state of
+	// the connection at the moment it arrived.
+	auths []authAttempt
+}
+
+// authAttempt is one decoded AUTH PLAIN, and whether the credential in it
+// crossed an encrypted connection.
+type authAttempt struct {
+	username  string
+	password  string
+	encrypted bool
 }
 
 func (f *fakeSMTP) start() (host string, port int) {
@@ -62,8 +84,36 @@ func (f *fakeSMTP) start() (host string, port int) {
 	return addr.IP.String(), addr.Port
 }
 
+// serverTLS is the configuration this fake presents, recording the name the
+// client asked for on the way past. SNI is the only place the sender's
+// ServerName becomes visible to the other end, and a sender that stopped
+// setting it would still handshake with a fake that holds one certificate.
+func (f *fakeSMTP) serverTLS(cert tls.Certificate) *tls.Config {
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			f.mu.Lock()
+			f.sni = hello.ServerName
+			f.mu.Unlock()
+			return nil, nil
+		},
+	}
+}
+
 func (f *fakeSMTP) serve(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
+
+	encrypted := false
+	if f.implicitTLS {
+		tc := tls.Server(conn, f.tlsConfig)
+		if err := tc.Handshake(); err != nil {
+			// A client that refuses the certificate ends here, which is the
+			// whole of what the bad-certificate tests need from the server.
+			return
+		}
+		conn, encrypted = tc, true
+	}
 	tp := textproto.NewConn(conn)
 
 	say := func(format string, args ...any) bool {
@@ -84,10 +134,45 @@ func (f *fakeSMTP) serve(conn net.Conn) {
 			if !say("250-fake.example.test") {
 				return
 			}
-			if f.offerStartTLS && !say("250-STARTTLS") {
+			if f.offerStartTLS && !encrypted && !say("250-STARTTLS") {
+				return
+			}
+			// A real submission server offers AUTH only once the conversation
+			// is encrypted, and the point of this fake is to be told when a
+			// credential arrives before that.
+			if encrypted && !say("250-AUTH PLAIN") {
 				return
 			}
 			if !say("250 SIZE 10485760") {
+				return
+			}
+		case "STARTTLS":
+			if f.tlsConfig == nil {
+				if !say("502 5.5.1 no such extension here") {
+					return
+				}
+				continue
+			}
+			if !say("220 2.0.0 ready to start TLS") {
+				return
+			}
+			tc := tls.Server(conn, f.tlsConfig)
+			if err := tc.Handshake(); err != nil {
+				return
+			}
+			conn, tp, encrypted = tc, textproto.NewConn(tc), true
+		case "AUTH":
+			user, pass, ok := decodePlainAuth(rest)
+			if !ok {
+				if !say("501 5.5.4 cannot read the credential") {
+					return
+				}
+				continue
+			}
+			f.mu.Lock()
+			f.auths = append(f.auths, authAttempt{username: user, password: pass, encrypted: encrypted})
+			f.mu.Unlock()
+			if !say("235 2.7.0 authenticated") {
 				return
 			}
 		case "MAIL":
@@ -143,6 +228,24 @@ func (f *fakeSMTP) serve(conn net.Conn) {
 			}
 		}
 	}
+}
+
+// decodePlainAuth reads the argument of an AUTH PLAIN line: base64 of the
+// identity, the username and the password, separated by NUL.
+func decodePlainAuth(arg string) (username, password string, ok bool) {
+	mech, encoded, found := strings.Cut(arg, " ")
+	if !found || !strings.EqualFold(mech, "PLAIN") {
+		return "", "", false
+	}
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", "", false
+	}
+	parts := strings.Split(string(raw), "\x00")
+	if len(parts) != 3 {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
 }
 
 func (f *fakeSMTP) sender(host string, port int) *SMTP {
