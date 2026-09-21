@@ -11,6 +11,7 @@
  */
 const { test, expect } = require('@playwright/test');
 const { addBudgetLine, addSponsor, budgetRow, expectFigures, gotoTab, money, openPlanner, tagLine } = require('./helpers');
+const { BASE_URL } = require('../servers');
 
 test.beforeEach(async ({ page }) => {
   await openPlanner(page);
@@ -91,6 +92,44 @@ test('the inflation buffer is applied to the forecast and eats the headroom', as
   await gotoTab(page, 'overview');
   await expect(page.locator('#mForecastSub')).toHaveText('+4% on quoted');
   await expect(page.locator('#statBudgetSub')).toContainText('leaving');
+});
+
+/*
+ * The rate field is not on this instance: a second currency is what puts it
+ * there, and none is configured. Rather than a fourth server for one input,
+ * the config block the page is served with is rewritten on the way through,
+ * which is the only thing that decides the question.
+ */
+test('an exchange rate below one is a rate the field takes', async ({ page }) => {
+  await page.route(`${BASE_URL}/`, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text()).replace('"secondaryCurrency":""', '"secondaryCurrency":"USD"');
+    await route.fulfill({ response: res, body });
+  });
+  await page.reload();
+  await gotoTab(page, 'budget');
+
+  // A euro buys less than a dollar, so euros per dollar is below one. A plan
+  // kept in the stronger of its two currencies is the same plan as one kept
+  // in the weaker, the other way round, and the field has to take both.
+  await expect(page.locator('#rateLabel')).toHaveText('Exchange rate (EUR per USD)');
+  const rate = page.locator('#rateInput');
+  await rate.fill('0.92');
+  expect(await rate.evaluate((el) => {
+    const input = /** @type {HTMLInputElement} */ (el);
+    return {
+      value: input.value,
+      valid: input.checkValidity(),
+      low: input.validity.rangeUnderflow,
+      step: input.validity.stepMismatch,
+    };
+  })).toEqual({ value: '0.92', valid: true, low: false, step: false });
+
+  // And it is the rate the second figure is then reckoned at: €920 at 0.92
+  // euros to the dollar is $1,000.
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 920, qty: 1 });
+  await gotoTab(page, 'overview');
+  expect(money(await page.locator('#mCommittedEur').textContent())).toBe(1000);
 });
 
 test('crossing the ceiling is marked, not just reported', async ({ page }) => {
