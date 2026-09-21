@@ -420,6 +420,51 @@ func TestExportSubjectByNameAlone(t *testing.T) {
 	}
 }
 
+// TestExportAdmitsTheChangeHistoryIsUnread pins the one caveat that has to
+// keep pace with the schema. The change log records every field of every
+// change, so a person's name is in it from the moment they are entered, and
+// nothing in privacy.go reads that table. An export that reports the gap is
+// incomplete; an export that denies the table exists is untrue, and it is
+// untrue to the one person entitled to a straight answer.
+func TestExportAdmitsTheChangeHistoryIsUnread(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+	p := plant(t, s)
+
+	// The evidence first, so the caveat below is measured against the schema
+	// rather than against itself.
+	entries, err := s.ChangeHistory(ctx, store.EntitySponsors, p.adaSponsor.ID, store.HistoryPage{})
+	if err != nil {
+		t.Fatalf("change history: %v", err)
+	}
+	var recorded bool
+	for _, e := range entries {
+		if string(e.Changes["name"].New) == `"Ada"` {
+			recorded = true
+		}
+	}
+	if !recorded {
+		t.Fatalf("history = %+v, want the entry that records her name", entries)
+	}
+
+	export, err := s.ExportSubject(ctx, p.adaRef())
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	var admitted bool
+	for _, c := range export.Caveats {
+		if strings.Contains(c, "no per-row history") {
+			t.Errorf("caveat = %q, but change_log holds her name", c)
+		}
+		if strings.Contains(c, "change history was not read") {
+			admitted = true
+		}
+	}
+	if !admitted {
+		t.Errorf("caveats = %q, want one that says the change history was not read", export.Caveats)
+	}
+}
+
 func TestExportAndEraseRefuseAnEmptySubject(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()

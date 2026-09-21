@@ -33,6 +33,25 @@ import (
 // cost. Budget lines carry money in their own columns and carry attribution in
 // a join table, so removing a person never has to remove a line — and this
 // file never does. See EraseSubject.
+//
+// The third awkward part is age, and it is the reason nothing calls any of
+// this yet. It was written against the schema as it stood at migration 0005,
+// and every table added since that holds personal data is invisible to it:
+// `change_log` (0007), which records what each change altered, field by field,
+// and so keeps names, owner cells, prose and an account's address as they
+// stood before somebody corrected them; `sessions` and `password_tokens`
+// (0008); `push_subscriptions` (0010), one row per browser that accepted
+// reminders; `passkey_credentials` (0011), each with the label its device was
+// given; and `attachments` (0012), which records what a person's device
+// called a file. So an export assembled here is short by all of them and says
+// so, an erasure done here leaves the name standing in the history, and a
+// purge leaves that history behind in full. Reading those tables is ordinary
+// work in collectSubject; erasing what `change_log` holds is not, because
+// that table refuses every UPDATE and DELETE by trigger
+// (migrations/0007_audit.sql). Somebody has to decide, in a migration, that
+// an erasure outranks the evidence, and until that decision is made, wiring a
+// route to EraseSubject ships an erasure that does not erase. Roadmap item 10
+// in docs/architecture.md carries the same list.
 
 // Tombstone replaces a name in a field whose entire content was that name, and
 // stands in for a name struck out of prose. It is deliberately not the empty
@@ -327,6 +346,22 @@ type ErasureResult struct {
 // deleted either: a task is shared work that happens to name an owner, not the
 // owner's property.
 //
+// # What it does not reach
+//
+// The statements below rewrite the rows, and the change log keeps what they
+// rewrote: the name, the owner cell, the prose and the address on the account
+// all survive in `change_log` and on the Activity screen an admin reads, which
+// its append-only trigger is there to guarantee. File names in `attachments`
+// are not touched either. In anonymise mode the account's `sessions`,
+// `password_tokens`, `passkey_credentials` and `push_subscriptions` rows stay
+// behind; none of them can be used to sign in or be sent anything, because
+// every one of those paths requires an active account and this one is now
+// disabled, but they are retained personal data all the same. EraseDelete
+// takes them with the account, by cascade. And none of the statements below
+// announces itself: only insertChange issues the notification, so another
+// browser shows the old name until it reloads, and its next edit to the row is
+// refused with a 409 because every statement here bumps the revision.
+//
 // # No revision check
 //
 // Unlike every other write in this package, erasure takes no revision. A
@@ -509,6 +544,14 @@ type PurgeResult struct {
 // the opposite of the SET NULL semantics this schema chose. At the scale this
 // application runs at, DELETE costs nothing and behaves as written.
 //
+// What it does not empty is `change_log`, whose trigger refuses every DELETE.
+// The history of a purged plan is a full copy of that plan, names included, so
+// a deployment purging for retention has emptied the tables and kept the
+// record of them; removing it is a migration and a decision, not a step here.
+// Attachments do go, by cascade from the budget line or task they hang on, and
+// that cascade queues each object key in `attachment_garbage` for the sweep
+// that deletes it from the bucket. PurgeResult does not count them.
+//
 // The `settings` singleton is reset rather than deleted: its CHECK (id) allows
 // exactly one row and Settings() documents a missing one as a tampered schema,
 // so deleting it would leave the deployment unable to start rather than empty.
@@ -658,7 +701,9 @@ func (sub subject) caveats() []string {
 	out := []string{
 		"tasks.owner and budget_items.vendor are free text, not foreign keys: only the names listed under `aliases` were matched, exactly. A nickname, a misspelling, initials, or a name written as \"Ada's brother\" is not locatable by any query this schema supports.",
 		"free text (budget line notes, the notes list, the programme) was matched on whole-word occurrences of those same names, so a mention that never spells the name out is not found.",
-		"the schema carries no per-row history at this revision (roadmap item 8), so there are no history entries to export. When it lands, collectSubject is the one place that has to learn about it.",
+		"the change history was not read. `change_log` records what each change altered, field by field, so values as they stood before somebody corrected them, including a name, an owner cell and the address on an account, are held there and are not in this document.",
+		"uploaded files were not read. `attachments` records the name a file was given by the device it came from, and which account uploaded it; neither is listed here, and the files themselves are in object storage rather than in the database.",
+		"the account's sign-in records were not read. `sessions`, `password_tokens`, `passkey_credentials` and `push_subscriptions` hold rows about an account, among them the label a passkey's device was given and the address a browser is sent reminders at, and none of them is listed here.",
 	}
 	if sub.ref.SponsorID == nil {
 		out = append(out, "no sponsor record was named, so nothing was exported from `sponsors` or from the budget attributions that reference it.")
@@ -688,9 +733,14 @@ type subjectRows struct {
 // full read of a table that this application's own architecture notes describe
 // as holding tens of rows.
 //
-// This is the single place that knows what "rows about a person" means. A new
-// table holding personal data — the audit trail of roadmap item 8, most
-// obviously — is added here and both operations pick it up.
+// This is the single place that knows what "rows about a person" means, which
+// is what makes it the place to add a table holding personal data: add it here
+// and both operations pick it up. It is also where the gap listed at the top
+// of this file is, because the tables added since migration 0005 were never
+// added here. `change_log` is the one that is not a simple addition: reading
+// it belongs here, but striking a name out of it is refused by its own
+// trigger, so the erasure half waits on a migration and a decision rather than
+// on this function.
 func collectSubject(ctx context.Context, q querier, sub subject) (subjectRows, error) {
 	var out subjectRows
 
