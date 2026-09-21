@@ -2899,10 +2899,15 @@
 
     askedFor = n.build;
     navigator.serviceWorker.getRegistration().then(function (reg) {
-      if (reg) reg.update();
-    }, function () {
-      // A registration that cannot be looked up is not one that is going to
-      // hand over a new shell, and the cached one is all a reload would get.
+      if (!reg) return Promise.reject(new Error('no registration'));
+      return reg.update();
+    }).catch(function () {
+      // Asked for is not the same as asked. A /sw.js fetch made at the moment
+      // of the reconnect can land on the process that is going out, and a
+      // registration can be gone by the time it is looked up; either way
+      // nothing was checked. Forgotten, so the next hello asks again rather
+      // than this tab going unannounced until the deploy after this one.
+      askedFor = '';
     });
   }
 
