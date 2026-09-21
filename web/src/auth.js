@@ -1930,7 +1930,27 @@
     return -1;
   }
 
+  /* Whether the round trip is what left focus nowhere.
+   *
+   * Giving focus back is only ever repair. An admin who changed a role and
+   * carried on typing somewhere else is holding focus of their own by the
+   * time the answer lands, and taking it off them would be worse than the
+   * thing this repairs: the control it is taken to is a role select, which
+   * reads the next letter as type-ahead and writes the role it reaches - "a"
+   * is Admin, granted with nothing asked and nothing said.
+   *
+   * By the time this is called the old list is gone, so the two ways focus
+   * can have been lost both answer here: disabling the control for the round
+   * trip dropped focus on <body>, or the rebuild detached the node still
+   * holding it.
+   */
+  function focusWasDropped() {
+    var at = document.activeElement;
+    return !at || at === document.body || !document.body.contains(at);
+  }
+
   function restoreFocus(list, held, was) {
+    if (!focusWasDropped()) return;
     var again = list.querySelector('li[data-id="' + held.id.replace(/["\\]/g, '\\$&')
       + '"] [data-act="' + held.act + '"]');
     if (again) { again.focus(); return; }
@@ -2447,8 +2467,11 @@
             // A row here has one control and it is the one that just removed
             // it, so there is nothing of the row to go back to. "Add a
             // passkey" is the next thing anybody does on this screen, and it
-            // is not a way to remove another one by mistake.
-            var add = byId('passkeyAdd');
+            // is not a way to remove another one by mistake. Only if the
+            // round trip is what left focus nowhere: it is a submit button,
+            // and taking focus off somebody mid-sentence would put a later
+            // Space or Enter into a registration nobody asked for.
+            var add = focusWasDropped() ? byId('passkeyAdd') : null;
             if (add) add.focus();
             // The options in hand still tell this device not to make a second
             // key, for a key the server has just forgotten.

@@ -1003,6 +1003,46 @@ test('a refused action leaves no focus owed to a row that is still there', async
   })).toEqual({ danger: false, inList: false });
 });
 
+test('a write still in flight does not take focus back from where somebody moved on to', async ({ page }) => {
+  const server = await mountAccounts(page, { session: ADA, users: [ADA, GRACE, LINUS] });
+
+  // The answer is held until the test has moved on, so what is measured is
+  // the round trip itself rather than a wait on a clock.
+  let release;
+  const answered = new Promise((resolve) => { release = resolve; });
+  let inFlight = false;
+  await page.route('**/api/v1/users/*', async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    inFlight = true;
+    await answered;
+    return route.fallback();
+  });
+  await open(page, '/#/admin');
+
+  const role = page.locator('.person', { hasText: GRACE.email }).locator('select.person-role');
+  await role.focus();
+  await role.selectOption('viewer');
+  await expect.poll(() => inFlight).toBe(true);
+
+  // The next thing anybody does on this screen, while the write is still out.
+  await page.locator('#newUserEmail').click();
+  await expect(page.locator('#newUserEmail')).toBeFocused();
+
+  release();
+  // Enabled again means the answer has been drawn: re-enabling the control
+  // and rebuilding the list are one step when the request settles.
+  await expect(role).toBeEnabled();
+  await expect(role).toHaveValue('viewer');
+
+  // A role select handed focus back would read what follows as type-ahead,
+  // and the first letter of this address reaches Admin - which writes on
+  // change, with nothing asked and nothing said. It belongs in the field.
+  await expect(page.locator('#newUserEmail')).toBeFocused();
+  await page.keyboard.type('ada@example.test');
+  await expect(page.locator('#newUserEmail')).toHaveValue('ada@example.test');
+  expect(server.calls.filter((c) => c.method === 'PATCH')).toHaveLength(1);
+});
+
 /* ------------------------------------------------------------------
  * Being told the screen changed
  * ------------------------------------------------------------------
