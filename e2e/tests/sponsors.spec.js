@@ -136,8 +136,16 @@ test('renaming a sponsor follows through to the table and the split', async ({ p
 test('removing a sponsor releases the lines it was covering', async ({ page }) => {
   const { venue, catering } = await fixture(page);
 
+  // Nobody is told that a split has moved, and there is no way back to the
+  // attributions, so a name that is on lines is asked about first, with the
+  // number of lines, which is what makes it worth a second thought.
+  const asked = [];
+  page.on('dialog', (dialog) => { asked.push(dialog.message()); dialog.accept().catch(() => {}); });
   await page.locator('#sponsorGrid .sponsor-row').first().getByRole('button', { name: 'Remove sponsor' }).click();
   await expect(page.locator('#sponsorGrid .sponsor-row')).toHaveCount(1);
+  expect(asked).toEqual([
+    'Lines on this sponsor: 2. They lose the attribution and the split changes. Remove the sponsor?',
+  ]);
 
   // Rose is gone, so the line only she covered falls back to unassigned and
   // the shared line becomes Ivy's alone — no dangling reference, and no money
@@ -151,6 +159,28 @@ test('removing a sponsor releases the lines it was covering', async ({ page }) =
     { label: 'Ivy', amount: 2000, pct: '40%' },
   ]);
   expect(split.reduce((sum, r) => sum + r.amount, 0)).toBe(5000);
+});
+
+test('a sponsor nobody is tagged with goes in one click, and declining keeps the split', async ({ page }) => {
+  const { venue } = await fixture(page);
+  await addSponsor(page, { code: 'Clover', name: 'Barbara' });
+
+  // Recorded and dismissed: a dialog that should not appear is a failure, and
+  // one that does appear must leave everything as it was.
+  const asked = [];
+  page.on('dialog', (dialog) => { asked.push(dialog.message()); dialog.dismiss().catch(() => {}); });
+
+  // Nothing is attributed to Clover, so nothing is lost and nothing is asked.
+  await page.locator('#sponsorGrid .sponsor-row').nth(2).getByRole('button', { name: 'Remove sponsor' }).click();
+  await expect(page.locator('#sponsorGrid .sponsor-row')).toHaveCount(2);
+  expect(asked, 'a name on no lines is still one click').toEqual([]);
+
+  // Rose is on two. Saying no leaves her there, with the lines still hers.
+  await page.locator('#sponsorGrid .sponsor-row').first().getByRole('button', { name: 'Remove sponsor' }).click();
+  await expect.poll(() => asked.length, { message: 'removing a tagged sponsor must ask' }).toBe(1);
+  await expect(page.locator('#sponsorGrid .sponsor-row')).toHaveCount(2);
+  await expect(venue.by).toHaveText('Rose');
+  expect((await readSplit(page)).map((r) => r.label)).toEqual(['Rose', 'Rose + Ivy (shared)', 'Unassigned']);
 });
 
 test('untagging a line through the picker puts it back to unassigned', async ({ page }) => {

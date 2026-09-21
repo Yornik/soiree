@@ -205,6 +205,7 @@
       'sp.code': 'Callsign',
       'sp.who': 'Who this is',
       'sp.del': 'Remove sponsor',
+      'sp.confirmdel': 'Lines on this sponsor: {n}. They lose the attribution and the split changes. Remove the sponsor?',
       'sp.untitled': 'Untitled',
       'sp.unassigned': 'Unassigned',
       'sp.shared': '(shared)',
@@ -221,6 +222,7 @@
       'b.add': 'Add budget line',
       'b.reset': 'Reset column & row sizes',
       'b.del': 'Remove budget line',
+      'b.confirmdel': 'Files on this line: {n}. They go with it and cannot be recovered. Remove the line?',
       'b.gripcol': 'Drag to resize column',
       'b.griprow': 'Drag to resize row',
       'sl.title': 'Who’s covering what',
@@ -237,6 +239,7 @@
       'k.empty': 'No tasks yet. Add the first one below.',
       'k.nofilter': 'No tasks with that status.',
       'k.del': 'Remove task',
+      'k.confirmdel': 'Files on this task: {n}. They go with it and cannot be recovered. Remove the task?',
       'f.open': 'Files on this row: {n}',
       'f.title': 'Files',
       'f.none': 'No files yet.',
@@ -265,6 +268,10 @@
       'd.notplanner': 'That file does not look like planner data.',
       'd.unreadable': 'Could not read that file.',
       'd.confirm': 'Replace everything currently in this planner with the imported data?',
+      'd.shared': 'This changes the planner for everyone, not only in this browser.',
+      'd.confirmcounts': 'Lines removed: {a}. Tasks removed: {b}.',
+      'd.confirmfiles': 'Files attached to them: {n}, and those cannot be recovered.',
+      'd.confirmcopy': 'A copy of the planner as it stands now is downloaded first.',
       'd.merged': 'Someone else was editing the same line. Both sets of changes have been kept.',
       'd.replaced': 'Someone else changed the same field at the same time. Yours replaced theirs.',
       'd.overtaken': 'Someone else had just changed the line you removed. It is gone.',
@@ -354,6 +361,7 @@
       'sp.code': 'Roepnaam',
       'sp.who': 'Wie dit is',
       'sp.del': 'Bijdrager verwijderen',
+      'sp.confirmdel': 'Posten op naam van deze bijdrager: {n}. Die verliezen de toewijzing en de verdeling verandert. Bijdrager verwijderen?',
       'sp.untitled': 'Naamloos',
       'sp.unassigned': 'Niet toegewezen',
       'sp.shared': '(gedeeld)',
@@ -370,6 +378,7 @@
       'b.add': 'Post toevoegen',
       'b.reset': 'Kolom- en rijafmetingen herstellen',
       'b.del': 'Post verwijderen',
+      'b.confirmdel': 'Bestanden bij deze post: {n}. Die gaan mee en zijn niet terug te halen. Post verwijderen?',
       'b.gripcol': 'Sleep om de kolom breder te maken',
       'b.griprow': 'Sleep om de rij hoger te maken',
       'sl.title': 'Wie betaalt wat',
@@ -386,6 +395,7 @@
       'k.empty': 'Nog geen taken. Voeg hieronder de eerste toe.',
       'k.nofilter': 'Geen taken met die status.',
       'k.del': 'Taak verwijderen',
+      'k.confirmdel': 'Bestanden bij deze taak: {n}. Die gaan mee en zijn niet terug te halen. Taak verwijderen?',
       'f.open': 'Bestanden bij deze regel: {n}',
       'f.title': 'Bestanden',
       'f.none': 'Nog geen bestanden.',
@@ -414,6 +424,10 @@
       'd.notplanner': 'Dat bestand lijkt geen plannergegevens te bevatten.',
       'd.unreadable': 'Dat bestand kon niet gelezen worden.',
       'd.confirm': 'Alles wat nu in deze planner staat vervangen door de geïmporteerde gegevens?',
+      'd.shared': 'Dit verandert de planner voor iedereen, niet alleen in deze browser.',
+      'd.confirmcounts': 'Posten die verdwijnen: {a}. Taken die verdwijnen: {b}.',
+      'd.confirmfiles': 'Bestanden die eraan hangen: {n}, en die zijn niet terug te halen.',
+      'd.confirmcopy': 'Er wordt eerst een kopie van de huidige planner gedownload.',
       'd.merged': 'Iemand anders bewerkte dezelfde regel. Beide wijzigingen zijn bewaard.',
       'd.replaced': 'Iemand anders wijzigde hetzelfde veld op hetzelfde moment. Jouw waarde heeft die van hen vervangen.',
       'd.overtaken': 'Iemand anders had de regel die je verwijderde net gewijzigd. Hij is nu weg.',
@@ -503,6 +517,7 @@
       'sp.code': 'Nama panggilan',
       'sp.who': 'Siapa ini',
       'sp.del': 'Hapus penyumbang',
+      'sp.confirmdel': 'Baris atas nama penyumbang ini: {n}. Semuanya kehilangan penanggungnya dan pembagiannya berubah. Hapus penyumbang?',
       'sp.untitled': 'Tanpa nama',
       'sp.unassigned': 'Belum ditentukan',
       'sp.shared': '(patungan)',
@@ -518,6 +533,7 @@
       'b.add': 'Tambah baris anggaran',
       'b.reset': 'Atur ulang ukuran kolom & baris',
       'b.del': 'Hapus baris anggaran',
+      'b.confirmdel': 'Berkas di baris ini: {n}. Semuanya ikut terhapus dan tidak bisa dikembalikan. Hapus baris ini?',
       'b.gripcol': 'Seret untuk mengubah lebar kolom',
       'b.griprow': 'Seret untuk mengubah tinggi baris',
       'sl.title': 'Siapa menanggung apa',
@@ -534,6 +550,7 @@
       'k.empty': 'Belum ada tugas. Tambahkan yang pertama di bawah.',
       'k.nofilter': 'Tidak ada tugas dengan status itu.',
       'k.del': 'Hapus tugas',
+      'k.confirmdel': 'Berkas di tugas ini: {n}. Semuanya ikut terhapus dan tidak bisa dikembalikan. Hapus tugas ini?',
       'f.open': 'Berkas di baris ini: {n}',
       'f.title': 'Berkas',
       'f.none': 'Belum ada berkas.',
@@ -562,6 +579,10 @@
       'd.notplanner': 'Berkas itu sepertinya bukan data perencana.',
       'd.unreadable': 'Berkas itu tidak bisa dibaca.',
       'd.confirm': 'Ganti semua isi perencana ini dengan data yang diimpor?',
+      'd.shared': 'Ini mengubah perencana untuk semua orang, bukan hanya di browser ini.',
+      'd.confirmcounts': 'Baris yang dihapus: {a}. Tugas yang dihapus: {b}.',
+      'd.confirmfiles': 'Berkas yang menempel padanya: {n}, dan itu tidak bisa dikembalikan.',
+      'd.confirmcopy': 'Salinan perencana yang sekarang diunduh lebih dulu.',
       'd.merged': 'Orang lain sedang mengubah baris yang sama. Kedua perubahan tetap tersimpan.',
       'd.replaced': 'Orang lain mengubah bidang yang sama pada saat bersamaan. Nilaimu menggantikan nilai mereka.',
       'd.overtaken': 'Orang lain baru saja mengubah baris yang kamu hapus. Baris itu sudah hilang.',
@@ -3213,9 +3234,14 @@
    * does not touch the overview but does end the empty state.
    */
   function syncEmptyState() {
-    var empty = !state.budgetItems.length && !state.tasks.length &&
+    document.body.classList.toggle('is-empty', planIsEmpty());
+  }
+
+  // Its own function because the import reads it too, to decide whether there
+  // is anything here worth keeping a copy of before it replaces the lot.
+  function planIsEmpty() {
+    return !state.budgetItems.length && !state.tasks.length &&
       !state.sponsors.length && !state.notes.length;
-    document.body.classList.toggle('is-empty', empty);
   }
 
   // ---------- Overview ----------
@@ -3356,6 +3382,18 @@
     syncEmptyState();
   }
 
+  /* The question a destructive click asks, and only when something goes that
+   * nothing brings back: the files on a row, or an attribution nobody is told
+   * has moved. A row with neither stays one click, which is what the × is
+   * for.
+   *
+   * With a database the row is everybody's, so the dialog says that first and
+   * then what goes.
+   */
+  function confirmLoss(message) {
+    return window.confirm(apiMode ? t('d.shared') + ' ' + message : message);
+  }
+
   // "×" is a fine mark to look at and a useless one to hear, so every delete
   // carries a real accessible name.
   function delButton(label, onClick) {
@@ -3468,6 +3506,12 @@
 
       var del = delButton(t('sp.del'), function () {
         var id = sp.id;
+        // Every line this name was on is re-split by the lines below, which
+        // changes who owes what without saying so anywhere.
+        var attributed = state.budgetItems.filter(function (i) {
+          return (i.sponsors || []).indexOf(id) !== -1;
+        }).length;
+        if (attributed && !confirmLoss(t('sp.confirmdel', { n: attributed }))) return;
         dropRow(state.sponsors, sp);
         state.budgetItems.forEach(function (i) {
           i.sponsors = (i.sponsors || []).filter(function (x) { return x !== id; });
@@ -4405,6 +4449,10 @@
       label(tdNote, 'c.remarks');
       label(tdDel, 'c.remove');
       tdDel.appendChild(delButton(t('b.del'), function () {
+        // The row's files go with it, out of the plan and then out of the
+        // bucket, and they are in neither the export nor the backup.
+        var files = filesOf('budget', item.id).length;
+        if (files && !confirmLoss(t('b.confirmdel', { n: files }))) return;
         dropRow(state.budgetItems, item);
         save();
         renderBudgetTable();
@@ -4570,6 +4618,8 @@
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
       tdDel.appendChild(delButton(t('k.del'), function () {
+        var files = filesOf('task', task.id).length;
+        if (files && !confirmLoss(t('k.confirmdel', { n: files }))) return;
         dropRow(state.tasks, task);
         save();
         renderTasksTable();
@@ -4685,8 +4735,12 @@
     if (Date.now() >= flashUntil) paintMsg(stickyMsg);
   }
 
-  document.getElementById('exportData').addEventListener('click', function () {
-    flushSave();
+  /* The planner as a file. Its own function because the import takes one for
+   * itself before it replaces anything: the server keeps no undo, and the
+   * files on the rows it removes are in neither the export nor the backup.
+   * Answers with the filename, or null where the browser would not save it.
+   */
+  function downloadPlan() {
     var json = JSON.stringify(state, null, 2);
     var filename = 'soiree-' + new Date().toISOString().slice(0, 10) + '.json';
     try {
@@ -4699,11 +4753,39 @@
       a.click();
       document.body.removeChild(a);
       setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-      flash(t('d.exported', { a: filename }));
+      return filename;
     } catch (e) {
-      flash(t('d.exportfail'));
       console.log(json);
+      return null;
     }
+  }
+
+  /* What replacing the planner with a file takes away: the rows the server
+   * holds whose ids the file does not name, and the attachments on them. A
+   * file written by another browser, or by cmd/soiree-import, names none of
+   * them, so the answer is usually everything, which is a number worth
+   * reading before saying yes rather than working out afterwards.
+   */
+  function replacedRows(incoming) {
+    var out = { budgetItems: 0, tasks: 0, files: 0 };
+    [['budgetItems', 'budget'], ['tasks', 'task']].forEach(function (pair) {
+      var keeping = {};
+      (incoming[pair[0]] || []).forEach(function (row) {
+        if (row && row.id) keeping[row.id] = true;
+      });
+      Object.keys(shadow[pair[0]]).forEach(function (id) {
+        if (keeping[id]) return;
+        out[pair[0]]++;
+        out.files += filesOf(pair[1], id).length;
+      });
+    });
+    return out;
+  }
+
+  document.getElementById('exportData').addEventListener('click', function () {
+    flushSave();
+    var filename = downloadPlan();
+    flash(filename ? t('d.exported', { a: filename }) : t('d.exportfail'));
   });
 
   var importFile = document.getElementById('importFile');
@@ -4726,11 +4808,27 @@
           flash(t('d.notplanner'));
           return;
         }
-        if (!window.confirm(t('d.confirm'))) return;
         // A wholesale replacement is the largest edit this page can make, and
         // in API mode it is a real one: every row the server holds and this
-        // file does not is removed, and every row in the file is created.
-        //
+        // file does not is removed, and every row in the file is created, for
+        // everybody looking at that planner, with the attachments on those
+        // rows. So the dialog counts them first, and a copy of what is about
+        // to go is downloaded on the way through, since nothing on the server
+        // can bring it back.
+        var parts = [];
+        if (apiMode && shadow) {
+          var going = replacedRows(incoming);
+          parts.push(t('d.confirmcounts', { a: going.budgetItems, b: going.tasks }));
+          if (going.files) parts.push(t('d.confirmfiles', { n: going.files }));
+        }
+        // No copy of an empty planner: this arrives in a browser that has
+        // never seen one often enough that the file would be a puzzle.
+        var keepCopy = !planIsEmpty();
+        if (keepCopy) parts.push(t('d.confirmcopy'));
+        parts.push(t('d.confirm'));
+        if (!confirmLoss(parts.join(' '))) return;
+        if (keepCopy) downloadPlan();
+
         // `forgotten` is cleared here because this path calls flushSave()
         // directly and save() is the only other place that clears it. On a
         // page that had been signed out of and back into, the flag was still

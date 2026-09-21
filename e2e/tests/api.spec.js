@@ -1084,6 +1084,67 @@ test('export and import still work, and an import replaces the shared planner', 
   expect(plan.budgetItems[0].id).not.toBe('local-2');
 });
 
+test('an import says what it takes from everybody, and saves a copy first', async ({ page, request }, testInfo) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2000, qty: 1, paid: 0 });
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Confirm the guest count', owner: 'Ada', due: '', status: 'not-started' });
+  await expect
+    .poll(async () => {
+      const plan = await apiPlan(request);
+      return [plan.budgetItems.length, plan.tasks.length];
+    })
+    .toEqual([1, 1]);
+
+  // A planner from somewhere else: its ids are not the server's, so every row
+  // here is removed to make room for it.
+  const incoming = testInfo.outputPath('from-elsewhere.json');
+  await fs.writeFile(
+    incoming,
+    JSON.stringify({
+      ceiling: 0,
+      inflationPct: 0,
+      fxRate: 0,
+      splitEvenly: false,
+      sponsors: [],
+      budgetItems: [{ id: 'b1', item: 'Imported venue', unit: 1200, qty: 1, paid: 0, sponsors: [], note: '' }],
+      tasks: [],
+      notes: [],
+    }),
+  );
+
+  const asked = [];
+  page.once('dialog', (dialog) => { asked.push(dialog.message()); dialog.accept().catch(() => {}); });
+  const copyPromise = page.waitForEvent('download');
+  const chooser = page.waitForEvent('filechooser');
+  await page.locator('#importData').click();
+  await (await chooser).setFiles(incoming);
+
+  // The generic question is still the last sentence. What is new is everything
+  // in front of it: whose planner this is and what disappears from it.
+  await expect.poll(() => asked, { message: 'an import must say what it removes' }).toEqual([
+    'This changes the planner for everyone, not only in this browser. '
+    + 'Lines removed: 1. Tasks removed: 1. '
+    + 'A copy of the planner as it stands now is downloaded first. '
+    + 'Replace everything currently in this planner with the imported data?',
+  ]);
+
+  // The copy is the way back, because the server keeps none: it holds the
+  // planner as it was a moment before the replacement.
+  const copy = await copyPromise;
+  const saved = testInfo.outputPath('copy-before-import.json');
+  await copy.saveAs(saved);
+  const before = JSON.parse(await fs.readFile(saved, 'utf8'));
+  expect(before.budgetItems.map((i) => i.item)).toEqual(['Venue deposit']);
+  expect(before.tasks.map((k) => k.name)).toEqual(['Confirm the guest count']);
+
+  await expect(page.locator('#dataMsg')).toHaveText(/^Imported /);
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => i.item))
+    .toEqual(['Imported venue']);
+});
+
 test('a task with no due date is written without one', async ({ page, request }) => {
   await openSharedPlanner(page);
   await gotoTab(page, 'tasks');
@@ -2209,13 +2270,60 @@ test('a file can be removed, and removing a line takes its files with it', async
   await expect(page.locator('.files-row a.files-name')).toHaveText(['stage plot.png']);
   await expect.poll(async () => (await apiPlan(request)).attachments.map((a) => a.name)).toEqual(['stage plot.png']);
 
-  // The line goes, and the file it still had goes with it.
+  // The line goes, and the file it still had goes with it. That is the loss
+  // nothing can undo, so the click asks first, counts the files, and says the
+  // row is everybody's.
   await page.keyboard.press('Escape');
+  const asked = [];
+  page.once('dialog', (dialog) => { asked.push(dialog.message()); dialog.accept().catch(() => {}); });
   await page.locator('#budgetBody .del-cell .del-btn').first().click();
+  await expect.poll(() => asked, { message: 'removing a line with files must ask' }).toEqual([
+    'This changes the planner for everyone, not only in this browser. '
+    + 'Files on this line: 1. They go with it and cannot be recovered. Remove the line?',
+  ]);
   await expect.poll(async () => {
     const plan = await apiPlan(request);
     return [plan.budgetItems.length, plan.attachments.length];
   }).toEqual([0, 0]);
+});
+
+test('an import counts the files it would destroy before anything is replaced', async ({ page, request }, testInfo) => {
+  await openSharedPlanner(page);
+  test.skip(!(await attachmentsOn(page)), 'this run has no bucket');
+  await savedLine(page, request, 'Catering');
+
+  await openFiles(page);
+  await page.setInputFiles('body > input[type=file]', { name: 'quote.pdf', mimeType: 'application/pdf', buffer: QUOTE });
+  await expect(page.locator('#budgetBody .files-count')).toHaveText('1');
+  await page.keyboard.press('Escape');
+
+  const incoming = testInfo.outputPath('replacement.json');
+  await fs.writeFile(
+    incoming,
+    JSON.stringify({
+      ceiling: 0,
+      inflationPct: 0,
+      fxRate: 0,
+      splitEvenly: false,
+      sponsors: [],
+      budgetItems: [{ id: 'b1', item: 'Imported catering', unit: 50, qty: 40, paid: 0, sponsors: [], note: '' }],
+      tasks: [],
+      notes: [],
+    }),
+  );
+
+  // Dismissed on purpose: what is being tested is that the number is on the
+  // screen before the answer, and that saying no costs the quote nothing.
+  const asked = [];
+  page.once('dialog', (dialog) => { asked.push(dialog.message()); dialog.dismiss().catch(() => {}); });
+  const chooser = page.waitForEvent('filechooser');
+  await page.locator('#importData').click();
+  await (await chooser).setFiles(incoming);
+
+  await expect
+    .poll(() => asked.join(''), { message: 'an import must count the files it destroys' })
+    .toContain('Files attached to them: 1, and those cannot be recovered.');
+  expect((await apiPlan(request)).attachments.map((a) => a.name)).toEqual(['quote.pdf']);
 });
 
 test('a viewer can open the files and is offered no way to add or remove one', async ({ page, request, browser }) => {
