@@ -12,6 +12,10 @@ func clearEnv(t *testing.T) {
 	for _, k := range []string{
 		"SOIREE_REMINDER_ENABLED", "SOIREE_REMINDER_SCHEDULE", "SOIREE_REMINDER_WINDOW_DAYS",
 		"SOIREE_REMINDER_TO", "SOIREE_REMINDER_TZ", "SOIREE_EVENT_NAME", "SOIREE_CURRENCY",
+		// Both of these reach the rendered mail, so a machine that has them
+		// set would otherwise write its own language and its own origin into
+		// what these tests read.
+		"SOIREE_LOCALE", "SOIREE_BASE_URL",
 	} {
 		t.Setenv(k, "")
 	}
@@ -40,6 +44,35 @@ func TestRemindersAreOffByDefault(t *testing.T) {
 	}
 	if len(cfg.To) != 0 {
 		t.Errorf("recipients = %v, want none", cfg.To)
+	}
+	if cfg.Language != fallbackLanguage {
+		t.Errorf("language = %q, want %q", cfg.Language, fallbackLanguage)
+	}
+}
+
+// The digest is written in the deployment's language, read off the same
+// variable and by the same rule as the invitation nobody chose a language for.
+func TestTheLocaleChoosesTheDigestLanguage(t *testing.T) {
+	for locale, want := range map[string]string{
+		"nl-NL": "nl",
+		"nl":    "nl",
+		"id_ID": "id",
+		"en-GB": "en",
+		// A locale this binary has no digest in is not a startup failure: it
+		// is a formatting locale first, and English is a readable answer.
+		"fr-FR":     "en",
+		"gibberish": "en",
+	} {
+		clearEnv(t)
+		t.Setenv("SOIREE_LOCALE", locale)
+
+		cfg, err := LoadConfig()
+		if err != nil {
+			t.Fatalf("SOIREE_LOCALE=%q: %v", locale, err)
+		}
+		if cfg.Language != want {
+			t.Errorf("SOIREE_LOCALE=%q gives language %q, want %q", locale, cfg.Language, want)
+		}
 	}
 }
 

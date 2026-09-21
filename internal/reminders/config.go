@@ -59,6 +59,19 @@ type Config struct {
 	EventName string
 	Currency  string
 
+	// Language is what the digest and the notification are written in: the
+	// primary subtag of SOIREE_LOCALE when this binary has words for it, and
+	// English otherwise. The same rule an invitation follows when nobody chose
+	// a language for it.
+	//
+	// The deployment's language rather than the reader's, because nothing
+	// about language is stored against an account and a digest is composed
+	// once for everybody it goes to. On a deployment whose readers do not all
+	// share that language (the operating guide's Dutch half of a family on an
+	// id-ID instance) this is the language they all get, which is the price of
+	// the mail matching the screens it talks about.
+	Language string
+
 	// BaseURL is the origin a notification's click opens, e.g.
 	// https://soiree.example.test. Empty produces a relative URL, which a
 	// service worker still resolves against its own scope — so this being
@@ -82,6 +95,11 @@ func LoadConfig() (Config, error) {
 		Zone:       "UTC",
 		EventName:  strings.TrimSpace(os.Getenv("SOIREE_EVENT_NAME")),
 		Currency:   strings.ToUpper(strings.TrimSpace(os.Getenv("SOIREE_CURRENCY"))),
+		// Not an error when it names a language this binary has no digest in:
+		// SOIREE_LOCALE is a formatting locale first, it has a sensible answer
+		// for every one of them, and refusing to start over fr-FR would take
+		// the whole application down for a mail it can still write in English.
+		Language: languageOfLocale(os.Getenv("SOIREE_LOCALE")),
 		// Not validated here. internal/config has already refused to start on
 		// a SOIREE_BASE_URL that is not an absolute http(s) URL, so by the
 		// time this runs it is either empty or usable; the trailing slash is

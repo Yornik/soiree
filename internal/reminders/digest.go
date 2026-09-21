@@ -19,6 +19,16 @@ type Digest struct {
 	Zone       string
 	WindowDays int
 
+	// Lang is the language the two bodies are written in, and empty is
+	// English: a Digest built by hand reads the way this package's mail always
+	// did.
+	Lang string
+
+	// BaseURL is the planner's own origin, so that the mail can say where to
+	// go and the notification's click and the mail's footer name the same
+	// address. Empty leaves it out rather than inventing one.
+	BaseURL string
+
 	// Today is the UTC midnight standing for the calendar day it currently is
 	// in the configured zone. See the note on day arithmetic below: every date
 	// in this package is a calendar day pinned to UTC midnight, never an
@@ -105,6 +115,8 @@ func Compose(cfg Config, now time.Time, items []store.BudgetItem, tasks []store.
 		Currency:   cfg.Currency,
 		Zone:       cfg.Zone,
 		WindowDays: cfg.WindowDays,
+		Lang:       cfg.Language,
+		BaseURL:    cfg.BaseURL,
 		Today:      today,
 		Horizon:    horizon,
 	}

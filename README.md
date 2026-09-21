@@ -68,7 +68,7 @@ exists in the source, which is what lets one public image serve any event.
 | `SOIREE_EVENT_TAGLINE` | *(empty)* | Subtitle under the heading |
 | `SOIREE_EVENT_DATE` | *(empty)* | RFC3339 **written in the event's own timezone**, e.g. `2027-06-12T19:00:00+09:00`. The date in it is the day everybody is shown, and the offset decides when "today" turns over. Drives the countdown and the archive. Omit for no countdown. |
 | `SOIREE_CURRENCY` | `EUR` | Primary currency, ISO 4217. Decides the minor-unit exponent the API speaks in. |
-| `SOIREE_LOCALE` | `en-US` | Number and date formatting, and the *fallback* language when its primary subtag is one of `en`, `nl` or `id`: what the interface is in for a visitor whose browser asks for none of those, and what a mail is in when nobody chose. A visitor's own browser comes first, a flag they click comes before that, and `?lang=nl` on a link before everything. |
+| `SOIREE_LOCALE` | `en-US` | Number and date formatting, and the *fallback* language when its primary subtag is one of `en`, `nl` or `id`: what the interface is in for a visitor whose browser asks for none of those, and what a mail is in when nobody chose. A visitor's own browser comes first, a flag they click comes before that, and `?lang=nl` on a link before everything. The deadline digest and its notification have nobody to ask, so they are always in this one. |
 | `SOIREE_SECONDARY_CURRENCY` | *(unset)* | Optional second readout. Unset hides the column and the rate field. |
 | `SOIREE_SECONDARY_LOCALE` | *primary locale* | Formatting for the second currency |
 | `SOIREE_BUDGET_CEILING` | `0` | The ceiling a *fresh* browser starts with, in whole major units. Once a database is in play the stored `settings.ceiling` is authoritative and replaces it as soon as the plan arrives, and with `SOIREE_PUBLIC_EVENT_DETAILS` off the seed is not published at all. |
@@ -107,7 +107,7 @@ startup, because it looks configured and silently sends nothing.
 | `SOIREE_SMTP_PORT` | `465` | Implicit TLS. Read only when a host is set. |
 | `SOIREE_SMTP_USER` | *(unset)* | Must be set together with the password, or neither |
 | `SOIREE_SMTP_PASSWORD` | *(unset)* | See above |
-| `SOIREE_SMTP_FROM` | *(unset)* | Sender address. Required once a host is set. |
+| `SOIREE_SMTP_FROM` | *(unset)* | Sender address. Required once a host is set. A reply to the deadline digest arrives here and nowhere else, since every recipient gets a copy of their own, so point it at a mailbox somebody reads. |
 
 ### Reminders
 
@@ -330,6 +330,9 @@ What works end to end:
 - **Deadline reminders** by mail and by web push, to admins. The page offers
   push once, at the moment an admin first sets a due date, and the account
   screen has the switch that is still there afterwards — on, off, per device.
+  Both are written in the deployment's language, and the mail's footer names
+  the planner's own address so that the mail that asks for a decision says
+  where to make it.
 - **Attachments**, where a bucket is configured: files on budget lines and
   tasks, uploaded from and downloaded to the browser directly, arriving live
   for everybody else. A viewer can open them and nothing more. What a download
@@ -348,11 +351,6 @@ What works end to end:
 
 What is not there, stated rather than left to be discovered:
 
-- **The deadline digest is in English only.** Every screen is in three
-  languages, and so are the invitation and the password-reset mail — in the
-  language the admin chose for that mail, or the one the sign-in screen was
-  being read in. The digest is one English body, composed once and sent as a
-  copy to each recipient.
 - **Phases and the programme have an API and no interface.** Both are in the
   plan and in `/api/v1`; the page draws neither. For the same reason a budget
   row with a `parentId`, which only a client writing to the API directly can

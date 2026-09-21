@@ -637,6 +637,13 @@ downloads under its own name.
 
 ### Reminders
 
+The digest and the notification are written in the deployment's language, the
+one `SOIREE_LOCALE` names, because a digest is composed once for everybody it
+goes to and nothing about language is stored against an account. The mail's
+footer names the planner's address, and a reply to it reaches
+`SOIREE_SMTP_FROM` and nobody else on the list, since every recipient gets a
+copy of their own. Point that address at a mailbox somebody reads.
+
 The scheduler runs once at startup and then once per schedule, which is
 deliberate: pods restart far more often than a weekly ticker fires, so a ticker
 that only fired after 168 uninterrupted hours would never fire at all. It is
