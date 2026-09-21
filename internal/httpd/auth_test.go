@@ -647,6 +647,31 @@ func TestALinkToPassOnIsRefusedForAnAccountInUse(t *testing.T) {
 	}
 }
 
+// And it stays refused for an account somebody has parked back at invited. A
+// status is an admin's to write; whether a password was ever set is not, and
+// that is the fact the refusal turns on.
+func TestALinkToPassOnIsRefusedForAnAccountParkedBackAtInvited(t *testing.T) {
+	f := newFixture(t, true)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	grace := f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPatch, "/api/v1/users/"+grace.ID.String(),
+		map[string]any{"revision": grace.Revision, "status": "invited"}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("parking the account at invited: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/invite",
+		map[string]string{"deliver": "link"}, admin)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "account_active") {
+		t.Fatalf("status = %d, body %s; want 409 account_active", rec.Code, rec.Body)
+	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Errorf("a refused request sent %d mails", n)
+	}
+}
+
 // A delivery nobody implements is refused before the account it names exists,
 // or an admin correcting a typo finds the address already taken by the request
 // that was refused.

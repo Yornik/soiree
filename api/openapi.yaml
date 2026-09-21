@@ -2191,8 +2191,8 @@ components:
         pass on by another route. Use it when the mail is the thing that
         failed. The server logs that a link was issued to an admin.
 
-        It is accepted only for an account whose status is `invited`. An
-        account that has set a password answers `409 account_active`: its
+        It is accepted only for an account that has never set a password. One
+        that has answers `409 account_active`, whatever its status says: its
         link goes to its owner. A deployment with no mail configured returns
         the link either way.
       enum: [mail, link]

@@ -846,10 +846,14 @@ func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user st
 	// already using has a password, a session and a history in the activity
 	// log to impersonate, so its link goes to its owner and to nobody else;
 	// otherwise taking over a live account, another admin's included, would be
-	// a button. An invited account has none of those and is where the dead end
-	// actually is. Nothing to weigh when there is no relay: every link already
-	// comes back to the admin there.
-	if toAdmin && a.mailer != nil && purpose != store.PurposeInvite {
+	// a button. An account that has never set a password has none of those and
+	// is where the dead end actually is. Nothing to weigh when there is no
+	// relay: every link already comes back to the admin there.
+	//
+	// On the hash rather than on the status, which is close to the same answer
+	// and not the same fact: an admin may write a status, and an account moved
+	// back to invited keeps the password it had.
+	if toAdmin && a.mailer != nil && user.PasswordHash != nil {
 		writeError(w, http.StatusConflict, "account_active",
 			"a link for an account that has set a password goes to its owner by mail")
 		return
