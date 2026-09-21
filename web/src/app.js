@@ -3484,9 +3484,11 @@
       });
 
       var del = delButton(t('w.del'), function () {
+        var at = Array.prototype.indexOf.call(row.parentNode.children, row);
         dropRow(state.notes, note);
         save();
         renderNotes();
+        focusAfterRemove(at, '#watchList .flag', 'textarea', 'addWatch');
       });
 
       row.appendChild(ta);
@@ -3520,6 +3522,26 @@
     b.setAttribute('aria-label', label);
     b.addEventListener('click', onClick);
     return b;
+  }
+
+  /* Where the keyboard goes when a row has been removed.
+   *
+   * Every list on this page is redrawn from nothing, so the button that was
+   * just pressed no longer exists and focus falls to <body> - the top of the
+   * document, which from line thirty-seven of a budget is the whole journey
+   * back. So the list says where to go instead: the first field of the row
+   * that took its place, the last row's if the one removed was the last, and
+   * the button that starts another when the list is now empty.
+   *
+   * Never the next delete button. A row goes without being asked twice and
+   * nothing brings it back, so a key held a moment too long would take the
+   * neighbour with it.
+   */
+  function focusAfterRemove(at, rowSel, fieldSel, addId) {
+    var rows = document.querySelectorAll(rowSel);
+    var row = rows[Math.min(at, rows.length - 1)];
+    var el = (row && row.querySelector(fieldSel)) || document.getElementById(addId);
+    if (el) el.focus();
   }
 
   document.getElementById('addWatch').addEventListener('click', function () {
@@ -3627,6 +3649,7 @@
           return (i.sponsors || []).indexOf(id) !== -1;
         }).length;
         if (attributed && !confirmLoss(t('sp.confirmdel', { n: attributed }))) return;
+        var at = Array.prototype.indexOf.call(row.parentNode.children, row);
         dropRow(state.sponsors, sp);
         state.budgetItems.forEach(function (i) {
           i.sponsors = (i.sponsors || []).filter(function (x) { return x !== id; });
@@ -3635,6 +3658,7 @@
         renderSponsors();
         renderBudgetTable();
         renderSplit();
+        focusAfterRemove(at, '#sponsorGrid .sponsor-row', '.code-input', 'addSponsor');
       });
 
       row.appendChild(code);
@@ -4602,11 +4626,13 @@
         if (filesUncounted(item.id)) {
           if (!confirmLoss(t('b.confirmdelunknown'))) return;
         } else if (files && !confirmLoss(t('b.confirmdel', { n: files }))) return;
+        var at = Array.prototype.indexOf.call(tr.parentNode.children, tr);
         dropRow(state.budgetItems, item);
         save();
         renderBudgetTable();
         renderBudgetTotals();
         renderOverview();
+        focusAfterRemove(at, '#budgetBody tr', 'textarea', 'addBudgetRow');
       }));
 
       addFilesButton(tdItem, 'budget', item);
@@ -4764,7 +4790,14 @@
         markTaskRow(tr, task);
         renderTaskCounts();
         renderOverview();
-        if (currentFilter !== 'all') renderTasksTable();
+        if (currentFilter !== 'all') {
+          // The row has left the view this filter describes, so there is no
+          // row to go back to. The filter that excluded it is where the
+          // person is now standing.
+          renderTasksTable();
+          var pill = document.querySelector('#taskFilters .pill.active');
+          if (pill) pill.focus();
+        }
       });
       tdStatus.appendChild(statusSelect);
 
@@ -4775,10 +4808,12 @@
         if (filesUncounted(task.id)) {
           if (!confirmLoss(t('k.confirmdelunknown'))) return;
         } else if (files && !confirmLoss(t('k.confirmdel', { n: files }))) return;
+        var at = Array.prototype.indexOf.call(tr.parentNode.children, tr);
         dropRow(state.tasks, task);
         save();
         renderTasksTable();
         renderOverview();
+        focusAfterRemove(at, '#tasksBody tr', 'input', 'addTaskRow');
       }));
 
       addFilesButton(tdName, 'task', task);

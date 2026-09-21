@@ -186,3 +186,62 @@ test('every field in the grid says which column it is in', async ({ page }) => {
   await expect(page.locator('#budgetTable thead')).toBeHidden();
   expect(await gridNames(page, '#budgetBody')).toEqual(['Item', 'Unit', 'Qty', 'Paid', 'Remarks']);
 });
+
+/*
+ * Removing a row used to take the keyboard with it.
+ *
+ * Every list here is redrawn from nothing, so the delete button that was just
+ * pressed no longer exists, and focus on an element that is removed falls to
+ * <body>. From line thirty-seven of a fifty-line budget that is the whole
+ * journey back, and a screen reader says nothing at all about it.
+ */
+test('removing a row leaves the keyboard in the list, not at the top of the page', async ({ page }) => {
+  await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 0 });
+  await addBudgetLine(page, { item: 'Cake', unit: 150, qty: 1, paid: 0 });
+
+  const lines = page.locator('#budgetBody tr');
+  await lines.nth(1).locator('.del-btn').focus();
+  await page.keyboard.press('Enter');
+  await expect(lines).toHaveCount(2);
+  // The first field of the line that moved up into its place — and not the
+  // delete button standing there, which is one keypress from taking a second
+  // line nothing brings back.
+  await expect(lines.nth(1).locator('textarea').first()).toBeFocused();
+
+  await page.locator('#sponsorGrid .sponsor-row').first().locator('.del-btn').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#sponsorGrid .code-input').first()).toBeFocused();
+
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Book the band' });
+  await addTask(page, { name: 'Order the cake' });
+  const tasks = page.locator('#tasksBody tr');
+  await tasks.first().locator('.del-btn').focus();
+  await page.keyboard.press('Enter');
+  await expect(tasks.first().locator('input').first()).toBeFocused();
+
+  await gotoTab(page, 'overview');
+  await page.locator('#addWatch').click();
+  await page.locator('#watchList .del-btn').first().focus();
+  await page.keyboard.press('Enter');
+  // Nothing left in the list to stand in: the button that starts another one.
+  await expect(page.locator('#addWatch')).toBeFocused();
+});
+
+test('a status that hides the row under a filter keeps the keyboard on the page', async ({ page }) => {
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Book the band' });
+  await addTask(page, { name: 'Order the cake' });
+
+  await page.locator('#taskFilters .pill[data-filter="not-started"]').click();
+  await expect(page.locator('#tasksBody tr')).toHaveCount(2);
+
+  const status = page.locator('#tasksBody tr').first().locator('select.status-select');
+  await status.focus();
+  await status.selectOption('done');
+
+  await expect(page.locator('#tasksBody tr')).toHaveCount(1);
+  // Marking it done took it out of the view this filter describes, so there
+  // is no row left to go back to; the filter is where the person now is.
+  await expect(page.locator('#taskFilters .pill.active')).toBeFocused();
+});
