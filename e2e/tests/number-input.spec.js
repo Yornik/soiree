@@ -94,6 +94,18 @@ test('a figure that cannot be read is said so, and the last one that could is ke
   await expect(row.committed).toHaveText('€1,234');
 });
 
+test('a field that was marked stops being marked when it is redrawn', async ({ page }) => {
+  await retype(page, page.locator('#ceilingInput'), '1.50.000');
+  await expect(page.locator('#ceilingInput')).toHaveAttribute('aria-invalid', 'true');
+
+  // The three settings fields outlive every render, unlike a grid cell, which
+  // loses the mark with the row that is rebuilt around it. Reading the page in
+  // another language redraws them from what is stored.
+  await page.locator('#langSwitch [data-lang="nl"]').click();
+  await expect(page.locator('#ceilingInput')).not.toHaveAttribute('aria-invalid', 'true');
+  await expect(page.locator('#ceilingInput')).toHaveValue('1.5');
+});
+
 /*
  * One figure is left that structure cannot settle: a lone separator with
  * exactly three digits behind it. "1.500" is fifteen hundred to a reader who

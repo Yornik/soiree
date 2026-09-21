@@ -5056,6 +5056,14 @@
     inflationInput.value = state.inflationPct;
     rateInput.value = state.fxRate || '';
     splitToggle.checked = !!state.splitEvenly;
+    // Everything written above is a figure by construction, so none of these
+    // is still the one that could not be read. A grid cell loses that mark
+    // with the row rebuilt around it; these three outlive every render, and
+    // a field announced as invalid while showing a good figure is the noise
+    // the step attributes used to make.
+    [ceilingInput, inflationInput, rateInput].forEach(function (inp) {
+      inp.removeAttribute('aria-invalid');
+    });
   }
 
   function renderAll() {
