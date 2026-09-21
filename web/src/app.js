@@ -226,6 +226,7 @@
       'b.confirmdelunknown': 'The files on this line cannot be counted until this browser has the planner from the server. Any there are go with it, for everyone, and cannot be recovered. Remove the line?',
       'b.gripcol': 'Drag to resize column',
       'b.griprow': 'Drag to resize row',
+      'b.badnumber': 'That is not a figure this can read, so the plan still has the last one that was. Digits, with a point or a comma for the decimal.',
       'sl.title': 'Who’s covering what',
       'sl.even': 'Split shared lines evenly between their sponsors',
       'k.task': 'Task',
@@ -386,6 +387,7 @@
       'b.confirmdelunknown': 'De bestanden bij deze post zijn niet te tellen zolang deze browser de planner niet van de server heeft. Wat er staat gaat mee, voor iedereen, en is niet terug te halen. Post verwijderen?',
       'b.gripcol': 'Sleep om de kolom breder te maken',
       'b.griprow': 'Sleep om de rij hoger te maken',
+      'b.badnumber': 'Dat is geen getal dat hier gelezen kan worden; de planner houdt het laatste dat dat wel was. Cijfers, met een punt of een komma als decimaalteken.',
       'sl.title': 'Wie betaalt wat',
       'sl.even': 'Gedeelde posten gelijk verdelen over de bijdragers',
       'k.task': 'Taak',
@@ -545,6 +547,7 @@
       'b.confirmdelunknown': 'Berkas di baris ini belum bisa dihitung selama browser ini belum mengambil perencana dari server. Yang ada ikut terhapus, untuk semua orang, dan tidak bisa dikembalikan. Hapus baris ini?',
       'b.gripcol': 'Seret untuk mengubah lebar kolom',
       'b.griprow': 'Seret untuk mengubah tinggi baris',
+      'b.badnumber': 'Angka itu tidak bisa dibaca, jadi perencana masih memakai angka terakhir yang bisa dibaca. Gunakan angka, dengan titik atau koma sebagai tanda desimal.',
       'sl.title': 'Siapa menanggung apa',
       'sl.even': 'Bagi rata biaya patungan di antara penyumbangnya',
       'k.task': 'Tugas',
@@ -776,8 +779,8 @@
   /* ------------------------------------------------------------------
    * MONEY ARITHMETIC
    * ------------------------------------------------------------------
-   * The page works in major units as plain numbers, because that is what an
-   * <input type="number"> gives back. Arithmetic does not: every sum below
+   * The page works in major units as plain numbers, because that is what a
+   * typed field gives back (parseAmount). Arithmetic does not: every sum below
    * accumulates whole minor units as integers and converts once at the end.
    * Adding major-unit floats drifts — 45.33 × 40 is 1813.1999999999998 — and a
    * budget is the one place a cent per line is not acceptable. It also rides
@@ -858,6 +861,94 @@
     while (frac.length < MONEY_EXP) frac += '0';
     var minor = Number(parts[0] + frac);
     return toMajor(neg ? -minor : minor);
+  }
+
+  /* ---------- What somebody typed ----------
+   * Every field that takes a figure used to be an <input type="number">,
+   * which reads what was typed by the language of the browser's own menus,
+   * not the page's and not the plan's. On an English-menu browser "45,50"
+   * arrives as 4550, and on any browser at all "1.500.000" arrives as 1.5:
+   * silently, with the field still showing what was typed and nothing marked
+   * wrong. Both languages this page is written in group thousands with a
+   * point, so the figure most people here type is the one that was read
+   * wrong.
+   *
+   * So the text is read here instead, by shape wherever shape decides it: a
+   * separator that repeats is grouping, the last of two different ones is the
+   * decimal mark, and a currency with no decimals has no decimal mark to
+   * find. `places` is what the field can carry (the currency's exponent,
+   * three for a quantity, six for a rate), and it settles most of the rest:
+   * "45,50" against two places is a decimal, and "12.7777" against three is a
+   * decimal with one place too many, which is the column's business rather
+   * than this one's.
+   *
+   * What is left over is one figure that is genuinely both: a lone separator
+   * with exactly three digits behind it, where "1.500" is fifteen hundred to
+   * a reader who groups with points and one and a half to a reader who does
+   * not. That tie goes to the way the plan's own locale writes numbers, which
+   * is configured once, is how every figure on the page is already spelled,
+   * and is the same for everyone reading it. None of which is true of the
+   * browser's menus.
+   *
+   * Answers null for text it cannot read, which is not 0: the caller keeps
+   * the figure it had rather than storing a zero nobody typed.
+   */
+  var decimalMark = '';
+  function localeDecimalMark() {
+    // On first use rather than beside LOC, which is assigned further down
+    // with the formatters: this belongs with the other readers.
+    if (!decimalMark) {
+      var m = null;
+      try { m = (1.5).toLocaleString(LOC).match(/[.,]/); } catch (e) { m = null; }
+      decimalMark = m ? m[0] : '.';
+    }
+    return decimalMark;
+  }
+
+  // Grouped the way a grouped figure is: a first group of one to three
+  // digits, and every group after it of exactly three.
+  function groupedWell(s, sep) {
+    var parts = s.split(sep);
+    if (!/^\d{1,3}$/.test(parts[0])) return false;
+    for (var i = 1; i < parts.length; i += 1) {
+      if (!/^\d{3}$/.test(parts[i])) return false;
+    }
+    return true;
+  }
+
+  function parseAmount(text, places) {
+    // A space groups thousands in several countries and rides in with a
+    // paste; the apostrophe does the same job in Switzerland.
+    var s = String(text == null ? '' : text).replace(/[\s  '’]/g, '');
+    if (s === '') return 0;
+    var neg = s.charAt(0) === '-';
+    if (neg || s.charAt(0) === '+') s = s.slice(1);
+    if (!/^[\d.,]*\d[\d.,]*$/.test(s)) return null;
+
+    var dots = s.split('.').length - 1;
+    var commas = s.split(',').length - 1;
+    var mark = '';                    // '' meaning every separator groups
+    if (dots && commas) {
+      mark = s.lastIndexOf('.') > s.lastIndexOf(',') ? '.' : ',';
+    } else if (dots + commas === 1) {
+      var sep = dots ? '.' : ',';
+      var after = s.length - s.indexOf(sep) - 1;
+      if (after === 0) mark = sep;    // half-typed, and it decides nothing
+      else if (places === 0) mark = '';
+      else if (after <= places) mark = sep;
+      else if (after === 3 && groupedWell(s, sep)) mark = localeDecimalMark() === sep ? sep : '';
+      else mark = sep;
+    }
+
+    var whole = mark ? s.slice(0, s.lastIndexOf(mark)) : s;
+    var frac = mark ? s.slice(s.lastIndexOf(mark) + 1) : '';
+    var group = mark ? (mark === '.' ? ',' : '.') : (dots ? '.' : ',');
+    if (whole.indexOf(group) !== -1 && !groupedWell(whole, group)) return null;
+    var digits = whole.split(group).join('');
+    if (!/^\d*$/.test(digits) || !/^\d*$/.test(frac)) return null;
+    var n = Number((digits || '0') + (frac ? '.' + frac : ''));
+    if (!isFinite(n)) return null;
+    return neg ? -n : n;
   }
 
   /* ------------------------------------------------------------------
@@ -3558,23 +3649,58 @@
     renderNotes();
   });
 
+  /* Every field that takes a figure is wired here, the three below and the
+   * grid's cells alike, so that one typed figure is read one way wherever it
+   * is typed. `apply` takes the figure, `shown` spells out what is stored
+   * now. `places` is what the field can carry: see parseAmount.
+   *
+   * Nothing is said about a figure that does not read yet, because a
+   * half-typed one comes through on every keystroke: "1.500.000" is not a
+   * figure until its last digit. The field is judged when it is left.
+   */
+  function wireAmountInput(inp, places, apply, shown) {
+    inp.addEventListener('input', function () {
+      var v = parseAmount(inp.value, places);
+      if (v === null) return;
+      inp.removeAttribute('aria-invalid');
+      apply(v);
+    });
+    inp.addEventListener('blur', function () {
+      if (parseAmount(inp.value, places) === null) {
+        // Left as it was typed rather than put back: a figure with a typo
+        // in it is quicker to correct than to type again. What the plan
+        // holds is the last reading that made sense, which is what the
+        // message says.
+        inp.setAttribute('aria-invalid', 'true');
+        flash(t('b.badnumber'));
+        return;
+      }
+      inp.removeAttribute('aria-invalid');
+      // What was understood, spelled the way every render spells it, so
+      // "45,50" comes back as the figure it became.
+      inp.value = shown();
+    });
+  }
+
   // ---------- Budget settings ----------
   var ceilingInput = document.getElementById('ceilingInput');
   var inflationInput = document.getElementById('inflationInput');
   var rateInput = document.getElementById('rateInput');
 
-  ceilingInput.addEventListener('input', function () {
-    state.ceiling = Number(ceilingInput.value) || 0;
+  // The scales are the columns': money to the currency's exponent, the
+  // buffer to numeric(5,2) and the rate to numeric(18,6).
+  wireAmountInput(ceilingInput, MONEY_EXP, function (v) {
+    state.ceiling = v;
     save(); renderBudgetTotals(); renderOverview();
-  });
-  inflationInput.addEventListener('input', function () {
-    state.inflationPct = Number(inflationInput.value) || 0;
+  }, function () { return state.ceiling || ''; });
+  wireAmountInput(inflationInput, 2, function (v) {
+    state.inflationPct = v;
     save(); renderBudgetTotals(); renderOverview();
-  });
-  rateInput.addEventListener('input', function () {
-    state.fxRate = Number(rateInput.value) || 0;
+  }, function () { return state.inflationPct; });
+  wireAmountInput(rateInput, 6, function (v) {
+    state.fxRate = v;
     save(); renderBudgetTotals(); renderOverview();
-  });
+  }, function () { return state.fxRate || ''; });
 
   function renderBudgetTotals() {
     var m = totals();
@@ -4593,42 +4719,44 @@
       // `hold` is the column's own limit, for the one figure here that is
       // neither money nor read back through a money parser: without it the
       // total on this screen is computed from a number the plan cannot store.
-      function numCell(key, nameKey, step, hold) {
+      function numCell(key, nameKey, places, hold) {
         var td = document.createElement('td');
         td.className = 'num-cell';
         var inp = document.createElement('input');
-        inp.type = 'number';
-        inp.min = '0';
+        // A text field read by parseAmount rather than a number field, which
+        // reads a comma or a point by the language of the browser's own
+        // menus: not the page's, and not the typist's. inputmode still asks a
+        // phone for the digit keyboard.
+        inp.type = 'text';
+        inp.inputMode = 'decimal';
+        inp.autocomplete = 'off';
         inp.setAttribute('aria-label', t(nameKey));
-        if (step) inp.step = step;
         inp.value = Number(item[key]) || 0;
-        inp.addEventListener('input', function () {
-          item[key] = hold ? hold(inp.value) : (Number(inp.value) || 0);
+        wireAmountInput(inp, places, function (v) {
+          item[key] = hold ? hold(v) : v;
           save();
           refreshRow(tr, item);
           renderBudgetTotals();
           renderOverview();
-        });
+        }, function () { return Number(item[key]) || 0; });
         td.appendChild(inp);
         return td;
       }
 
       var tdItem = textCell('item', 'c.item', 'item-cell');
-      // Money steps by "any". A quote with cents is an ordinary quote, and a
-      // whole-unit step made every one of them a step mismatch: the browser
-      // then reports a good figure as invalid, which a screen reader reads
-      // out, and the spinner arrows round it away. The arrows still move by a
-      // whole unit either way.
-      var tdUnit = numCell('unit', 'c.unit', 'any');
+      // Money carries the currency's own decimals: a quote with cents is an
+      // ordinary quote, and a field that reads two of them as a thousands
+      // group would turn one into a hundred.
+      var tdUnit = numCell('unit', 'c.unit', MONEY_EXP);
       // Three decimals rather than whole cases: a third of a case and a
       // per-head figure divided out are both ordinary, and the column keeps
       // them.
-      var tdQty = numCell('qty', 'c.qty', '0.001', toQty);
+      var tdQty = numCell('qty', 'c.qty', 3, toQty);
 
       var tdTotal = document.createElement('td');
       tdTotal.className = 'calc strong';
 
-      var tdPaid = numCell('paid', 'f.paid', 'any');
+      var tdPaid = numCell('paid', 'f.paid', MONEY_EXP);
 
       var tdOwing = document.createElement('td');
       tdOwing.className = 'calc';
@@ -4928,6 +5056,14 @@
     inflationInput.value = state.inflationPct;
     rateInput.value = state.fxRate || '';
     splitToggle.checked = !!state.splitEvenly;
+    // Everything written above is a figure by construction, so none of these
+    // is still the one that could not be read. A grid cell loses that mark
+    // with the row rebuilt around it; these three outlive every render, and
+    // a field announced as invalid while showing a good figure is the noise
+    // the step attributes used to make.
+    [ceilingInput, inflationInput, rateInput].forEach(function (inp) {
+      inp.removeAttribute('aria-invalid');
+    });
   }
 
   function renderAll() {

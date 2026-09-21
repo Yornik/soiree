@@ -352,8 +352,12 @@ filter children out of the sync layer, which would delete them.
 ### State shape
 
 One plain JSON object. Money sits in `state` as major units, because that is
-what an `<input type="number">` gives back; every sum accumulates whole minor
-units as integers and converts once at the end.
+what a typed field gives back; every sum accumulates whole minor units as
+integers and converts once at the end. The fields are `type="text"` read by
+`parseAmount`, not `<input type="number">`: a number field reads a comma or a
+point by the language of the browser's own menus, which the page cannot see,
+so "45,50" arrives as 4550 on English menus and "1.500.000" as 1.5 on any of
+them.
 
 ```
 {
