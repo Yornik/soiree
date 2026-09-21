@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	yaml "go.yaml.in/yaml/v3"
@@ -86,5 +87,58 @@ func TestComposeStackCanBeSignedInTo(t *testing.T) {
 	if c.BootstrapAdmin == "" || c.BootstrapPassword == "" || c.BaseURL == "" {
 		t.Errorf("Load() read BootstrapAdmin=%q, BaseURL=%q and a password of %d characters from compose.yaml",
 			c.BootstrapAdmin, c.BaseURL, len(c.BootstrapPassword))
+	}
+}
+
+// composePorts reads what each service of the development stack publishes on
+// the host. It reads the file for the same reason composeEnv does: a copy of
+// these values kept here would agree with itself while compose.yaml drifted.
+func composePorts(t *testing.T) map[string][]string {
+	t.Helper()
+
+	path := filepath.Join("..", "..", "compose.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	// Short syntax, which is what the file uses. A long-form entry fails to
+	// unmarshal here rather than passing unchecked, so whoever adds one is
+	// sent to this test to say where it binds.
+	var doc struct {
+		Services map[string]struct {
+			Ports []string `yaml:"ports"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	if len(doc.Services) == 0 {
+		t.Fatalf("%s defines no services", path)
+	}
+
+	ports := make(map[string][]string, len(doc.Services))
+	for name, svc := range doc.Services {
+		ports[name] = svc.Ports
+	}
+	return ports
+}
+
+// TestComposeStackIsPublishedToThisMachineOnly pins the address the stack is
+// published on, which is what makes writing its password down safe. Compose's
+// short "8080:8080" form binds 0.0.0.0, so an entry with no host address
+// answers on every interface the machine has, including wifi it did not
+// choose. Behind these ports sit an admin whose password is printed in this
+// repository and a Postgres superuser called soiree/soiree. A host firewall is
+// no answer either: on Linux the rules that publish a port are evaluated
+// before it.
+func TestComposeStackIsPublishedToThisMachineOnly(t *testing.T) {
+	for service, ports := range composePorts(t) {
+		for _, published := range ports {
+			if !strings.HasPrefix(published, "127.0.0.1:") {
+				t.Errorf("compose.yaml publishes %q of service %s on every interface; write it as \"127.0.0.1:%s\"",
+					published, service, published)
+			}
+		}
 	}
 }

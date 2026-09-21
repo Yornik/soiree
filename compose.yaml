@@ -22,7 +22,10 @@ services:
       # test suite noticeably faster. Never do this to a database you care about.
       PGOPTIONS: -c fsync=off -c full_page_writes=off -c synchronous_commit=off
     ports:
-      - "5432:5432"
+      # Loopback, not the bare "5432:5432" that Compose reads as 0.0.0.0: the
+      # password for this superuser is on the line above, and on Linux a
+      # published port is reached before a host firewall gets a say.
+      - "127.0.0.1:5432:5432"
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
@@ -50,10 +53,11 @@ services:
       # restart against a database that already has one changes nothing.
       #
       # Writing a password down is safe here and nowhere else: this database is
-      # a tmpfs that `docker compose down` throws away, the stack answers on
-      # localhost, and the line is published in a public repository, so
-      # everybody already knows it. A real deployment picks its own and
-      # replaces it once it is in; docs/operating.md says how.
+      # a tmpfs that `docker compose down` throws away, the port below is
+      # published to 127.0.0.1 so nothing off this machine can offer the
+      # password to it, and the line is in a public repository, so everybody
+      # already knows it. A real deployment picks its own and replaces it once
+      # it is in; docs/operating.md says how.
       SOIREE_BOOTSTRAP_ADMIN: admin@example.test
       SOIREE_BOOTSTRAP_PASSWORD: local-development-only
       # The origin set-password links are built against, and the domain a
@@ -62,7 +66,10 @@ services:
       # leave passkeys off rather than guess.
       SOIREE_BASE_URL: http://localhost:8080
     ports:
-      - "8080:8080"
+      # Loopback, for the reason the bootstrap password above gives. Without
+      # the address this admin answers on every interface the machine has,
+      # wifi it did not choose included.
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
