@@ -1433,8 +1433,51 @@
   function showPanel(id, title, lede) {
     each(PANEL_IDS, function (p) { show(byId(p), p === id); });
     setText(byId('authTitle'), title);
-    setText(byId('authLede'), lede || '');
+    // The lede is a live region, so it is written only when it has something
+    // else to say. render() is idempotent and runs again on every session
+    // probe and language switch; rewriting the same sentence would make a
+    // screen reader read it out each time.
+    var line = byId('authLede');
+    if (line && line.textContent !== (lede || '')) setText(line, lede || '');
     drawVersion();
+    enterScreen(id, title);
+  }
+
+  // What the tab is called with the planner on screen: the event's own name,
+  // as the server rendered it into the document. Read once, because from here
+  // on the title is this file's to set.
+  var EVENT_TITLE = document.title;
+
+  /* Arriving on a screen, for somebody who cannot see that it changed.
+   *
+   * Every button that swaps screens sits in the half the swap hides - the
+   * account bar is in the planner, "Back to the planner" is on the accounts
+   * screen - so the browser is left holding a focused element that is no
+   * longer there and drops focus on <body>: nothing is announced, and the
+   * next Tab starts at the top of the page. Focus goes to the heading of
+   * whatever is on screen now instead, which is what tells a screen reader,
+   * and a Tab key, that this is a different page.
+   *
+   * A screen that wants a field focused still gets it: renderLogin and
+   * renderSetPassword reach this through showPanel and focus afterwards.
+   *
+   * Only a real change counts, for the same reason the lede above is guarded:
+   * focus that moves under somebody mid-sentence is worse than focus that
+   * never moved.
+   */
+  var onScreen;   // undefined until the first render; null is the planner
+
+  function enterScreen(id, title) {
+    document.title = id && title ? title + ' · ' + EVENT_TITLE : EVENT_TITLE;
+    var moved = onScreen !== undefined && onScreen !== id;
+    onScreen = id;
+    if (!moved) return;
+    var head = id ? byId('authTitle') : document.querySelector('.masthead h1');
+    if (!head) return;
+    // A heading is not focusable on its own, and this one stays out of the
+    // tab order: it is somewhere to be sent, not a stop on the way through.
+    head.tabIndex = -1;
+    head.focus();
   }
 
   /* Which release this is, very small, under every screen somebody signed in
@@ -1493,6 +1536,7 @@
     show(byId('authScreen'), !!path);
     if (!path) {
       afterLogin = '';
+      enterScreen(null, '');
       return;
     }
 
@@ -2832,6 +2876,33 @@
   each(document.querySelectorAll('[data-auth-goto]'), function (el) {
     el.addEventListener('click', function () { goto(el.getAttribute('data-auth-goto')); });
   });
+
+  /* Landmarks, and the live region the swap needs.
+   *
+   * The page has two halves and shows one of them: the planner, or the
+   * accounts screens. Whichever is up is the main content of the page while
+   * it is up, and the other is out of the accessibility tree either way -
+   * hidden, or display:none - so marking both leaves exactly one main
+   * landmark at any moment, and "skip to the content" lands past the language
+   * switcher whichever half that is.
+   *
+   * The lede under the auth heading is the sentence a screen leads with, and
+   * the one after a link is redeemed says the password is saved: the first
+   * thing an invited person is told, on a screen where focus belongs in the
+   * email field. So it is announced, not only drawn.
+   *
+   * Markup would carry all three more plainly. They are set from here because
+   * this is the file that swaps the halves and writes that sentence.
+   */
+  each(['plannerWrap', 'authScreen'], function (id) {
+    var half = byId(id);
+    if (half) half.setAttribute('role', 'main');
+  });
+  var authLede = byId('authLede');
+  if (authLede) {
+    authLede.setAttribute('role', 'status');
+    authLede.setAttribute('aria-live', 'polite');
+  }
 
   render();
   probeSession();

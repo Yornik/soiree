@@ -968,3 +968,58 @@ test('removing somebody lands on the row that took their place, never on a Remov
   await expect(page.locator('.person', { hasText: LINUS.email }).locator('select.person-role')).toBeFocused();
   expect(await page.evaluate(() => document.activeElement.className)).not.toContain('danger');
 });
+
+/* ------------------------------------------------------------------
+ * Being told the screen changed
+ * ------------------------------------------------------------------
+ * The planner and the accounts screens are two halves of one page, and the
+ * button that swaps them is always in the half that goes away. Nothing moved,
+ * nothing was said, and the tab kept its name, so for somebody who cannot see
+ * the swap it did not happen.
+ * ------------------------------------------------------------------ */
+
+test('opening the accounts screen moves focus onto it, names the tab, and leaves one landmark', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA] });
+  await open(page);
+
+  await page.getByRole('button', { name: 'People' }).click();
+  await expect(page.locator('#panelAdmin')).toBeVisible();
+
+  await expect(page.locator('#authTitle')).toBeFocused();
+  await expect(page).toHaveTitle('People · Rehearsal Dinner (e2e)');
+  // The planner is display:none behind it, so exactly one main landmark is in
+  // the accessibility tree and "skip to the content" has one destination.
+  const main = page.locator('[role="main"]:visible');
+  await expect(main).toHaveCount(1);
+  await expect(main).toHaveAttribute('id', 'authScreen');
+});
+
+test('going back to the planner moves focus onto it, and gives the tab its name back', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA] });
+  await open(page, '/#/admin');
+
+  await page.getByRole('button', { name: 'Back to the planner' }).click();
+  await expect(page.locator('#plannerWrap')).toBeVisible();
+
+  await expect(page.locator('.masthead h1')).toBeFocused();
+  await expect(page).toHaveTitle('Rehearsal Dinner (e2e)');
+  const main = page.locator('[role="main"]:visible');
+  await expect(main).toHaveCount(1);
+  await expect(main).toHaveAttribute('id', 'plannerWrap');
+});
+
+test('the sentence a screen leads with is announced, not only drawn', async ({ page }) => {
+  // The first flow an invited person goes through ends on the sign-in form
+  // with "your password is saved" as its lede. Focus belongs in the email
+  // field there, so that sentence has to reach a screen reader by itself.
+  await mountAccounts(page, { users: [LINUS] });
+  await page.goto(`/#/set-password?token=${TOKEN}`);
+  await page.fill('#newPassword', PASSWORD);
+  await page.fill('#newPassword2', PASSWORD);
+  await page.click('#setPasswordSubmit');
+
+  await expect(page.locator('#panelLogin')).toBeVisible();
+  await expect(page.locator('#authLede')).toHaveAttribute('role', 'status');
+  await expect(page.locator('#authLede')).toContainText('Your password is saved');
+  await expect(page.locator('#loginEmail')).toBeFocused();
+});
