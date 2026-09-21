@@ -6,15 +6,11 @@
 ### Bug Fixes
 
 * **passkeys:** ask for the prompt inside the tap, and say why it failed ([6685703](https://github.com/Yornik/soiree/commit/668570330813291ff115f14f0491af1aa5eb575b))
-* **passkeys:** sign-in on Safari - ask inside the tap, say why it failed, ignore unrequested extension outputs ([702d695](https://github.com/Yornik/soiree/commit/702d695115c22e56fc35cdca4762104b1fc9f160))
 * **passkeys:** stop refusing sign-ins over extension outputs nobody requested ([1be2952](https://github.com/Yornik/soiree/commit/1be2952a10d1400e31fcb2d7e11a3ebaf384218b))
 * **push:** a tapped reminder no longer reloads the open planner ([f789258](https://github.com/Yornik/soiree/commit/f789258c929f9c9b48eb19167e497bd12cf6bf05))
 * **push:** say what is actually wrong when reminders cannot be turned on ([2ee9a15](https://github.com/Yornik/soiree/commit/2ee9a15c0f82b594870471cc719fb564819b7c61))
-* **push:** say what is actually wrong when reminders cannot be turned on; a tapped reminder no longer reloads the planner ([b56a232](https://github.com/Yornik/soiree/commit/b56a2328001fc9ce4682d8da303d6713a1d0a2b7))
-* **web:** keep the run-up legible when due dates crowd together ([8ffd3a0](https://github.com/Yornik/soiree/commit/8ffd3a08a6120364b868aa0832a91bd12e974d97))
 * **web:** keep the run-up legible when due dates crowd together ([9e65ffc](https://github.com/Yornik/soiree/commit/9e65ffcb7e54ca59e1016b5bdd08dc4b8763eead))
 * **web:** serve the service worker and the manifest as written ([b76736d](https://github.com/Yornik/soiree/commit/b76736d1f99f6379a9de1a8b921d2f8584831a1c))
-* **web:** the service worker has never parsed in any browser ([75fb7ea](https://github.com/Yornik/soiree/commit/75fb7ea7829b52ee3be03ff86a850aede4b80663))
 * **web:** the worker answers only the planner from its cache ([39890be](https://github.com/Yornik/soiree/commit/39890be1d93d95a3490e7cbd03937edfdd4e6dc8))
 
 ## [1.2.0](https://github.com/Yornik/soiree/compare/v1.1.1...v1.2.0) (2026-09-18)
@@ -23,7 +19,6 @@
 ### Features
 
 * **web:** tasks and budget lines show their state, and shares are drawn ([cbef915](https://github.com/Yornik/soiree/commit/cbef9150bccbdea5034b16657f7bca5c547620f7))
-* **web:** the run-up - a new look for the whole planner ([ca58577](https://github.com/Yornik/soiree/commit/ca5857762aaa4962054484e50fbbd2e124fd6373))
 * **web:** the run-up - a new look, and an overview built around the date ([79b32e1](https://github.com/Yornik/soiree/commit/79b32e1ef419d612bb6d2810fb0a0760490cb371))
 * **web:** the typeface at every size, and icons a phone will accept ([a75f498](https://github.com/Yornik/soiree/commit/a75f49863bc1efb57e9522f508931bf29f7dc650))
 
@@ -32,7 +27,6 @@
 
 ### Bug Fixes
 
-* a visible paperclip, the right event day, and long names that fit ([d319a61](https://github.com/Yornik/soiree/commit/d319a61dd54935b839cdb372d195032a083c8473))
 * the event is on the day it was written for, for every reader ([3b5e2e8](https://github.com/Yornik/soiree/commit/3b5e2e83e898a545be280d06d5bb47acf5c527e0))
 * **web:** a long name makes its row taller instead of hiding behind a scrollbar ([df01ff9](https://github.com/Yornik/soiree/commit/df01ff91f78df5490b33d0a3c509962451d755b1))
 * **web:** a paperclip that can be seen, and pressed on a line with a long name ([1f59872](https://github.com/Yornik/soiree/commit/1f59872357be3e3904086ba0cf69b577f6771830))
@@ -40,7 +34,6 @@
 
 ### Performance Improvements
 
-* compress each asset once per process, which makes the tests twelve times faster ([eef0525](https://github.com/Yornik/soiree/commit/eef0525422ebe58827819c26f25d21310662e11d))
 * compress each asset once per process, which makes the tests twelve times faster ([eed4c0d](https://github.com/Yornik/soiree/commit/eed4c0d36a12268213a0c43fbb42b6c200d96ac2))
 
 ## [1.1.0](https://github.com/Yornik/soiree/compare/v1.0.2...v1.1.0) (2026-09-18)
@@ -48,9 +41,7 @@
 
 ### Features
 
-* an activity feed of who changed what, for admins ([fcbfbad](https://github.com/Yornik/soiree/commit/fcbfbad12ef31b44af5771d1212467a8648cb84a))
 * **api:** an activity feed of everything that changed, for admins ([9dc3b59](https://github.com/Yornik/soiree/commit/9dc3b592a7b5e2958613bf5d223d0de4f876b5bc))
-* attach files to budget lines and tasks ([71c63ae](https://github.com/Yornik/soiree/commit/71c63aea7e9b607eb43ebc7aa648c2fd1844b8b8))
 * **attachments:** configuration - all five bucket settings or none ([584b147](https://github.com/Yornik/soiree/commit/584b147a8a84a1a51c2edb86ed53370a830a806a))
 * **attachments:** four routes and a sweeper, with no file passing through ([66cf9a4](https://github.com/Yornik/soiree/commit/66cf9a4c5502e4552f556db4020de4d51a5b2dbf))
 * **attachments:** the schema, and the one S3 routine everything else uses ([ffd4005](https://github.com/Yornik/soiree/commit/ffd4005b28252641304fa4cbd3019291b49c4131))
@@ -65,7 +56,6 @@
 * **attachments:** close response bodies the way the linter and the rest of the code do ([a007db0](https://github.com/Yornik/soiree/commit/a007db089e4aa28765a1a49c54572779f0e9cbcf))
 * **attachments:** the expired-address test cleans up after itself ([d96f59e](https://github.com/Yornik/soiree/commit/d96f59e84d3028b05064f992b7cad4712c6f5f14))
 * **attachments:** the two response bodies the linter had not got to yet ([1671063](https://github.com/Yornik/soiree/commit/16710634dc67dcbb40b2c6b56a0f925473eca1ee))
-* **web:** the whole budget table fits a desktop screen, remove button included ([6527e77](https://github.com/Yornik/soiree/commit/6527e7775a7bc0eb979176f9c2018f6f3c803189))
 * **web:** the whole budget table fits a desktop screen, remove button included ([910fab1](https://github.com/Yornik/soiree/commit/910fab19511a6572f677f9e748a8a98b1869b5bd))
 
 ## [1.0.2](https://github.com/Yornik/soiree/compare/v1.0.1...v1.0.2) (2026-09-18)
@@ -73,7 +63,6 @@
 
 ### Bug Fixes
 
-* **web:** an import made after signing out and back in is actually saved ([3444fea](https://github.com/Yornik/soiree/commit/3444fea6c900aeb70e677a4fe0d53e6421f3284a))
 * **web:** an import made after signing out and back in is actually saved ([b935772](https://github.com/Yornik/soiree/commit/b9357727096e4c4453fe2e2d77469b21d3968c99))
 
 ## [1.0.1](https://github.com/Yornik/soiree/compare/v1.0.0...v1.0.1) (2026-09-18)
@@ -81,7 +70,6 @@
 
 ### Bug Fixes
 
-* **web:** a 401 ends the session at once, without asking again ([aac6945](https://github.com/Yornik/soiree/commit/aac69452f2cbd5acdf86830b469403af7b2640fa))
 * **web:** a 401 ends the session at once, without asking again ([a23f9cb](https://github.com/Yornik/soiree/commit/a23f9cba56e416f9c49cb5f494e343da3c2a884d))
 
 ## [1.0.0](https://github.com/Yornik/soiree/compare/v0.4.0...v1.0.0) (2026-09-18)
