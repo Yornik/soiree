@@ -641,13 +641,18 @@ body.is-empty .when-data { display: none; }
 .upnext-list, .split-list { list-style: none; margin: 0; padding: 0; }
 .upnext-list li, .split-list li {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  /* minmax(0,…) as the reckoning has it, and for the same reason: what names
+     the row is a task's name or a sponsor's callsign, which is whatever
+     somebody typed, and a bare 1fr will not shrink below one long word of
+     it. On a phone that word took the whole page sideways with it. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: baseline;
   column-gap: 16px;
   padding: 10px 0;
   border-bottom: 1px solid var(--rule);
   font-size: 14px;
 }
+.upnext-list li > :first-child, .split-list li > :first-child { min-width: 0; overflow-wrap: anywhere; }
 .upnext-list li:last-child, .split-list li:last-child { border-bottom: 0; }
 
 /* Who is covering what, as lengths. The list is held to a readable width - a
@@ -684,6 +689,22 @@ body.is-empty .when-data { display: none; }
   margin-bottom: 10px;
 }
 .flag textarea { border-color: var(--rule); resize: vertical; }
+
+/* --- A name in any script ---
+   Nothing on this page said which way a line of text runs, so every field and
+   every cell that echoes one ran left to right whatever was typed into it: an
+   Arabic or Hebrew name sat against the wrong edge of its field, and the
+   punctuation closing it was drawn at the end its reader begins from.
+
+   plaintext is dir="auto" said in CSS. Each field and each cell takes its
+   direction from the first letter somebody typed into it, so a name in Latin
+   letters is laid out exactly as before and nothing has to be declared twice.
+   It belongs on what a person writes in their own words and nowhere near a
+   figure or a date, which are read the same way in every script. */
+input[type="text"], textarea,
+.upnext-list li > :first-child, .upnext-list .who,
+.split-list li > :first-child,
+.runup-pop .what, .runup-pop .who { unicode-bidi: plaintext; }
 
 /* --- Fields and controls -------------------------------------------------- */
 .settings-row {
@@ -871,12 +892,22 @@ table.budget thead th:first-child { background: var(--tint); z-index: 3; }
 .sponsor-grid:empty { border-top: 0; }
 .sponsor-row {
   display: grid;
-  grid-template-columns: minmax(90px, 150px) minmax(110px, 1fr) auto auto;
+  /* The name gives way rather than the figure beside it: a floor of 110px
+     under it left about 60px for the amount in a narrow window, and a sponsor
+     covering a seven-figure line pushed their own remove button off the
+     screen. Narrow enough to be a phone the figure takes a line of its own
+     instead, which is what the block further down does with this row. */
+  grid-template-columns: minmax(90px, 150px) minmax(0, 1fr) auto auto;
   align-items: center;
   column-gap: 12px;
   padding: 5px 0;
   border-bottom: 1px solid var(--rule);
 }
+/* A field has a width of its own, and a column told it may go to nothing does
+   not take it away: without this the name went on being drawn 70px wide over
+   whatever stood beside it, which on a phone was the figure. Same declaration
+   and same reason as the unwound task row further down. */
+.sponsor-row input { min-width: 0; }
 .sponsor-row .code-input { font-weight: 600; }
 .sponsor-row .sp-amt {
   font-variant-numeric: tabular-nums;
@@ -1117,6 +1148,10 @@ body.is-archived .when-data { display: block; }
   .reckoning.ledger .fig-num { font-size: 22px; }
   .start-steps li { grid-template-columns: auto 1fr; row-gap: 4px; }
   .start-steps button { grid-column: 2; grid-row: auto; margin-top: 8px; }
+  /* An owner's whole name in a column held to one line is the other way this
+     page ends up wider than the phone. The date beside it has to stay on one
+     line; a name does not. */
+  .upnext-list .who { white-space: normal; }
 
   /* --- The budget grid, unwound ---
      Nine columns and a drag handle are a desk interaction. Below this width
@@ -1209,6 +1244,65 @@ body.is-archived .when-data { display: block; }
   }
   table.budget tfoot th { display: block; min-height: 0; padding: 0 0 4px; }
   table.budget tfoot td:not([data-label]) { display: none; }
+
+  /* --- The task list, unwound ---
+     Five columns hold 560px whatever the screen is, so on a phone the name
+     field came out 70px wide, eight characters of a task called "Confirm
+     final guest count", and the status and the remove button sat past the
+     right-hand edge with nothing on the page to say they were there. Each
+     task becomes an entry the way a budget line does: the name at the head,
+     then the two small facts about it side by side, then what state it is in
+     and the one control that throws it away.
+
+     The header row goes with the columns, and the screen-reader-only
+     "Remove" it carries goes with it: that span is positioned absolutely
+     inside a cell nothing positions, so it escaped the clip on the region
+     around the table and panned the whole document 160px sideways, with no
+     tasks in the list at all. */
+  table.tasks { display: block; min-width: 0; }
+  table.tasks thead { display: none; }
+  table.tasks tbody { display: block; }
+
+  /* minmax(0,…) again, and the date's own column sized to it: a date field is
+     drawn by the browser and has a width of its own, and a bare 1fr will not
+     shrink below it, so at 320px the entry would push the page sideways
+     instead. */
+  table.tasks tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 16px;
+    padding: 6px 0 14px;
+    border-top: 1px solid var(--rule-ink);
+  }
+  table.tasks tbody tr:first-child { border-top: 0; }
+  table.tasks tbody td { display: block; border: 0; padding: 2px 0; }
+  table.tasks tbody td input, table.tasks tbody td select { min-width: 0; }
+  /* The name says which task this is, so it leads the entry across both
+     columns and is set to be read first. Owner and due date fall either side
+     of the line under it, status and remove on the line under that. */
+  table.tasks tbody td:first-child { grid-column: 1 / -1; }
+  table.tasks tbody td:first-child input { font-size: 18px; font-weight: 600; }
+  table.tasks tbody td.del-cell { width: auto; text-align: right; }
+  table.tasks tbody td.empty-cell { padding: 18px 0; }
+
+  /* The status edge marks the entry now that the row is one. Left where it
+     was it would run down the name alone, which reads as a mark on the name
+     rather than on the task. */
+  table.tasks tbody tr[data-status] { box-shadow: inset 3px 0 0 var(--rule-mid); padding-left: 13px; }
+  table.tasks tbody tr[data-status="in-progress"] { box-shadow: inset 3px 0 0 var(--lamp); }
+  table.tasks tbody tr[data-status="done"] { box-shadow: inset 3px 0 0 var(--paid); }
+  table.tasks tbody tr[data-status] td:first-child { box-shadow: none; }
+
+  /* --- The sponsor row, unwound ---
+     Four things will not fit across a phone: a callsign, a name, the figure
+     that sponsor is covering and the button that removes them. The callsign
+     and the button are as wide as they are, and a figure is as wide as the
+     currency draws it, so the only one that can give is the name, and a name
+     field squeezed to nothing is not a field. The figure drops to a line of
+     its own instead, at the right-hand edge where every other figure in the
+     panel is read, and the two fields keep the line above it. */
+  .sponsor-row { grid-template-columns: minmax(0, 110px) minmax(0, 1fr) auto; row-gap: 2px; }
+  .sponsor-row .sp-amt { grid-row: 2; grid-column: 1 / -1; }
 }
 
 /* Touch, and anything narrow enough to be held: a 24px delete button is not
@@ -1560,6 +1654,61 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   /* These three are styled after the touch block above, so the 16px that
      keeps iOS from zooming on focus has to be said again here. */
   .auth-link-out input, .person-role, .person-language { font-size: 16px; }
+}
+
+/* --- A forced palette ---
+   Windows High Contrast and the rest of them throw every colour on this page
+   away and redraw it in the four or five the person chose. Everything said
+   with a background or a box-shadow stops being said: three tabs underlined
+   alike, filter and theme pills that all look off, a language switch with no
+   language marked, and a run-up with no line, no marks and no bars under the
+   figures. The figures themselves are text and come through untouched, which
+   is why this is a dozen declarations rather than a second stylesheet.
+
+   System colours only, because the palette is the reader's: Canvas and
+   CanvasText are the page, Highlight and HighlightText are their own colour
+   for "this is the one", ButtonText is the ink of a control.
+
+   The two rules that turn the forcing off do so because the browser draws a
+   backplate in the canvas colour behind every run of text here, to keep text
+   over a picture readable. Text we have deliberately set to the colour of the
+   fill behind it lands on that plate instead and disappears: the name of the
+   filter that is on, and the count inside a mark that stands for several
+   dates. forced-color-adjust is inherited, so the name hanging off a mark
+   asks for the forcing back. */
+@media (forced-colors: active) {
+  .tab-btn { border-bottom-color: Canvas; }
+  .tab-btn.active { border-bottom-color: Highlight; }
+  .pill.active { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  /* The language in use is marked by a box-shadow, and a box-shadow is not
+     drawn here at all. */
+  .flag-btn[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: 1px; }
+
+  .runup-line, .runup-tick, .runup-leader { background: CanvasText; }
+  /* A leader under the pointer is drawn in a stronger ink by a rule that
+     names three things to this one's one, so it goes on winning here, and
+     the forcing is off on the mark it hangs from. Named again, or a hovered
+     leader is the one graphic on the page still drawn in a colour of ours. */
+  .runup-mark:hover .runup-leader, .runup-mark:focus-visible .runup-leader,
+  .runup-mark[aria-expanded="true"] .runup-leader { background: CanvasText; }
+  .runup-mark { forced-color-adjust: none; background: ButtonText; color: Canvas; }
+  .runup-mark .runup-label { forced-color-adjust: auto; }
+  /* Late is a ring around today rather than a mark of its own, so it takes
+     neither the fill above nor the alarm colour it is drawn in on a page that
+     has colours to spend: no fill, and the reader's own ink for the ring. */
+  .runup-mark.late { forced-color-adjust: auto; background: none; }
+  .runup-today { background: Highlight; }
+
+  /* A length says nothing without the whole it is a length of, and the tint
+     those are drawn in is a background like any other. */
+  .moneybar, .gauge-track, .split-list .share { border: 1px solid CanvasText; }
+  .moneybar-paid, .gauge-fill, .split-list .share-fill { background: Highlight; }
+  /* Two colours are all there are, so they go where a bar holds two lengths
+     that have to be told apart: paid from owed, and a sponsor's share from
+     what nobody has taken on. A ceiling that has been crossed is named twice
+     because it is drawn in the alarm colour, which outranks the rest. */
+  .moneybar-owed, .moneybar-ceiling, .moneybar-ceiling.over,
+  .split-list .share-fill.unassigned { background: CanvasText; }
 }
 
 /* --- Paper ---

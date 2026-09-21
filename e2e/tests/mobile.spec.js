@@ -1,18 +1,26 @@
 // @ts-check
 /*
- * The budget grid on a phone.
+ * The budget grid and the task list on a phone.
  *
  * Nine columns, a frozen first column and drag handles on the header are a
- * desk interaction. Below the breakpoint the same markup has to become a
- * stack of entries — same DOM, same ids, same cell order, so everything else
- * in this suite still addresses it the same way — with the money still in one
- * right-aligned column that reconciles against the totals.
+ * desk interaction, and so are the five columns of the task list. Below the
+ * breakpoint the same markup has to become a stack of entries — same DOM,
+ * same ids, same cell order, so everything else in this suite still addresses
+ * it the same way — with the money still in one right-aligned column that
+ * reconciles against the totals.
  *
  * These tests assert the layout, not the styling: what scrolls, what is
  * reachable, how big a target is, and whether the arithmetic still lines up.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, budgetRow, gotoTab, money, openPlanner } = require('./helpers');
+const { addBudgetLine, addSponsor, addTask, budgetRow, gotoTab, money, openPlanner, tagLine } = require('./helpers');
+
+/** How far the document itself can be scrolled sideways, in CSS pixels. */
+function documentOverflow(page) {
+  return page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+}
 
 // A small phone in portrait. Narrower than anything else this suite runs at,
 // which is the point: if it works here it works on the rest.
@@ -201,4 +209,139 @@ test('no field is small enough to make the browser zoom into it', async ({ page 
       .filter((f) => f.size < 16);
   });
   expect(small).toEqual([]);
+});
+
+/*
+ * The task list. Five columns is a desk layout too, and it was never given
+ * the treatment the budget grid got: at this width the name field was 70px
+ * wide, about eight characters of "Confirm final guest count", and the
+ * status and the remove button sat off the right-hand edge of the screen
+ * with nothing on the page to say they were there.
+ */
+test('a task becomes an entry instead of a row running off the screen', async ({ page }) => {
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Confirm final guest count', owner: 'Ada', due: '2030-05-01' });
+
+  // Nothing to scroll: not the region around the table, and not the page.
+  const wrap = page.locator('#panel-tasks .table-wrap');
+  expect(await wrap.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+
+  // The header row is the one part that cannot stack. It goes, and so does
+  // the off-screen "Remove" it carried for screen readers: that span is
+  // absolutely positioned inside a cell nothing positions, so it escaped the
+  // region's clip and panned the whole document sideways.
+  await expect(page.locator('#panel-tasks thead')).toBeHidden();
+
+  const row = page.locator('#tasksBody tr').first();
+  const rowBox = await row.boundingBox();
+
+  // The name leads the entry across its full width rather than being cut to
+  // a word and a half.
+  const name = await row.locator('td').nth(0).locator('input').boundingBox();
+  expect(name.width).toBeGreaterThan(rowBox.width * 0.8);
+
+  // And what used to be past the right edge is on the screen.
+  const viewport = page.viewportSize().width;
+  for (const [what, locator] of [
+    ['status', row.locator('select.status-select')],
+    ['remove', row.locator('td.del-cell button')],
+  ]) {
+    const box = await locator.boundingBox();
+    expect(box.x + box.width, `${what} is off the right edge`).toBeLessThanOrEqual(viewport);
+  }
+
+  // Reading order down the entry: what it is, then who has it and when, then
+  // what state it is in, with the destructive one last.
+  const owner = await row.locator('td').nth(1).locator('input').boundingBox();
+  const status = await row.locator('select.status-select').boundingBox();
+  const remove = await row.locator('td.del-cell button').boundingBox();
+  expect(name.y).toBeLessThan(owner.y);
+  expect(owner.y).toBeLessThan(status.y);
+  expect(remove.y).toBeGreaterThanOrEqual(status.y);
+});
+
+test('an empty task list does not pan the page sideways either', async ({ page }) => {
+  // The header row is drawn whether or not there is anything under it, so
+  // this was the state a phone met before adding a single task.
+  await gotoTab(page, 'tasks');
+  await expect(page.locator('#tasksBody td.empty-cell')).toBeVisible();
+  expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+/*
+ * Long words and large figures. A callsign and a name are whatever somebody
+ * types, and the lists that are laid out from them are grids: a column told
+ * to take the space left over will not shrink below the longest word in it,
+ * so one unbroken word or one figure with enough digits used to make the
+ * whole page scroll sideways.
+ */
+test('a callsign too long to break does not widen the page', async ({ page }) => {
+  const code = 'C'.repeat(40);
+  await addSponsor(page, { code, name: 'Example Family' });
+  await tagLine(budgetRow(page, 0), [code]);
+
+  await expect(page.locator('#splitList li').first()).toContainText(code);
+  expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test('a large figure beside a sponsor keeps their remove button on the screen', async ({ page }) => {
+  await addSponsor(page, { code: 'AB', name: 'Example Family' });
+  await budgetRow(page, 0).unit.fill('125000000');
+  await tagLine(budgetRow(page, 0), ['AB']);
+
+  await expect(page.locator('#sponsorGrid .sp-amt')).toContainText('125,000,000');
+  const remove = await page.locator('#sponsorGrid .sponsor-row .del-btn').boundingBox();
+  expect(remove.x + remove.width).toBeLessThanOrEqual(page.viewportSize().width);
+  expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+/*
+ * Room taken from the name field is not room. A field is drawn at a width of
+ * its own whatever its column is told it may shrink to, so a column that
+ * gives way entirely does not move the field out of the way: it leaves it
+ * standing over whatever is beside it, which here is the figure that sponsor
+ * is covering. Nothing above sees this: the page does not scroll sideways
+ * and every control is still on the screen, so it is asserted directly.
+ */
+test("a sponsor's name is never drawn over the figure beside it", async ({ page }) => {
+  await addSponsor(page, { code: 'AB', name: 'Example Family' });
+  await tagLine(budgetRow(page, 0), ['AB']);
+
+  const name = page.locator('#sponsorGrid .name-input');
+  const figure = page.locator('#sponsorGrid .sp-amt');
+
+  // An ordinary seven-figure line, and one drawn with as many digits and
+  // separators as any currency and locale would ever put in front of a
+  // reader. What a figure costs the row is its width, so the longest of them
+  // is the case that has to hold.
+  for (const unit of [1250000, 125000000, 18014398543952]) {
+    await budgetRow(page, 0).unit.fill(String(unit));
+    await expect.poll(async () => money(await figure.textContent())).toBe(unit);
+
+    for (const width of [390, 375, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      const [over, under] = [await name.boundingBox(), await figure.boundingBox()];
+      const shared = over.x < under.x + under.width && under.x < over.x + over.width
+        && over.y < under.y + under.height && under.y < over.y + over.height;
+      expect(shared, `the name and ${unit} share pixels at ${width}px`).toBe(false);
+      expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
+test.describe('on a phone narrower still', () => {
+  // 375px: the width of every iPhone up to the 8, and of an SE bought this
+  // year. The list on the overview fits an owner's full name at 390 and not
+  // here, which is why this one test moves the wall in.
+  test.use({ viewport: { width: 375, height: 812 } });
+
+  test("an owner's whole name does not push the date off the page", async ({ page }) => {
+    await gotoTab(page, 'tasks');
+    await addTask(page, { name: 'Confirm the count', owner: 'Grandma and Grandpa Example', due: '2030-05-01' });
+    await gotoTab(page, 'overview');
+
+    await expect(page.locator('#upNextList li')).toHaveCount(1);
+    expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+  });
 });
