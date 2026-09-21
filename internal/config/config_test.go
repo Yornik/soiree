@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // vapidPair is a real P-256 pair in the shape the browser and the push library
@@ -597,6 +598,48 @@ func TestBootstrapPasswordHasAFloor(t *testing.T) {
 	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "short")
 	if _, err := Load(); err == nil {
 		t.Fatalf("a %d-character password was accepted", len("short"))
+	}
+}
+
+// A floor is a number and a way of counting, and the way of counting is the
+// half that drifts unnoticed: measured in bytes, four characters clear a floor
+// of twelve that the same four characters miss when counted the way the person
+// choosing them counts.
+func TestPasswordFloorCountsCharactersNotBytes(t *testing.T) {
+	// Four characters in a script that takes three bytes each. The check
+	// keeps the case honest: edited to something else, it would stop telling
+	// the two measures apart and would pass either way.
+	const twelveBytes = "秘密の鍵"
+	if len(twelveBytes) != MinPasswordLen || utf8.RuneCountInString(twelveBytes) >= MinPasswordLen {
+		t.Fatalf("%q is %d bytes and %d characters; the case no longer tells the two apart",
+			twelveBytes, len(twelveBytes), utf8.RuneCountInString(twelveBytes))
+	}
+
+	for _, tc := range []struct {
+		name  string
+		pass  string
+		short bool
+	}{
+		{"twelve ascii characters", "twelve chars", false},
+		{"eleven ascii characters", "eleven char", true},
+		{"four three-byte characters", twelveBytes, true},
+		{"twelve accented characters", strings.Repeat("é", MinPasswordLen), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PasswordTooShort(tc.pass); got != tc.short {
+				t.Errorf("PasswordTooShort(%q) = %v, want %v (%d bytes, %d characters)",
+					tc.pass, got, tc.short, len(tc.pass), utf8.RuneCountInString(tc.pass))
+			}
+		})
+	}
+}
+
+// And the environment is held to the measure, not only to the number.
+func TestBootstrapPasswordFloorCountsCharacters(t *testing.T) {
+	t.Setenv("SOIREE_BOOTSTRAP_ADMIN", "ada@example.test")
+	t.Setenv("SOIREE_BOOTSTRAP_PASSWORD", "秘密の鍵")
+	if _, err := Load(); err == nil {
+		t.Fatal("a four-character password was accepted for being twelve bytes")
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Config is the full runtime configuration.
@@ -237,6 +238,18 @@ type SMTPConfig struct {
 // including the bootstrap one. Kept here so the environment and the HTTP
 // surface cannot drift into disagreeing about what is acceptable.
 const MinPasswordLen = 12
+
+// PasswordTooShort reports whether p is under that floor, counting characters
+// rather than bytes.
+//
+// Sharing the number was not enough to keep two callers agreeing, because the
+// measure drifts as easily as the number does: four three-byte characters are
+// twelve bytes and four characters, so a caller counting bytes accepts a
+// password this one refuses. The rule for counting therefore lives with the
+// number it is applied to, and callers ask rather than measure for themselves.
+func PasswordTooShort(p string) bool {
+	return utf8.RuneCountInString(p) < MinPasswordLen
+}
 
 // DefaultSMTPPort is implicit TLS. It matches mailer.DefaultPort, which is the
 // value that actually decides how the connection is made; cmd/soiree's tests
@@ -638,7 +651,7 @@ func (c *Config) loadAccounts() error {
 		// The same floor the set-password endpoint enforces. An initial
 		// password that the app would refuse from a form has no business being
 		// accepted from the environment.
-		if len([]rune(c.BootstrapPassword)) < MinPasswordLen {
+		if PasswordTooShort(c.BootstrapPassword) {
 			return fmt.Errorf("SOIREE_BOOTSTRAP_PASSWORD must be at least %d characters", MinPasswordLen)
 		}
 	}
