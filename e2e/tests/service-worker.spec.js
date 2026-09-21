@@ -11,6 +11,7 @@
 const vm = require('node:vm');
 const { test, expect, chromium } = require('@playwright/test');
 const { BASE_URL } = require('../servers');
+const { addBudgetLine, gotoTab } = require('./helpers');
 
 test('the service worker the server sends is a script a browser can run', async ({ request }) => {
   const res = await request.get('/sw.js');
@@ -186,6 +187,72 @@ test('a deploy that takes an open planner over says so, once there is something 
     // activated and cannot have taken anything over.
     expect(await page.evaluate(() => caches.open('soiree-the next build')
       .then((c) => c.match('/')).then((hit) => !!hit))).toBe(true);
+  } finally {
+    await context.close();
+  }
+});
+
+/*
+ * Newer code is not the worst thing that can be true of a page.
+ *
+ * The status line is one slot, and what holds it are the conditions nobody
+ * can put right from this screen. A browser that keeps nothing is the
+ * plainest of them: with no database behind the page, the write it refused
+ * was the planner, and the evening's work lasts until the tab closes and no
+ * longer. A deploy landing on top of that must not take the warning down,
+ * and least of all replace it with an instruction to reload, which is the one
+ * thing in that state that throws the work away.
+ */
+test('a deploy does not take down a warning that is still true', async ({ browser, request }) => {
+  const arriving = (await (await request.get('/sw.js')).text())
+    .replace(/var VERSION = "[^"]*"/, 'var VERSION = "the build after that"');
+  const context = await browser.newContext({ baseURL: BASE_URL, serviceWorkers: 'allow' });
+  try {
+    const page = await context.newPage();
+    // A browser that refuses site data, as persistence.spec.js does it, with
+    // a switch on it: the warning has to be able to stop being true at the end.
+    await page.addInitScript(() => {
+      const setItem = Storage.prototype.setItem;
+      window.__keepsNothing = true;
+      Storage.prototype.setItem = function (key, value) {
+        if (key === 'soiree.v1' && window.__keepsNothing) {
+          throw new DOMException('site data is blocked', 'SecurityError');
+        }
+        return setItem.call(this, key, value);
+      };
+    });
+    await page.goto('/');
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15000 });
+    // Opened again, so that this page starts its life under a worker: the
+    // first worker a page ever gets is not a deploy.
+    await page.reload();
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15000 });
+    // The origin's 404 has landed, so the page has made up its mind that the
+    // refused write was the planner rather than a cache in front of one.
+    await page.waitForFunction(() => !!window.soiree && window.soiree.apiAvailable === false);
+
+    await gotoTab(page, 'budget');
+    await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1 });
+    await expect(page.locator('#dataMsg')).toHaveText(/not keeping your changes/);
+
+    await context.route(/\/sw\.js\?deploy=3$/, (route) => route.fulfill({ contentType: 'text/javascript', body: arriving }));
+    await page.evaluate(() => navigator.serviceWorker.register('/sw.js?deploy=3').then(() => {}));
+    await page.waitForFunction(
+      () => !!navigator.serviceWorker.controller && /deploy=3/.test(navigator.serviceWorker.controller.scriptURL),
+      null,
+      { timeout: 15000 },
+    );
+
+    // The deploy has landed under the page, and the warning is still the
+    // warning.
+    await expect(page.locator('#dataMsg')).toHaveText(/not keeping your changes/);
+
+    // The news was not thrown away with it, either: it is waiting for the
+    // slot. Nothing is refused from here on, so the next write is the moment
+    // the warning stops being true.
+    await page.evaluate(() => { window.__keepsNothing = false; });
+    await addBudgetLine(page, { item: 'Chairs', unit: 4, qty: 80 });
+    await expect(page.locator('#dataMsg')).toHaveText(/A newer version of the planner is ready/);
   } finally {
     await context.close();
   }

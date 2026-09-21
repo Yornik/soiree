@@ -2878,7 +2878,13 @@
   function noticeUpdate() {
     if (updateReady) return;
     updateReady = true;
-    setSticky(t('d.updated'));
+    // Never over an occupied slot. Newer code is the mildest of the things
+    // that hold this line, and the only one that can wait: a browser keeping
+    // nothing, a session that has ended, writes that are not arriving. Told
+    // to reload in the middle of the first of those, a person loses the
+    // evening's work by doing as they were asked. The latch is what matters
+    // here; setSticky() puts this in as soon as the slot falls empty.
+    if (!stickyMsg) setSticky(t('d.updated'));
   }
 
   function onHello(raw) {
@@ -6076,10 +6082,12 @@
 
   function setSticky(msg) {
     msg = msg || '';
-    // Newer code on the server is the one condition here that nothing on this
-    // page can put right, and it outlives the others: the write loop clears
-    // this slot on every pass that gets through. So it is restored here rather
-    // than restated at each of those places.
+    // Newer code on the server outlives everything else that lands here: the
+    // write loop clears this slot on every pass that gets through, and nothing
+    // on this page can put it right. So it is restored here rather than
+    // restated at each of the places that empty the slot. It also waits its
+    // turn: whatever is in the slot was put there by a condition that is still
+    // true, and this goes in only once that condition lifts.
     if (!msg && updateReady) msg = t('d.updated');
     if (stickyMsg === msg) return;
     stickyMsg = msg;
