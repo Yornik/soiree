@@ -13,7 +13,7 @@
  * reachable, how big a target is, and whether the arithmetic still lines up.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, addTask, budgetRow, gotoTab, money, openPlanner } = require('./helpers');
+const { addBudgetLine, addSponsor, addTask, budgetRow, gotoTab, money, openPlanner, tagLine } = require('./helpers');
 
 /** How far the document itself can be scrolled sideways, in CSS pixels. */
 function documentOverflow(page) {
@@ -267,4 +267,47 @@ test('an empty task list does not pan the page sideways either', async ({ page }
   await gotoTab(page, 'tasks');
   await expect(page.locator('#tasksBody td.empty-cell')).toBeVisible();
   expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+/*
+ * Long words and large figures. A callsign and a name are whatever somebody
+ * types, and the lists that are laid out from them are grids: a column told
+ * to take the space left over will not shrink below the longest word in it,
+ * so one unbroken word or one figure with enough digits used to make the
+ * whole page scroll sideways.
+ */
+test('a callsign too long to break does not widen the page', async ({ page }) => {
+  const code = 'C'.repeat(40);
+  await addSponsor(page, { code, name: 'Example Family' });
+  await tagLine(budgetRow(page, 0), [code]);
+
+  await expect(page.locator('#splitList li').first()).toContainText(code);
+  expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test('a large figure beside a sponsor keeps their remove button on the screen', async ({ page }) => {
+  await addSponsor(page, { code: 'AB', name: 'Example Family' });
+  await budgetRow(page, 0).unit.fill('125000000');
+  await tagLine(budgetRow(page, 0), ['AB']);
+
+  await expect(page.locator('#sponsorGrid .sp-amt')).toContainText('125,000,000');
+  const remove = await page.locator('#sponsorGrid .sponsor-row .del-btn').boundingBox();
+  expect(remove.x + remove.width).toBeLessThanOrEqual(page.viewportSize().width);
+  expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+});
+
+test.describe('on a phone narrower still', () => {
+  // 375px: the width of every iPhone up to the 8, and of an SE bought this
+  // year. The list on the overview fits an owner's full name at 390 and not
+  // here, which is why this one test moves the wall in.
+  test.use({ viewport: { width: 375, height: 812 } });
+
+  test("an owner's whole name does not push the date off the page", async ({ page }) => {
+    await gotoTab(page, 'tasks');
+    await addTask(page, { name: 'Confirm the count', owner: 'Grandma and Grandpa Example', due: '2030-05-01' });
+    await gotoTab(page, 'overview');
+
+    await expect(page.locator('#upNextList li')).toHaveCount(1);
+    expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
+  });
 });

@@ -641,13 +641,18 @@ body.is-empty .when-data { display: none; }
 .upnext-list, .split-list { list-style: none; margin: 0; padding: 0; }
 .upnext-list li, .split-list li {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  /* minmax(0,…) as the reckoning has it, and for the same reason: what names
+     the row is a task's name or a sponsor's callsign, which is whatever
+     somebody typed, and a bare 1fr will not shrink below one long word of
+     it. On a phone that word took the whole page sideways with it. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: baseline;
   column-gap: 16px;
   padding: 10px 0;
   border-bottom: 1px solid var(--rule);
   font-size: 14px;
 }
+.upnext-list li > :first-child, .split-list li > :first-child { min-width: 0; overflow-wrap: anywhere; }
 .upnext-list li:last-child, .split-list li:last-child { border-bottom: 0; }
 
 /* Who is covering what, as lengths. The list is held to a readable width - a
@@ -684,6 +689,22 @@ body.is-empty .when-data { display: none; }
   margin-bottom: 10px;
 }
 .flag textarea { border-color: var(--rule); resize: vertical; }
+
+/* --- A name in any script ---
+   Nothing on this page said which way a line of text runs, so every field and
+   every cell that echoes one ran left to right whatever was typed into it: an
+   Arabic or Hebrew name sat against the wrong edge of its field, and the
+   punctuation closing it was drawn at the end its reader begins from.
+
+   plaintext is dir="auto" said in CSS. Each field and each cell takes its
+   direction from the first letter somebody typed into it, so a name in Latin
+   letters is laid out exactly as before and nothing has to be declared twice.
+   It belongs on what a person writes in their own words and nowhere near a
+   figure or a date, which are read the same way in every script. */
+input[type="text"], textarea,
+.upnext-list li > :first-child, .upnext-list .who,
+.split-list li > :first-child,
+.runup-pop .what, .runup-pop .who { unicode-bidi: plaintext; }
 
 /* --- Fields and controls -------------------------------------------------- */
 .settings-row {
@@ -871,7 +892,11 @@ table.budget thead th:first-child { background: var(--tint); z-index: 3; }
 .sponsor-grid:empty { border-top: 0; }
 .sponsor-row {
   display: grid;
-  grid-template-columns: minmax(90px, 150px) minmax(110px, 1fr) auto auto;
+  /* The name gives way rather than the figure beside it: a floor of 110px
+     under it left about 60px for the amount on a phone, and a sponsor
+     covering a seven-figure line pushed their own remove button off the
+     screen. */
+  grid-template-columns: minmax(90px, 150px) minmax(0, 1fr) auto auto;
   align-items: center;
   column-gap: 12px;
   padding: 5px 0;
@@ -1117,6 +1142,10 @@ body.is-archived .when-data { display: block; }
   .reckoning.ledger .fig-num { font-size: 22px; }
   .start-steps li { grid-template-columns: auto 1fr; row-gap: 4px; }
   .start-steps button { grid-column: 2; grid-row: auto; margin-top: 8px; }
+  /* An owner's whole name in a column held to one line is the other way this
+     page ends up wider than the phone. The date beside it has to stay on one
+     line; a name does not. */
+  .upnext-list .who { white-space: normal; }
 
   /* --- The budget grid, unwound ---
      Nine columns and a drag handle are a desk interaction. Below this width
