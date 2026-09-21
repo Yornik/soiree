@@ -343,3 +343,41 @@ func TestAFileIsAnnouncedWhenItIsConfirmedAndWhenItGoes(t *testing.T) {
 		t.Fatalf("second notice = %+v, want the file's delete", got)
 	}
 }
+
+// TestAnErasureAnnouncesTheRowsItRewrote. Erasure is the one write here that
+// records nothing, because the entry would hold the very value being struck
+// out. Announcing is separate from recording for exactly that reason: without
+// a notice, a second browser goes on showing the erased name until somebody
+// reloads it, and every edit it sends meanwhile comes back as a conflict it
+// cannot explain.
+func TestAnErasureAnnouncesTheRowsItRewrote(t *testing.T) {
+	s := newNotifyStore(t)
+	ctx := t.Context()
+
+	task, err := s.CreateTask(ctx, Task{Name: "Confirm the caterer", Owner: "Ada"}, nil)
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	// Listening only from here, so what arrives is the erasure's own doing.
+	notices := listenTo(t, s)
+
+	if _, err := s.EraseSubject(ctx, ErasureRequest{Subject: SubjectRef{Aliases: []string{"Ada"}}}); err != nil {
+		t.Fatalf("erase: %v", err)
+	}
+
+	after, err := s.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("task: %v", err)
+	}
+	got := nextNotice(t, notices)
+	if got.Entity != EntityTasks || got.ID == nil || *got.ID != task.ID {
+		t.Errorf("announced %+v, want the erased task %v", got, task.ID)
+	}
+	if got.Action != ChangeUpdate {
+		t.Errorf("action = %q, want %q", got.Action, ChangeUpdate)
+	}
+	if got.Revision == nil || *got.Revision != after.Revision {
+		t.Errorf("revision = %v, want the %d the row now carries", got.Revision, after.Revision)
+	}
+}

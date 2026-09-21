@@ -34,24 +34,27 @@ import (
 // a join table, so removing a person never has to remove a line — and this
 // file never does. See EraseSubject.
 //
-// The third awkward part is age, and it is the reason nothing calls any of
-// this yet. It was written against the schema as it stood at migration 0005,
-// and every table added since that holds personal data is invisible to it:
-// `change_log` (0007), which records what each change altered, field by field,
-// and so keeps names, owner cells, prose and an account's address as they
-// stood before somebody corrected them; `sessions` and `password_tokens`
-// (0008); `push_subscriptions` (0010), one row per browser that accepted
-// reminders; `passkey_credentials` (0011), each with the label its device was
-// given; and `attachments` (0012), which records what a person's device
-// called a file. So an export assembled here is short by all of them and says
-// so, an erasure done here leaves the name standing in the history, and a
-// purge leaves that history behind in full. Reading those tables is ordinary
-// work in collectSubject; erasing what `change_log` holds is not, because
-// that table refuses every UPDATE and DELETE by trigger
-// (migrations/0007_audit.sql). Somebody has to decide, in a migration, that
-// an erasure outranks the evidence, and until that decision is made, wiring a
-// route to EraseSubject ships an erasure that does not erase. Roadmap item 10
-// in docs/architecture.md carries the same list.
+// The third awkward part is age, and it is why nothing calls any of this yet.
+// It was written against the schema as it stood at migration 0005, and every
+// table added since that holds personal data was invisible to it.
+//
+// `change_log` (0007) no longer is. It records what each change altered, field
+// by field, so it keeps names, owner cells, prose and an account's address as
+// they stood before somebody corrected them, and both erasure and the purge
+// reach it now. That took a migration rather than a statement, because the
+// table refuses every UPDATE and DELETE by trigger: migration 0013 is the
+// decision that an erasure outranks the evidence, and it is deliberately
+// narrow. See redactLog.
+//
+// The rest is still invisible: `sessions` and `password_tokens` (0008);
+// `push_subscriptions` (0010), one row per browser that accepted reminders;
+// `passkey_credentials` (0011), each with the label its device was given; and
+// `attachments` (0012), which records what a person's device called a file. So
+// an export assembled here is short by all of them and says so, an anonymised
+// account keeps its sessions, passkeys and subscriptions, and a file keeps the
+// name it was uploaded under. Reading those tables is ordinary work in
+// collectSubject, with no decision left to make first. Roadmap item 10 in
+// docs/architecture.md carries the same list.
 
 // Tombstone replaces a name in a field whose entire content was that name, and
 // stands in for a name struck out of prose. It is deliberately not the empty
@@ -309,6 +312,10 @@ type ErasureResult struct {
 	TaskOwnersRedacted int `json:"taskOwnersRedacted"`
 	VendorsRedacted    int `json:"vendorsRedacted"`
 	ProseRedacted      int `json:"proseRedacted"`
+	// HistoryRedacted counts the change_log entries this call struck the
+	// person out of. It is reported separately from the rows because it is the
+	// part that took a migration to make possible at all.
+	HistoryRedacted int `json:"historyRedacted"`
 
 	// BudgetItemsRetained counts the lines that named this person and were
 	// kept, amounts untouched. It is the number that says the books still add
@@ -346,22 +353,26 @@ type ErasureResult struct {
 // deleted either: a task is shared work that happens to name an owner, not the
 // owner's property.
 //
-// # What it does not reach
+// # What it reaches, and what it does not
 //
-// The statements below rewrite the rows, and the change log keeps what they
-// rewrote: the name, the owner cell, the prose and the address on the account
-// all survive in `change_log` and on the Activity screen an admin reads, which
-// its append-only trigger is there to guarantee. File names in `attachments`
-// are not touched either. In anonymise mode the account's `sessions`,
-// `password_tokens`, `passkey_credentials` and `push_subscriptions` rows stay
-// behind; none of them can be used to sign in or be sent anything, because
-// every one of those paths requires an active account and this one is now
-// disabled, but they are retained personal data all the same. EraseDelete
-// takes them with the account, by cascade. And none of the statements below
-// announces itself: only insertChange issues the notification, so another
-// browser shows the old name until it reloads, and its next edit to the row is
-// refused with a 409 because every statement that rewrites a row bumps the
-// revision.
+// The statements below rewrite the rows, and redactLog strikes the same
+// values out of what the change log recorded about them, which is what stops
+// the name standing in an append-only table and on the Activity screen an
+// admin reads. That is the whole of migration 0013's purpose.
+//
+// File names in `attachments` are not touched. In anonymise mode the account's
+// `sessions`, `password_tokens`, `passkey_credentials` and
+// `push_subscriptions` rows stay behind; none of them can be used to sign in
+// or be sent anything, because every one of those paths requires an active
+// account and this one is now disabled, but they are retained personal data
+// all the same. EraseDelete takes them with the account, by cascade.
+//
+// Nothing here records what it changed, and that is not an omission: the entry
+// would hold the value being struck out, in the table this function has just
+// had to ask a trigger's permission to clean. What it changed is reported to
+// the caller in ErasureResult instead. The rows it rewrites are announced
+// though, so another browser re-reads them instead of showing the old name
+// until somebody reloads it. See announceErasure.
 //
 // # No revision check
 //
@@ -412,6 +423,15 @@ func (s *Store) EraseSubject(ctx context.Context, req ErasureRequest) (ErasureRe
 					return ErasureResult{}, fmt.Errorf("sponsors: %w", err)
 				}
 				res.SponsorDeleted = tag.RowsAffected() > 0
+				if res.SponsorDeleted {
+					// The row is gone rather than rewritten, so the notice is
+					// a delete and carries no revision to compare.
+					if err := notifyChange(ctx, tx, ChangeNotice{
+						Entity: EntitySponsors, ID: &sub.sponsor.ID, Action: ChangeDelete,
+					}); err != nil {
+						return ErasureResult{}, err
+					}
+				}
 			default:
 				// The code keeps an id fragment so two erased contributors
 				// remain distinguishable in the grid — they are covering
@@ -420,15 +440,19 @@ func (s *Store) EraseSubject(ctx context.Context, req ErasureRequest) (ErasureRe
 				// so it identifies nobody and is the same value every time,
 				// which is what makes the guard below idempotent.
 				code := erasedSponsorCode(sub.sponsor.ID)
-				tag, err := tx.Exec(ctx,
+				rows, err := queryAll[redactedRow](ctx, tx, "sponsors",
 					`UPDATE sponsors
 					    SET code = $2, name = '', revision = revision + 1, updated_at = now()
-					  WHERE id = $1 AND (code <> $2 OR name <> '')`,
+					  WHERE id = $1 AND (code <> $2 OR name <> '')
+					  RETURNING id, revision`,
 					sub.sponsor.ID, code)
 				if err != nil {
-					return ErasureResult{}, fmt.Errorf("sponsors: %w", err)
+					return ErasureResult{}, err
 				}
-				res.SponsorAnonymised = tag.RowsAffected() > 0
+				res.SponsorAnonymised = len(rows) > 0
+				if err := announceErasure(ctx, tx, EntitySponsors, rows); err != nil {
+					return ErasureResult{}, err
+				}
 			}
 		}
 
@@ -466,6 +490,9 @@ func (s *Store) EraseSubject(ctx context.Context, req ErasureRequest) (ErasureRe
 				}
 				res.AccountAnonymised = tag.RowsAffected() > 0
 			}
+			// Neither branch announces itself, and not by oversight: `users`
+			// is in unannouncedEntities, because the stream is as open as the
+			// rest of /api/v1 while the accounts API is admin-only.
 		}
 
 		if len(sub.folded) > 0 {
@@ -499,6 +526,15 @@ func (s *Store) EraseSubject(ctx context.Context, req ErasureRequest) (ErasureRe
 			}
 		}
 
+		// Last, because it is the copy rather than the original: the log holds
+		// each of the values above as it stood when it was written, and until
+		// migration 0013 no statement could touch them at all.
+		n, err := redactLog(ctx, tx, logSubjectEntities, sub.logMatcher(req.KeepProse))
+		if err != nil {
+			return ErasureResult{}, err
+		}
+		res.HistoryRedacted = n
+
 		return res, nil
 	})
 }
@@ -529,6 +565,9 @@ type PurgeResult struct {
 	Notes            int64 `json:"notes"`
 	UIPrefs          int64 `json:"uiPrefs"`
 	Users            int64 `json:"users"`
+	// ChangeLogRedacted counts the history entries the purge struck the plan
+	// out of. The entries are not deleted, which PurgeEvent explains.
+	ChangeLogRedacted int64 `json:"changeLogRedacted"`
 }
 
 // PurgeEvent empties the event's data wholesale — the retention decision that
@@ -545,13 +584,21 @@ type PurgeResult struct {
 // the opposite of the SET NULL semantics this schema chose. At the scale this
 // application runs at, DELETE costs nothing and behaves as written.
 //
-// What it does not empty is `change_log`, whose trigger refuses every DELETE.
-// The history of a purged plan is a full copy of that plan, names included, so
-// a deployment purging for retention has emptied the tables and kept the
-// record of them; removing it is a migration and a decision, not a step here.
+// `change_log` is struck out rather than emptied. The history of a purged plan
+// is a full copy of that plan, names included, so leaving it alone would empty
+// the tables and keep the record of them. Deleting it is not the answer
+// either, and not only because the trigger refuses every DELETE: `GET /plan`
+// asks this table whether the plan has ever been written to, so a purge that
+// emptied it would leave the plan reading as one nobody had filled in yet, and
+// the first browser still holding a copy would put every purged row back. So
+// the entries stay and their values go, which is what migration 0013 permits.
+//
 // Attachments do go, by cascade from the budget line or task they hang on, and
 // that cascade queues each object key in `attachment_garbage` for the sweep
-// that deletes it from the bucket. PurgeResult does not count them.
+// that deletes it from the bucket. PurgeResult does not count them, and what a
+// file was called stays in its `attachments` entries as a stage of the evening
+// stays in its `phases` ones: the redaction covers the fields that can name a
+// person, which is where the two lists in redactLog come from.
 //
 // The `settings` singleton is reset rather than deleted: its CHECK (id) allows
 // exactly one row and Settings() documents a missing one as a tampered schema,
@@ -593,6 +640,24 @@ func (s *Store) PurgeEvent(ctx context.Context, opts PurgeOptions) (PurgeResult,
 			}
 			*step.into = tag.RowsAffected()
 		}
+
+		// The history of what was just emptied, struck out rather than
+		// deleted. Which entries go depends on what this purge took: the plan
+		// always, the accounts only when they went with it, so an account that
+		// survives keeps the record of its own address changing.
+		entities := logPlanEntities
+		if opts.IncludeAccounts {
+			entities = logSubjectEntities
+		}
+		redacted, err := redactLog(ctx, tx, entities, func(string, *uuid.UUID, string, string) bool {
+			// No subject: a purge is a decision about the whole plan, so every
+			// recorded name, vendor, owner cell and sentence goes.
+			return true
+		})
+		if err != nil {
+			return PurgeResult{}, err
+		}
+		res.ChangeLogRedacted = int64(redacted)
 
 		// The revision is bumped rather than reset, so a browser still holding
 		// the pre-purge settings gets a conflict instead of writing the old
@@ -738,10 +803,12 @@ type subjectRows struct {
 // is what makes it the place to add a table holding personal data: add it here
 // and both operations pick it up. It is also where the gap listed at the top
 // of this file is, because the tables added since migration 0005 were never
-// added here. `change_log` is the one that is not a simple addition: reading
-// it belongs here, but striking a name out of it is refused by its own
-// trigger, so the erasure half waits on a migration and a decision rather than
-// on this function.
+// added here. `change_log` is the exception in both directions: an erasure
+// reaches it, through redactLog and the trigger exception migration 0013 had
+// to make for it, and an export still does not. Everything it holds about the
+// subject is a value one of these rows carried earlier, so adding it is a
+// decision about how much of a shared row's history belongs in one person's
+// export rather than a matter of reading another table.
 func collectSubject(ctx context.Context, q querier, sub subject) (subjectRows, error) {
 	var out subjectRows
 
@@ -953,15 +1020,19 @@ var proseColumns = []struct{ table, column string }{
 // record of who last worked on the row to make room for a name this package
 // does not have.
 func redactWholeField(ctx context.Context, tx pgx.Tx, table, column string, folded []string) (int, error) {
-	tag, err := tx.Exec(ctx,
+	rows, err := queryAll[redactedRow](ctx, tx, table,
 		`UPDATE `+table+`
 		    SET `+column+` = $2, revision = revision + 1, updated_at = now()
-		  WHERE lower(btrim(`+column+`)) = ANY($1::text[]) AND `+column+` <> $2`,
+		  WHERE lower(btrim(`+column+`)) = ANY($1::text[]) AND `+column+` <> $2
+		  RETURNING id, revision`,
 		folded, Tombstone)
 	if err != nil {
-		return 0, fmt.Errorf("%s: %w", table, err)
+		return 0, err
 	}
-	return int(tag.RowsAffected()), nil
+	if err := announceErasure(ctx, tx, table, rows); err != nil {
+		return 0, err
+	}
+	return len(rows), nil
 }
 
 // redactProse strikes the name out of one free-text column.
@@ -989,12 +1060,17 @@ func redactProse(ctx context.Context, tx pgx.Tx, col struct{ table, column strin
 		if redacted == r.Text {
 			continue
 		}
-		if _, err := tx.Exec(ctx,
+		written, err := queryAll[redactedRow](ctx, tx, col.table,
 			`UPDATE `+col.table+`
 			    SET `+col.column+` = $2, revision = revision + 1, updated_at = now()
-			  WHERE id = $1`,
-			r.ID, redacted); err != nil {
-			return 0, fmt.Errorf("%s: %w", col.table, err)
+			  WHERE id = $1
+			  RETURNING id, revision`,
+			r.ID, redacted)
+		if err != nil {
+			return 0, err
+		}
+		if err := announceErasure(ctx, tx, col.table, written); err != nil {
+			return 0, err
 		}
 		n++
 	}
@@ -1012,4 +1088,205 @@ func erasedSponsorCode(id uuid.UUID) string {
 // and undeliverable (RFC 2606 requires that of `.invalid`).
 func erasedEmail(id uuid.UUID) string {
 	return "erased-" + id.String() + "@" + erasedEmailDomain
+}
+
+// --- the change log ----------------------------------------------------------
+
+// redactedRow is a row an erasure rewrote: what a change notice needs to name
+// it, and nothing else.
+type redactedRow struct {
+	ID       uuid.UUID `db:"id"`
+	Revision int64     `db:"revision"`
+}
+
+// announceErasure tells open browsers to re-read the rows an erasure changed.
+//
+// It is the one place in this package that announces a change without also
+// recording one, and notify.go explains why the two are otherwise a single
+// act. Erasure cannot record: the entry would hold the very value being struck
+// out, in the table this file has to ask a trigger's permission to clean. So
+// the two halves come apart here, deliberately and in one direction only. The
+// alternative is what the erasure used to do, which is nothing: the row's
+// revision moves, no notice goes out, and a second browser goes on showing the
+// erased name until somebody reloads it while every edit it sends comes back
+// as a conflict nobody can explain.
+func announceErasure(ctx context.Context, tx pgx.Tx, entity string, rows []redactedRow) error {
+	for _, r := range rows {
+		if err := notifyChange(ctx, tx, ChangeNotice{
+			Entity:   entity,
+			ID:       &r.ID,
+			Action:   ChangeUpdate,
+			Revision: &r.Revision,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// tombstoneValue is the Tombstone as it stands in a recorded diff. The trigger
+// added by migration 0013 compares against this exact literal, so the Go
+// constant and the SQL one are the same string in two languages.
+var tombstoneValue = json.RawMessage(`"` + Tombstone + `"`)
+
+// logKeyedFields are the fields whose recorded value is the person's because
+// of the row the entry is about rather than because of what it says. Every
+// name this sponsor ever had is hers, the misspelt one somebody corrected
+// included, and matching on the current spelling would leave the others.
+var logKeyedFields = map[string][]string{
+	EntitySponsors: {"code", "name"},
+	EntityUsers:    {"email"},
+}
+
+// logMatchedFields are the free-text fields, taken from proseColumns so that
+// the history is struck out exactly where the live column is. A field the
+// erasure leaves standing on the row is not one it may destroy the record of:
+// `phases.name` is a stage of the evening and `attachments.name` is a file, so
+// neither is reached here for the same reason neither is reached there.
+var logMatchedFields = func() map[string][]string {
+	out := map[string][]string{}
+	for _, col := range proseColumns {
+		out[col.table] = append(out[col.table], col.column)
+	}
+	return out
+}()
+
+// logWholeFields are the two columns matched exactly rather than as prose, and
+// so struck out whether or not KeepProse was asked for: a cell whose entire
+// content is somebody's name is not a sentence mentioning them.
+var logWholeFields = map[string]string{
+	EntityTasks:       "owner",
+	EntityBudgetItems: "vendor",
+}
+
+// logPlanEntities are the entities whose recorded values belong to the plan
+// rather than to an account, and logSubjectEntities adds the account. A purge
+// reads the first, or the second when it is taking the accounts with it; an
+// erasure always reads the second.
+var (
+	logPlanEntities = []string{
+		EntityBudgetItems, EntityNotes, EntityProgrammeEntries, EntitySponsors, EntityTasks,
+	}
+	logSubjectEntities = slices.Concat(logPlanEntities, []string{EntityUsers})
+)
+
+// logMatch decides whether one recorded value is to be struck out. It is given
+// the row the entry is about as well as the value, because the keyed fields
+// are answered by the row and not by the text.
+type logMatch func(entity string, id *uuid.UUID, field, value string) bool
+
+// logMatcher is the erasure's answer to that question, and it gives the same
+// one the live columns got: the keyed fields of this person's own sponsor row
+// and account, the two whole-field cells that hold nothing but a name, and,
+// unless the caller asked to keep prose, every sentence that mentions her.
+func (sub subject) logMatcher(keepProse bool) logMatch {
+	return func(entity string, id *uuid.UUID, field, value string) bool {
+		switch entity {
+		case EntitySponsors:
+			return sub.sponsor != nil && id != nil && *id == sub.sponsor.ID
+		case EntityUsers:
+			return sub.user != nil && id != nil && *id == sub.user.ID
+		}
+		if logWholeFields[entity] == field && sub.matchesWholeField(value) {
+			return true
+		}
+		return !keepProse && sub.matchesProse(value)
+	}
+}
+
+// redactLog strikes values out of the change history.
+//
+// The log records what each write altered, field by field, so it holds every
+// value a row ever carried and an erasure that stops at the rows has moved the
+// name rather than removed it. Migration 0013 is what makes this possible at
+// all, and it allows exactly this shape: `changes` alone may move, the same
+// keys have to be there afterwards, and a recorded value may only become the
+// tombstone. So a value goes whole rather than being edited the way redactProse
+// edits a row. A note that read "Ada is chasing the venue" leaves "(erased)"
+// in the history where the row keeps "(erased) is chasing the venue", because
+// a trigger that accepted a rewritten sentence could not tell a redaction from
+// an edit.
+//
+// Read whole and filtered in Go, as collectSubject is and for the same reason:
+// the match has to be the same engine, with the same word boundaries, that
+// decided the row was the subject's in the first place.
+func redactLog(ctx context.Context, tx pgx.Tx, entities []string, match logMatch) (int, error) {
+	type logRow struct {
+		ID       int64                  `db:"id"`
+		Entity   string                 `db:"entity"`
+		EntityID *uuid.UUID             `db:"entity_id"`
+		Changes  map[string]FieldChange `db:"changes"`
+	}
+
+	rows, err := queryAll[logRow](ctx, tx, "change_log",
+		`SELECT id, entity, entity_id, changes
+		   FROM change_log
+		  WHERE entity = ANY($1)
+		  ORDER BY id`, entities)
+	if err != nil {
+		return 0, err
+	}
+
+	n := 0
+	for _, r := range rows {
+		rewritten := false
+		for _, field := range slices.Concat(logKeyedFields[r.Entity], logMatchedFields[r.Entity]) {
+			recorded, ok := r.Changes[field]
+			if !ok {
+				continue
+			}
+			// Both sides, because a value somebody later corrected writes the
+			// person down twice: once as what it was and once as what it
+			// became.
+			old, wasOld := redactRecorded(recorded.Old, r.Entity, r.EntityID, field, match)
+			fresh, wasNew := redactRecorded(recorded.New, r.Entity, r.EntityID, field, match)
+			if !wasOld && !wasNew {
+				continue
+			}
+			r.Changes[field] = FieldChange{Old: old, New: fresh}
+			rewritten = true
+		}
+		// Nothing matched, so nothing is written: an UPDATE that changed no
+		// value would still be a valid redaction as far as the trigger is
+		// concerned, and counting it would make a second erasure report work
+		// it did not do.
+		if !rewritten {
+			continue
+		}
+
+		payload, err := json.Marshal(r.Changes)
+		if err != nil {
+			return 0, fmt.Errorf("change_log: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE change_log SET changes = $2::jsonb WHERE id = $1`, r.ID, payload); err != nil {
+			return 0, fmt.Errorf("change_log: %w", err)
+		}
+		n++
+	}
+	return n, nil
+}
+
+// redactRecorded replaces one recorded value with the tombstone when it is the
+// subject's, and reports whether it did.
+//
+// Only a JSON string is a candidate, tested on the raw bytes rather than by
+// decoding: a side that recorded nothing is null, a list of co-sponsors is an
+// array, the money columns are numbers, and `null` decodes into a string
+// without complaining. Leaving the rest alone is what keeps an amount out of
+// reach of a matcher looking for a name, and it is also the rule the trigger
+// enforces from its side, where a null that became the tombstone would turn a
+// create entry into something that never happened.
+func redactRecorded(raw json.RawMessage, entity string, id *uuid.UUID, field string, match logMatch) (json.RawMessage, bool) {
+	if len(raw) == 0 || raw[0] != '"' {
+		return raw, false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return raw, false
+	}
+	if value == Tombstone || !match(entity, id, field, value) {
+		return raw, false
+	}
+	return tombstoneValue, true
 }

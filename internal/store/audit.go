@@ -53,9 +53,11 @@ import (
 //
 // And one whole path records nothing: erasure. It rewrites or removes every
 // row that names somebody, and an entry for that would copy the address, the
-// vendor or the sentence being erased into a table erasure cannot reach
-// afterwards, which is the one thing it must not leave behind. What it changed
-// is reported to its caller in ErasureResult instead.
+// vendor or the sentence being erased straight back into this table, which is
+// the one thing it must not leave behind. What it changed is reported to its
+// caller in ErasureResult instead. Since migration 0013 it also reaches the
+// entries already here and strikes those values out of them, which is the only
+// edit this table has ever taken beyond blanking an actor.
 
 // Entity names, matching the table each change happened to. They are what
 // ChangeHistory is asked for, so they live as constants rather than as string
@@ -271,9 +273,9 @@ var skippedFields = map[string]bool{
 // The address is deliberately not on this list. It is the login identity, so
 // "somebody changed Ada's email to their own" is an account takeover, and a
 // history that recorded it as "a field changed" would not tell it apart from
-// fixing a typo. Erasing it when an account is deleted (roadmap item 10) is a
-// later migration's job: the append-only trigger already permits one mutation
-// by name, and that is where a second one would go.
+// fixing a typo. Erasing it afterwards is what migration 0013 is for: the
+// second mutation the append-only trigger permits by name is a redaction, and
+// EraseSubject uses it to strike the address out of every entry that holds it.
 var redactedFields = map[string]bool{
 	"password_hash": true,
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -795,7 +796,8 @@ func TestErasureIsIdempotent(t *testing.T) {
 			// erasure that rewrote rows would spray conflicts at every open
 			// browser for no reason.
 			if res.SponsorAnonymised || res.SponsorDeleted || res.AccountAnonymised || res.AccountDeleted ||
-				res.UIPrefsDeleted || res.TaskOwnersRedacted != 0 || res.VendorsRedacted != 0 || res.ProseRedacted != 0 {
+				res.UIPrefsDeleted || res.TaskOwnersRedacted != 0 || res.VendorsRedacted != 0 ||
+				res.ProseRedacted != 0 || res.HistoryRedacted != 0 {
 				t.Errorf("second erase changed something: %+v", res)
 			}
 
@@ -939,5 +941,179 @@ func TestPurgeKeepsAccountsUnlessAsked(t *testing.T) {
 	// The preferences belong to the account, so they stay with it.
 	if _, err := s.UIPrefs(ctx, p.adaUser.ID); err != nil {
 		t.Errorf("ui prefs: %v", err)
+	}
+}
+
+// --- the change log ----------------------------------------------------------
+
+// logHolds reports whether any entry in the change log still spells a word.
+//
+// Read as raw text and matched whole-word, case-sensitively, for the same
+// reason the erasure itself matches that way: "ada@example.test" contains
+// "ada" and so does "Nevada", and neither of them is the word being looked
+// for.
+func logHolds(t *testing.T, ctx context.Context, s *store.Store, word string) bool {
+	t.Helper()
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`)
+
+	rows, err := s.Pool().Query(ctx, `SELECT changes::text FROM change_log ORDER BY id`)
+	if err != nil {
+		t.Fatalf("read change log: %v", err)
+	}
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var changes string
+		if err := rows.Scan(&changes); err != nil {
+			t.Fatalf("scan change log: %v", err)
+		}
+		if re.MatchString(changes) {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read change log: %v", err)
+	}
+	return found
+}
+
+// TestErasureStrikesTheNameOutOfTheChangeLog. The log records what every write
+// altered, field by field, so it holds each value a row ever carried: the
+// name, the address, the owner cell and the sentence. An erasure that rewrites
+// the rows and leaves the log alone has moved the person's name rather than
+// removed it, into the one table nothing else may edit.
+func TestErasureStrikesTheNameOutOfTheChangeLog(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+	p := plant(t, s)
+
+	// The evidence first, so what follows is measured against a log that
+	// demonstrably held her.
+	for _, word := range []string{"Ada", "ada@example.test", "Rose"} {
+		if !logHolds(t, ctx, s, word) {
+			t.Fatalf("the change log does not hold %q to begin with", word)
+		}
+	}
+
+	res, err := s.EraseSubject(ctx, store.ErasureRequest{Subject: p.adaRef()})
+	if err != nil {
+		t.Fatalf("erase: %v", err)
+	}
+	if res.HistoryRedacted == 0 {
+		t.Errorf("result = %+v, want the entries it struck her out of", res)
+	}
+
+	for _, word := range []string{"Ada", "ada@example.test", "Rose"} {
+		if logHolds(t, ctx, s, word) {
+			t.Errorf("the change log still holds %q", word)
+		}
+	}
+
+	// And what must survive it. The amounts are why erasure is allowed nowhere
+	// near the money columns; the two words that merely contain her name are
+	// why the log is matched with the same whole-word matcher the rows are;
+	// and Grace was never the subject of any of this.
+	for _, word := range []string{"250000", "Nevada", "Adamant", "Grace", "grace@example.test"} {
+		if !logHolds(t, ctx, s, word) {
+			t.Errorf("the change log no longer holds %q", word)
+		}
+	}
+}
+
+// TestTheActivityFeedStopsNamingAnErasedPerson. The feed takes each entry's
+// label from the log rather than from the row, which is what lets an entry
+// about a deleted line still say which line it was. It is also why an erasure
+// that stops at the rows leaves an admin screen printing the erased name.
+func TestTheActivityFeedStopsNamingAnErasedPerson(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+	p := plant(t, s)
+
+	if _, err := s.EraseSubject(ctx, store.ErasureRequest{Subject: p.adaRef()}); err != nil {
+		t.Fatalf("erase: %v", err)
+	}
+
+	for _, feed := range []struct {
+		entity string
+		id     uuid.UUID
+	}{
+		{store.EntitySponsors, p.adaSponsor.ID},
+		{store.EntityUsers, p.adaUser.ID},
+	} {
+		entries, err := s.Activity(ctx, store.ActivityFilter{Entity: feed.entity, EntityID: &feed.id}, 0, 50)
+		if err != nil {
+			t.Fatalf("activity: %v", err)
+		}
+		if len(entries) == 0 {
+			t.Fatalf("%s has no entries to label", feed.entity)
+		}
+		for _, e := range entries {
+			if e.Label == nil {
+				t.Errorf("%s entry %d has no label at all", feed.entity, e.ID)
+				continue
+			}
+			if *e.Label != store.Tombstone {
+				t.Errorf("%s entry %d is labelled %q, want %q", feed.entity, e.ID, *e.Label, store.Tombstone)
+			}
+		}
+	}
+}
+
+// TestPurgeStrikesTheNamesOutOfTheChangeLog. The retention purge empties the
+// plan; the log holds a create entry for every row that was ever in it, so a
+// purge that stops at the tables keeps a full copy of what it has just decided
+// to destroy.
+func TestPurgeStrikesTheNamesOutOfTheChangeLog(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+	plant(t, s)
+
+	res, err := s.PurgeEvent(ctx, store.PurgeOptions{IncludeAccounts: true})
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if res.ChangeLogRedacted == 0 {
+		t.Errorf("result = %+v, want the entries it struck the plan out of", res)
+	}
+
+	for _, word := range []string{"Ada", "Grace", "Nevada", "Venue deposit", "Example Hall", "ada@example.test"} {
+		if logHolds(t, ctx, s, word) {
+			t.Errorf("the change log still holds %q after a purge", word)
+		}
+	}
+
+	// The entries themselves stay, and have to: whether a plan has ever been
+	// written to is read from this table, and a purged plan that answered "no"
+	// would be filled back in by the first browser to reload.
+	if n := countRows(t, ctx, s, "change_log"); n == 0 {
+		t.Fatal("the purge emptied the change log")
+	}
+	plan, err := s.LoadPlan(ctx)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	if plan.Pristine {
+		t.Error("a purged plan reads as one nobody has written to")
+	}
+}
+
+// TestAPurgeThatKeepsTheAccountsKeepsTheirHistory. The log follows the purge's
+// own scope: the plan goes, and an account that was not purged keeps the
+// history of its own address, which is what tells a change of login address
+// from a typo fix.
+func TestAPurgeThatKeepsTheAccountsKeepsTheirHistory(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+	plant(t, s)
+
+	if _, err := s.PurgeEvent(ctx, store.PurgeOptions{}); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if logHolds(t, ctx, s, "Ada") {
+		t.Error("the plan's names survived a purge")
+	}
+	if !logHolds(t, ctx, s, "ada@example.test") {
+		t.Error("the account was kept and its history was struck out anyway")
 	}
 }
