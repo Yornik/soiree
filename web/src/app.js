@@ -3929,6 +3929,10 @@
   function setByLabel(btn, item) {
     var codes = itemCodes(item);
     btn.textContent = codes.length ? codes.join(' · ') : t('sp.unassigned');
+    // "Rose" is a name, not an instruction. The column says what it means of
+    // it, and the visible text stays inside the label so voice control still
+    // reaches the button by what is written on it.
+    btn.setAttribute('aria-label', t('c.by') + ': ' + btn.textContent);
     btn.classList.toggle('none', !codes.length);
   }
 
@@ -4500,11 +4504,18 @@
     state.budgetItems.forEach(function (item) {
       var tr = document.createElement('tr');
 
-      function textCell(key, cls) {
+      /* `nameKey` is the column's heading, on the field rather than above it.
+       * A cell is named by the <th> above it only while the table is read as a
+       * table: tabbing along the row, and on a phone where the row is a card
+       * and the heading is not drawn at all, the field is announced with no
+       * name - three money spinners in a row and nothing saying which is
+       * which. So every field carries the name itself. */
+      function textCell(key, nameKey, cls) {
         var td = document.createElement('td');
         if (cls) td.className = cls;
         var inp = document.createElement('textarea');
         inp.rows = 1;
+        inp.setAttribute('aria-label', t(nameKey));
         inp.value = item[key] || '';
         inp.addEventListener('input', function () {
           item[key] = inp.value;
@@ -4518,12 +4529,13 @@
       // `hold` is the column's own limit, for the one figure here that is
       // neither money nor read back through a money parser: without it the
       // total on this screen is computed from a number the plan cannot store.
-      function numCell(key, step, hold) {
+      function numCell(key, nameKey, step, hold) {
         var td = document.createElement('td');
         td.className = 'num-cell';
         var inp = document.createElement('input');
         inp.type = 'number';
         inp.min = '0';
+        inp.setAttribute('aria-label', t(nameKey));
         if (step) inp.step = step;
         inp.value = Number(item[key]) || 0;
         inp.addEventListener('input', function () {
@@ -4537,17 +4549,17 @@
         return td;
       }
 
-      var tdItem = textCell('item', 'item-cell');
-      var tdUnit = numCell('unit', '1');
+      var tdItem = textCell('item', 'c.item', 'item-cell');
+      var tdUnit = numCell('unit', 'c.unit', '1');
       // Three decimals rather than whole cases: a third of a case and a
       // per-head figure divided out are both ordinary, and the column keeps
       // them.
-      var tdQty = numCell('qty', '0.001', toQty);
+      var tdQty = numCell('qty', 'c.qty', '0.001', toQty);
 
       var tdTotal = document.createElement('td');
       tdTotal.className = 'calc strong';
 
-      var tdPaid = numCell('paid', '1');
+      var tdPaid = numCell('paid', 'f.paid', '1');
 
       var tdOwing = document.createElement('td');
       tdOwing.className = 'calc';
@@ -4565,7 +4577,7 @@
       });
       tdBy.appendChild(byBtn);
 
-      var tdNote = textCell('note', 'note-cell');
+      var tdNote = textCell('note', 'c.remarks', 'note-cell');
 
       var tdDel = document.createElement('td');
       tdDel.className = 'del-cell';
@@ -4699,6 +4711,7 @@
       var tdName = document.createElement('td');
       var nameInput = document.createElement('input');
       nameInput.type = 'text';
+      nameInput.setAttribute('aria-label', t('k.task'));
       nameInput.value = task.name;
       nameInput.addEventListener('input', function () {
         task.name = nameInput.value;
@@ -4709,6 +4722,7 @@
       var tdOwner = document.createElement('td');
       var ownerInput = document.createElement('input');
       ownerInput.type = 'text';
+      ownerInput.setAttribute('aria-label', t('k.owner'));
       ownerInput.value = task.owner || '';
       ownerInput.addEventListener('input', function () {
         task.owner = ownerInput.value;
@@ -4720,6 +4734,7 @@
       var tdDue = document.createElement('td');
       var dueInput = document.createElement('input');
       dueInput.type = 'date';
+      dueInput.setAttribute('aria-label', t('k.due'));
       dueInput.value = task.due || '';
       dueInput.addEventListener('input', function () {
         task.due = dueInput.value;
@@ -4735,6 +4750,7 @@
       var tdStatus = document.createElement('td');
       var statusSelect = document.createElement('select');
       statusSelect.className = 'status-select';
+      statusSelect.setAttribute('aria-label', t('k.status'));
       Object.keys(STATUS_KEYS).forEach(function (key) {
         var opt = document.createElement('option');
         opt.value = key;

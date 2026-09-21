@@ -14,7 +14,7 @@
  * happened or could.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, addSponsor, gotoTab, openPlanner } = require('./helpers');
+const { addBudgetLine, addSponsor, addTask, gotoTab, openPlanner } = require('./helpers');
 
 test.beforeEach(async ({ page }) => {
   await openPlanner(page);
@@ -151,4 +151,38 @@ test('every delete button says what it deletes', async ({ page }) => {
   await gotoTab(page, 'budget');
   await expect(page.locator('#budgetBody .del-btn')).toHaveAttribute('aria-label', 'Remove budget line');
   await expect(page.locator('#sponsorGrid .del-btn').first()).toHaveAttribute('aria-label', 'Remove sponsor');
+});
+
+/*
+ * The same point, for the fields between the delete buttons.
+ *
+ * A <th> names a cell only while the table is being read as a table. Tabbing
+ * along a line - which is how this grid is filled in - announces the control
+ * and nothing else, so three money spinners in a row were "spin button 2500,
+ * spin button 1, spin button 500" with nothing saying which was the unit
+ * price and which the amount paid. On a phone it is worse: the header row is
+ * not drawn at all there.
+ */
+const gridNames = (page, sel) => page.evaluate(
+  (s) => Array.from(document.querySelectorAll(s)).map((el) => el.getAttribute('aria-label')),
+  `${sel} input, ${sel} select, ${sel} textarea`,
+);
+
+test('every field in the grid says which column it is in', async ({ page }) => {
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Book the band', owner: 'Ada', due: '2030-05-01' });
+  expect(await gridNames(page, '#tasksBody')).toEqual(['Task', 'Owner', 'Due date', 'Status']);
+
+  await gotoTab(page, 'budget');
+  expect(await gridNames(page, '#budgetBody')).toEqual(['Item', 'Unit', 'Qty', 'Paid', 'Remarks']);
+
+  // And the button in the middle of the budget row, whose name was the code
+  // alone: "Rose" says who, never what about them.
+  await expect(byButton(page)).toHaveAttribute('aria-label', 'Cost by: Unassigned');
+
+  // The phone layout, where the headings are gone and the name on the field
+  // is the only one there is.
+  await page.setViewportSize({ width: 375, height: 720 });
+  await expect(page.locator('#budgetTable thead')).toBeHidden();
+  expect(await gridNames(page, '#budgetBody')).toEqual(['Item', 'Unit', 'Qty', 'Paid', 'Remarks']);
 });
