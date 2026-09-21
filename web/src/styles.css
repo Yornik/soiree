@@ -460,14 +460,14 @@ body {
 .first-run { display: none; }
 body.is-empty .first-run { display: block; }
 body.is-empty .when-data { display: none; }
-.first-run h2 {
+.first-run h2, .first-run-out h2 {
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 27px;
   line-height: 1.15;
   margin: 4px 0 12px;
 }
-.first-run > p {
+.first-run > p, .first-run-out > p {
   margin: 0 0 24px;
   max-width: 58ch;
   color: var(--ink-2);
@@ -500,6 +500,30 @@ body.is-empty .when-data { display: none; }
 .step-title { font-weight: 600; }
 .step-note { grid-column: 2; font-size: 13px; color: var(--ink-2); }
 .start-steps button { grid-column: 3; grid-row: 1 / span 2; margin: 0; }
+
+/* Signed out on a deployment that has accounts, with nothing in this browser:
+   the three steps would start a plan that already exists somewhere this
+   visitor cannot see yet, so they give way to the way in. All three classes
+   are set already - auth.js writes has-api and signed-out, app.js writes
+   is-empty - so nothing here has to be asked.
+
+   has-api is what says there is a server with accounts behind this page, and
+   it has to be asked for: signed-out alone is also how a session probe with no
+   answer is drawn, and then an installed planner opened offline - which is the
+   ordinary way one starts - would be told its own plan is somebody else's and
+   left without the steps that begin it. Waiting for an answer errs towards the
+   steps, which is the safe way round.
+
+   One thing for whoever edits the archive block below: it outranks the panel
+   above by order at equal specificity, and cannot outrank three classes. An
+   is-archived rule for .first-run-out written down there would be dead. None
+   is wanted - signing in is something a reader of a closed ledger can still
+   act on, unlike setting a ceiling - but it would have to be written here. */
+.first-run-out { display: none; }
+body.has-api.signed-out.is-empty .first-run { display: none; }
+body.has-api.signed-out.is-empty .first-run-out { display: block; }
+/* Sits where the list of steps starts in the panel it replaces. */
+.first-run-out .solid-btn { margin-top: 0; }
 
 /* --- Reckoning ---
    Four figures on one baseline, right-aligned, under one rule. A row of a

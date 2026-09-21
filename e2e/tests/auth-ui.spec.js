@@ -263,7 +263,57 @@ test('a visitor with accounts to sign in to is offered the door, and the planner
   await expect(page.locator('#plannerWrap')).toBeVisible();
   await page.locator('#tab-budget').click();
   await expect(page.locator('#addBudgetRow')).toBeVisible();
-  await expect(page.locator('#startCeiling')).toBeEnabled();
+  // Worked rather than only drawn, because "the planner still works" is a
+  // claim about the grid. The overview's three steps are not part of it: with
+  // nothing in this browser they are the panel below, which signed out says
+  // where the plan is instead of offering to start one.
+  await page.locator('#addBudgetRow').click();
+  await expect(page.locator('#budgetBody tr')).toHaveCount(1);
+});
+
+test('an empty browser is offered the plan it cannot see, not three ways to start one', async ({ page }) => {
+  await mountAccounts(page, { users: [ADA] });
+  await open(page);
+
+  // There is nothing in this browser, and the plan this deployment keeps is
+  // behind the sign-in. "Nothing in the ledger yet" and three buttons is a
+  // sentence about the event, and it is not true of it: what those buttons
+  // start is a second plan, merged into everybody's at the next sign-in.
+  await expect(page.locator('body')).toHaveClass(/is-empty/);
+  await expect(page.locator('.first-run')).toBeHidden();
+  await expect(page.locator('.first-run-out')).toBeVisible();
+
+  await page.locator('#startSignIn').click();
+  await expect(page.locator('#panelLogin')).toBeVisible();
+});
+
+test('an origin that is away at load still offers the three steps', async ({ page }) => {
+  // Nobody answers: not the session probe, not the plan. auth.js draws that as
+  // signed out, because the door is the right offer when the answer is not
+  // "you are Ada" - but here it is a guess and not an answer, and a deployment
+  // with no database at all looks exactly the same from the body: empty, and
+  // signed out. Its planner is this browser's own, the three steps are how it
+  // starts, and an origin away at load is the ordinary start for an installed
+  // one. So the way in waits for a server to say it exists.
+  await page.route('**/api/v1/**', (route) => route.abort('failed'));
+  await open(page);
+
+  await expect(page.locator('.first-run')).toBeVisible();
+  await expect(page.locator('.first-run-out')).toBeHidden();
+  await expect(page.locator('body')).toHaveClass(/signed-out/);
+  await expect(page.locator('body')).not.toHaveClass(/has-api/);
+});
+
+test('a browser with a planner of its own keeps it signed out', async ({ page }) => {
+  await seedPlanner(page);
+  await mountAccounts(page, { users: [ADA] });
+  await open(page);
+
+  // The door replaces nothing. This browser holds a planner somebody built,
+  // which is exactly the copy the page does not hide from them.
+  await expect(page.locator('body')).not.toHaveClass(/is-empty/);
+  await expect(page.locator('.first-run-out')).toBeHidden();
+  await expect(page.locator('#statBudgetSub')).toBeVisible();
 });
 
 /* ------------------------------------------------------------------

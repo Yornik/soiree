@@ -96,6 +96,8 @@
       'role.editor': 'editor',
       'role.viewer': 'viewer, read-only',
       'back': 'Back to the planner',
+      'fr.out.title': 'This event\'s plan is shared',
+      'fr.out.body': 'Nothing of it is kept in this browser. Sign in to see it.',
       'signout.unsent': 'Some of your changes have not reached the server. Signing out removes this browser\'s copy of the planner, and those changes with it. Sign out anyway?',
       'signout.failed': 'Signing out did not reach the server, so you are still signed in. Check your connection and try again.',
       'f.email': 'Email',
@@ -307,6 +309,8 @@
       'role.editor': 'bewerker',
       'role.viewer': 'lezer, alleen lezen',
       'back': 'Terug naar de planner',
+      'fr.out.title': 'Het plan van dit feest wordt gedeeld',
+      'fr.out.body': 'Er staat niets van in deze browser. Meld je aan om het te zien.',
       'signout.unsent': 'Een deel van je wijzigingen heeft de server niet bereikt. Afmelden verwijdert de kopie van de planner in deze browser, en die wijzigingen ook. Toch afmelden?',
       'signout.failed': 'Het afmelden heeft de server niet bereikt, dus je bent nog aangemeld. Controleer je verbinding en probeer het opnieuw.',
       'f.email': 'E-mailadres',
@@ -518,6 +522,8 @@
       'role.editor': 'penyunting',
       'role.viewer': 'pembaca, hanya baca',
       'back': 'Kembali ke perencana',
+      'fr.out.title': 'Rencana acara ini dipakai bersama',
+      'fr.out.body': 'Tidak ada isinya yang tersimpan di browser ini. Masuk untuk melihatnya.',
       'signout.unsent': 'Sebagian perubahanmu belum sampai ke server. Keluar akan menghapus salinan perencana di browser ini, termasuk perubahan itu. Tetap keluar?',
       'signout.failed': 'Permintaan keluar tidak sampai ke server, jadi kamu masih masuk. Periksa koneksimu lalu coba lagi.',
       'f.email': 'Email',
@@ -1110,13 +1116,27 @@
     setSession('none');
   });
 
-  // And the other answer: there is an API. Whatever on screen depends on that
-  // and was drawn before it was known — the reminders switch, on a page opened
-  // straight at the account screen — is drawn again.
+  /* And the other answer: there is an API, so there is somewhere to sign in
+   * to. Written on the body because styles.css asks it: the empty planner
+   * offers the way in instead of the three start steps, and `signed-out`
+   * cannot carry that on its own. A probe that gets no answer at all is drawn
+   * as signed out too (probeSession below), and an origin away at load is the
+   * ordinary start for an installed planner, where a deployment with no
+   * database looks exactly the same from here: empty, and signed out. Latched
+   * and never taken off, because no deployment loses its database while a page
+   * is open; read off the global as well as the event, for the same reason
+   * apiKnownAbsent() is. */
+  function apiAnswered() { document.body.classList.add('has-api'); }
+
+  // Whatever on screen depends on that and was drawn before it was known —
+  // the reminders switch, on a page opened straight at the account screen —
+  // is drawn again.
   document.addEventListener('soiree:api', function (ev) {
     if (!ev || !ev.detail || ev.detail.available !== true) return;
+    apiAnswered();
     if (state === 'in' && readRoute().path === 'account') renderReminders();
   });
+  if (window.soiree && window.soiree.apiAvailable === true) apiAnswered();
 
   // And the service worker, which on a first visit is still installing when
   // the account screen asks. "Still being set up" is drawn in the meantime and
