@@ -1685,6 +1685,12 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   .flag-btn[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: 1px; }
 
   .runup-line, .runup-tick, .runup-leader { background: CanvasText; }
+  /* A leader under the pointer is drawn in a stronger ink by a rule that
+     names three things to this one's one, so it goes on winning here, and
+     the forcing is off on the mark it hangs from. Named again, or a hovered
+     leader is the one graphic on the page still drawn in a colour of ours. */
+  .runup-mark:hover .runup-leader, .runup-mark:focus-visible .runup-leader,
+  .runup-mark[aria-expanded="true"] .runup-leader { background: CanvasText; }
   .runup-mark { forced-color-adjust: none; background: ButtonText; color: Canvas; }
   .runup-mark .runup-label { forced-color-adjust: auto; }
   /* Late is a ring around today rather than a mark of its own, so it takes

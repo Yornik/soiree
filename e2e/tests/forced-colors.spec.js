@@ -138,3 +138,26 @@ test('the run-up, the money bar and the shares are still drawn', async ({ page }
   const edge = await page.locator('.moneybar').evaluate((el) => window.getComputedStyle(el).borderTopStyle);
   expect(edge, 'the money bar has no edge to measure its lengths against').not.toBe('none');
 });
+
+test("a mark under the pointer keeps its leader in the reader's palette", async ({ page }) => {
+  await gotoTab(page, 'tasks');
+  await addTask(page, { name: 'Confirm final guest count', due: '2030-05-01' });
+  await gotoTab(page, 'overview');
+  await page.mouse.move(600, 500);
+
+  // Hovering a mark draws its leader in a stronger ink, and that rule names
+  // three things where the one that redraws the leader in the reader's ink
+  // names one, so it wins. The forcing is off on the mark, which the leader
+  // inherits, and the ink is our own: it stays whatever the palette is.
+  //
+  // "Not the canvas colour" would not catch it. On a light palette our ink
+  // is near black and passes that test while being drawn in a colour nobody
+  // chose; on a dark one the same near black is invisible. What has to hold
+  // is that hovering does not change the colour at all.
+  const atRest = await colour(page, '.runup-leader', 'backgroundColor');
+  await page.locator('.runup-mark').first().hover();
+  expect(
+    await colour(page, '.runup-leader', 'backgroundColor'),
+    'the leader under the pointer is drawn in a colour of ours',
+  ).toBe(atRest);
+});
