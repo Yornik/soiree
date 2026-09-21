@@ -878,10 +878,12 @@ func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user st
 		// And the same by request, for the one case where the mail is the
 		// thing that failed.
 		res.SetPasswordURL = link
-	}
-	if toAdmin {
 		// The link itself is never logged. Who took one out is, because this
-		// is the one way a credential leaves here in somebody else's hands.
+		// is the one way a credential leaves here in somebody else's hands,
+		// and it belongs here rather than on the asking for it: a deployment
+		// without a relay hands one over on every invitation, and it is also
+		// the deployment where the refusal above cannot fire, so the account
+		// on the other end may be one somebody is using.
 		actor, _ := UserFrom(r.Context())
 		a.log.Info("account link issued to admin", "user", user.ID, "by", actor.ID)
 	}

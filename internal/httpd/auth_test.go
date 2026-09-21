@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -614,6 +615,41 @@ func TestAnAdminCanAskForTheLinkInsteadOfTheMail(t *testing.T) {
 		map[string]string{"token": tokenFromLink(t, created.SetPasswordURL), "password": goodPassword}, nil)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("the link the admin was given does not work: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Asking for the link is not the only way to be handed one. A deployment
+// without a relay hands one back on every invitation, and it is the one where
+// the refusal above cannot fire, so the account on the other end may be one
+// somebody is using. Whoever asked is written down there too.
+func TestALinkHandedOverWithoutARelayIsLoggedToo(t *testing.T) {
+	f := newFixture(t, false) // no SMTP: every link comes back to the admin
+	ada := f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	linus := f.seed(t, "linus@example.test", store.RoleEditor, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	var logged bytes.Buffer
+	f.a.log = slog.New(slog.NewJSONHandler(&logged, nil))
+
+	// No body, so no delivery was asked for: the ordinary invitation, for an
+	// account that already has a password.
+	rec := f.do(t, http.MethodPost, "/api/v1/users/"+linus.ID.String()+"/invite", nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("invite: status %d, body %s", rec.Code, rec.Body)
+	}
+	link := decodeTestBody[createUserResponse](t, rec).SetPasswordURL
+	if link == "" {
+		t.Fatalf("no link came back on a deployment without a relay: %s", rec.Body)
+	}
+
+	out := logged.String()
+	if !strings.Contains(out, "account link issued to admin") ||
+		!strings.Contains(out, linus.ID.String()) || !strings.Contains(out, ada.ID.String()) {
+		t.Errorf("the log does not say who took a link out and for whom: %s", out)
+	}
+	// Who asked and for whom, and nothing that opens the account.
+	if strings.Contains(out, tokenFromLink(t, link)) {
+		t.Error("the link's token was logged with it")
 	}
 }
 

@@ -1126,13 +1126,17 @@ reset there issues nothing at all: a link nobody can be sent would still
 supersede the one the admin is passing on by hand.
 
 An admin who needs the link itself can ask for it. `deliver: link` on a create
-or an invite holds the mail back, returns `setPasswordUrl`, and logs `account
-link issued to admin` with who asked. It is accepted only for an account that
-has not set a password yet, which is where a mail the relay drops actually
-strands somebody; an account in use keeps its link to its owner, so a live
-account cannot be taken over in a click. An admin could already reach the same
-link by pointing an account at a mailbox of their own and re-inviting, which
-records nothing about how it was got, so this is that route asked for out loud.
+or an invite holds the mail back and returns `setPasswordUrl`. Where a relay is
+configured it is accepted only for an account that has not set a password yet,
+which is where a mail the relay drops actually strands somebody; an account in
+use keeps its link to its owner, so a live account cannot be taken over in a
+click. Without a relay there is nothing left to weigh, since every invitation
+comes back as a link anyway, for an account in use as much as for a new one.
+Either way, every answer that carries a link logs `account link issued to
+admin` with who asked and for whom, and never the link. An admin could already
+reach the same link by pointing an account at a mailbox of their own and
+re-inviting, which records nothing about how it was got, so this is that route
+asked for out loud.
 
 Both mails name the event, in the subject and in the first line, and the
 invitation says where to go once its link has expired: the sign-in screen's
