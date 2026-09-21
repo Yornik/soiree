@@ -26,6 +26,64 @@ func TestLoadPlanEmpty(t *testing.T) {
 	}
 }
 
+// TestAnEmptiedPlanIsNotAPristineOne. An empty plan is two different things,
+// one nobody has filled in yet and one somebody emptied, and the lists say
+// nothing about which. A browser holding a saved planner fills in the first;
+// against the second the same copy would put every row back, minutes after
+// they were deleted on purpose. What tells them apart is the change log, the
+// only record left of a row that is no longer there.
+func TestAnEmptiedPlanIsNotAPristineOne(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	plan, err := s.LoadPlan(ctx)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	if !plan.Pristine {
+		t.Fatal("a database nobody has written a plan to does not say it is pristine")
+	}
+
+	// Two writes that come before any plan does: the first ceiling somebody
+	// types, and the account they typed it from. Neither is a plan, and
+	// neither may cost the one browser holding a planner its only copy.
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		t.Fatalf("settings: %v", err)
+	}
+	settings.Ceiling = store.ToMinor("EUR", 10000)
+	if _, err := s.UpdateSettings(ctx, settings); err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	if _, err := s.CreateUser(ctx, store.User{Email: "ada@example.test", Role: store.RoleEditor}); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if plan, err = s.LoadPlan(ctx); err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	if !plan.Pristine {
+		t.Error("a ceiling and an account made the plan read as one that has been written to")
+	}
+
+	// And the write that is one, taken away again.
+	note, err := s.CreateNote(ctx, store.Note{Text: "Check the parking."})
+	if err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	if err := s.DeleteNote(ctx, note.ID, note.Revision); err != nil {
+		t.Fatalf("delete note: %v", err)
+	}
+	if plan, err = s.LoadPlan(ctx); err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	if len(plan.Notes) != 0 {
+		t.Fatalf("the note is still there: %+v", plan.Notes)
+	}
+	if plan.Pristine {
+		t.Error("a plan somebody emptied reads as one nobody has written to")
+	}
+}
+
 func TestLoadPlan(t *testing.T) {
 	s := newStore(t)
 	ctx := t.Context()

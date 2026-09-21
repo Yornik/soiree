@@ -387,6 +387,10 @@ type planJSON struct {
 	// reads the plan should not have to know whether files are switched on to
 	// know what shape to expect.
 	Attachments []attachmentJSON `json:"attachments"`
+	// Whether anything has ever been written to the plan. A browser holding a
+	// saved planner fills in a database that has never had one; against a plan
+	// somebody emptied, the same copy would put every row back.
+	Pristine bool `json:"pristine"`
 }
 
 func encodePlan(currency string, p store.Plan) planJSON {
@@ -399,6 +403,7 @@ func encodePlan(currency string, p store.Plan) planJSON {
 		Tasks:       make([]taskJSON, 0, len(p.Tasks)),
 		Notes:       make([]noteJSON, 0, len(p.Notes)),
 		Attachments: make([]attachmentJSON, 0, len(p.Attachments)),
+		Pristine:    p.Pristine,
 	}
 	for _, a := range p.Attachments {
 		out.Attachments = append(out.Attachments, encodeAttachment(a))

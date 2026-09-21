@@ -458,15 +458,34 @@ Normally the server is simply right and what is on screen is a cached copy. Two
 cases are not normal, and in both the browser keeps what it is holding and sends
 it up instead: something was typed between the cached copy painting and the plan
 arriving, or this browser holds a planner somebody actually built and the server
-has none at all. The second is the database being added to a deployment that was
-running without one, and replacing that planner with an empty plan would destroy
-the only copy of it, on the first load, with no warning.
+has never held one. The second is the database being added to a deployment that
+was running without one, and replacing that planner with an empty plan would
+destroy the only copy of it, on the first load, with no warning.
 
 It is deliberately narrow — only a planner that was genuinely saved, never a
-blank one or generated demo data, and only against a plan with nothing in it.
-Getting it wrong costs two browsers each seeding the same empty database and
-producing every row twice, which is visible and fixable by hand. Not doing it
-costs somebody their planner, which is not.
+blank one or generated demo data, only against a plan with nothing in it, and
+only where those rows may be the only copy of themselves.
+
+That last test is not the same as the plan being empty, which is where this
+rule was too wide for its own argument. A plan somebody emptied looks on the
+wire exactly like one nobody has filled in yet, and so does a plan the
+retention purge has just emptied; a browser holding a cached copy of either
+one used to put every row back: every name, vendor and amount, minutes after
+they were deleted on purpose, recorded against whoever happened to open the
+page. For the purge that undoes the decision the purge exists to carry out.
+
+So `GET /plan` carries `pristine`, which says whether the plan has ever been
+written to. It is read from the change log rather than from the rows, because
+the log is append-only and outlives what it describes, and it counts the plan's
+own tables only: settings and accounts are both written before any plan is. A
+browser seeds when the plan is pristine, or when it has no base of its own.
+Having no base means it has never held a row the server confirmed, so what it
+is holding cannot be a copy of rows somebody deleted. Either is enough, because
+the costs are still lopsided: seeding where it was not wanted produces every row
+twice, which is visible, fixable by hand, and in the change log besides, while
+not seeding where the browser held the only copy destroys it. When the browser
+does stand down, it says so in the status line rather than quietly emptying the
+screen.
 
 ## Latency strategy
 

@@ -2596,7 +2596,7 @@ components:
       type: object
       description: |
         The whole plan in one object. `GET /plan` returns this.
-      required: [settings, phases, sponsors, budgetItems, programme, tasks, notes, attachments]
+      required: [settings, phases, sponsors, budgetItems, programme, tasks, notes, attachments, pristine]
       properties:
         settings: { $ref: '#/components/schemas/Settings' }
         phases:
@@ -2625,6 +2625,21 @@ components:
             `budgetItemId` or `taskId`. The list is empty on a deployment with
             no object store.
           items: { $ref: '#/components/schemas/Attachment' }
+        pristine:
+          type: boolean
+          description: |
+            Whether the plan has ever been written to. An empty plan is two
+            different things: one nobody has filled in yet, and one somebody
+            emptied. The lists above do not say which. A client holding a
+            planner of its own may fill in the first; against the second it
+            would put back rows that were deleted on purpose, so it must leave
+            that one alone.
+
+            Remembered from the change history rather than from the rows, so
+            it is `false` from the first row ever written onwards, including
+            after every row is deleted again and after a retention purge.
+            Settings and accounts do not count: both are written before any
+            plan is.
 
     ChangeNotice:
       type: object

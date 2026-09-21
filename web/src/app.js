@@ -289,6 +289,7 @@
       'd.offline': 'Your changes are not reaching the server. Still trying — they are safe in this browser meanwhile.',
       'd.online': 'Back in touch with the server. Everything is saved.',
       'd.carried': 'Changes made in this browser that had not reached the server: {n}. They are going up now.',
+      'd.emptied': 'Someone else emptied the planner. What this browser was still holding has gone with it, rather than being sent back up.',
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
       'd.session': 'Your session has ended. Sign in again — what you changed is safe in this browser and is sent as soon as you are back.',
       'd.nostorage': 'This browser is not keeping your changes. Export the planner before you close this tab.',
@@ -459,6 +460,7 @@
       'd.offline': 'Je wijzigingen bereiken de server niet. Er wordt opnieuw geprobeerd — ondertussen staan ze veilig in deze browser.',
       'd.online': 'Weer verbinding met de server. Alles is opgeslagen.',
       'd.carried': 'Wijzigingen in deze browser die de server niet hadden bereikt: {n}. Ze worden nu verstuurd.',
+      'd.emptied': 'Iemand anders heeft de planner leeggemaakt. Wat deze browser nog had, is daarmee ook weg in plaats van opnieuw verstuurd.',
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
       'd.session': 'Je sessie is verlopen. Meld je opnieuw aan — je wijzigingen staan veilig in deze browser en worden verstuurd zodra je terug bent.',
       'd.nostorage': 'Deze browser bewaart je wijzigingen niet. Exporteer de planner voordat je dit tabblad sluit.',
@@ -628,6 +630,7 @@
       'd.offline': 'Perubahanmu belum sampai ke server. Masih dicoba lagi — sementara ini aman tersimpan di browser.',
       'd.online': 'Terhubung lagi dengan server. Semuanya tersimpan.',
       'd.carried': 'Perubahan di browser ini yang belum sampai ke server: {n}. Semuanya dikirim sekarang.',
+      'd.emptied': 'Orang lain mengosongkan perencana ini. Apa yang masih ada di browser ini ikut hilang, bukan dikirim ulang.',
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
       'd.session': 'Sesimu sudah berakhir. Masuk lagi — perubahanmu aman tersimpan di browser ini dan dikirim begitu kamu kembali.',
       'd.nostorage': 'Browser ini tidak menyimpan perubahanmu. Ekspor perencana sebelum kamu menutup tab ini.',
@@ -2448,16 +2451,26 @@
    *      arriving. Discarding those keystrokes because a request happened to
    *      land after them is not a defensible reason to lose them.
    *   2. This browser is holding a planner somebody built, and the server has
-   *      none. That is the database being added to a deployment that was
-   *      running without one — and replacing that planner with an empty plan
-   *      destroys the only copy of it, on the first load, with no warning.
+   *      never held one. That is the database being added to a deployment that
+   *      was running without one — and replacing that planner with an empty
+   *      plan destroys the only copy of it, on the first load, with no warning.
    *
    * The second is deliberately narrow: only a planner that was actually saved
-   * (not a blank one, and not generated demo data) and only against a plan
-   * with nothing in it at all. The cost of getting it wrong is two browsers
-   * each seeding the same empty database and producing every row twice, which
-   * is visible and can be fixed by hand. The cost of not doing it is silent
-   * destruction of somebody's planner, which cannot.
+   * (not a blank one, and not generated demo data), only against a plan with
+   * nothing in it at all, and only where those rows may be the only copy of
+   * themselves. An empty plan does not say that by itself. Somebody may have
+   * emptied it, or the purge that ends the event may have, and pouring a
+   * cached copy into that one puts back rows that were deleted on purpose,
+   * minutes later, under the name of whoever opened the page next. Two things
+   * do say it: `pristine`, the server's answer to whether the plan has ever
+   * been written to, and a browser with no base, which has never held a row
+   * the server confirmed.
+   *
+   * Either is enough, because the costs stay as lopsided as they were. Seeding
+   * where it was not wanted produces every row twice, which is visible, fixable
+   * by hand, and recoverable from the server's own append-only history. Not
+   * seeding where this browser held the only copy destroys it, which is none of
+   * those things.
    */
   function adopt(plan) {
     takeAttachments(plan);
@@ -2489,6 +2502,12 @@
     var holdingRows = COLLECTIONS.some(function (c) {
       return (state[c.key] || []).length > 0;
     });
+    // Whether the rows this browser holds may be the only copy of themselves.
+    // With a base they are not: every one of them is a row the server
+    // confirmed and somebody has since deleted, and the change log still has
+    // them. `pristine` is the other way round: a database that has never had
+    // a plan written to it cannot be the one those rows came from.
+    var mayBeTheOnlyCopy = plan.pristine === true || !base;
 
     // Edited here, and the server has a plan of its own. "Something was typed
     // between the cached copy painting and the plan arriving" was written for
@@ -2522,7 +2541,7 @@
       return;
     }
 
-    if (dirty || (hadSavedCopy && holdingRows && planIsEmpty)) {
+    if (dirty || (hadSavedCopy && holdingRows && planIsEmpty && mayBeTheOnlyCopy)) {
       // The rows the server has that this browser has not are taken rather
       // than deleted: in this window "absent here" means "not fetched yet",
       // not "removed". That union is what makes the delete rule in planOps
@@ -2535,6 +2554,12 @@
         });
       });
     } else {
+      // Rows are about to leave this screen because somebody emptied the plan
+      // while this browser was away, which is the one case here where taking
+      // the server's answer costs the person something they can see. Said out
+      // loud: a planner that empties itself on load looks like a failure, and
+      // this is the opposite of one.
+      if (hadSavedCopy && holdingRows && planIsEmpty) flash(t('d.emptied'));
       var next = stateFromPlan(plan);
       // Per-browser preferences and the one flag with no column behind it.
       // Column widths are a view of the table, not a fact about the event: one

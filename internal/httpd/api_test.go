@@ -365,6 +365,36 @@ func TestPlanIsOneRoundTrip(t *testing.T) {
 	}
 }
 
+// A browser keeps a copy of the planner and fills in a database that has never
+// had one, which is right only while "empty" means "not filled in yet". A plan
+// somebody emptied on purpose looks exactly the same on the wire, and pouring
+// the copy into that one puts every deleted row back, so the plan says which
+// of the two it is. Signing in has written an account by the time this asks,
+// and an account is not a plan.
+func TestThePlanSaysWhetherItHasEverBeenWrittenTo(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	plan := decode(t, call(t, h, http.MethodGet, "/api/v1/plan", ""))
+	if pristine, _ := plan["pristine"].(bool); !pristine {
+		t.Fatalf("pristine = %#v on a plan nobody has written to", plan["pristine"])
+	}
+
+	note := created(t, h, "notes", `{"text":"Venue balance is due a month out.","position":0}`)
+	gone := call(t, h, http.MethodDelete, "/api/v1/notes/"+str(t, note, "id")+"?revision="+
+		strconv.FormatInt(int64(num(t, note, "revision")), 10), "")
+	if gone.status != http.StatusNoContent {
+		t.Fatalf("DELETE -> %d, want 204\n%s", gone.status, gone.body)
+	}
+
+	plan = decode(t, call(t, h, http.MethodGet, "/api/v1/plan", ""))
+	if notes, _ := plan["notes"].([]any); len(notes) != 0 {
+		t.Fatalf("the note is still in the plan: %#v", notes)
+	}
+	if pristine, _ := plan["pristine"].(bool); pristine {
+		t.Error("a plan emptied through the API is still reported as one nobody has written to")
+	}
+}
+
 // The plan is the one body this API sends over and over: every other open
 // browser re-reads the whole of it after anybody's edit and again on every
 // reconnect, to readers the origin may be 300 ms away from. It is also

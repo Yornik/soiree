@@ -21,6 +21,10 @@ type Plan struct {
 	// an edit, the API refuses fields it does not know, and a line that carried
 	// its files would have to be stripped of them before every write.
 	Attachments []Attachment
+	// Whether the plan has ever been written to. An empty plan is two
+	// different things, one nobody has filled in yet and one somebody
+	// emptied, and the lists above cannot tell them apart.
+	Pristine bool
 }
 
 // LoadPlan reads the whole plan.
@@ -79,6 +83,30 @@ func (s *Store) LoadPlan(ctx context.Context) (Plan, error) {
 
 	if plan.Attachments, err = readyAttachments(ctx, tx); err != nil {
 		return Plan{}, err
+	}
+
+	// Whether the plan has ever been written to, which the lists above cannot
+	// say: a plan somebody emptied looks exactly like one nobody has filled in
+	// yet, and the browser treats the two very differently.
+	//
+	// Asked of the change log rather than of the tables, because the question
+	// is about the past and the tables only know the present. The log refuses
+	// every DELETE by trigger, so a plan that was emptied row by row and a
+	// database purged for retention both go on answering that they were
+	// written to.
+	//
+	// The plan's own tables and no others. `settings` is written by the first
+	// ceiling anybody types and `users` by the bootstrap admin, and neither
+	// means a plan existed. Counting them would cost the browser holding the
+	// only planner in existence its copy, which is what this narrows rather
+	// than reverses.
+	if err := tx.QueryRow(ctx,
+		`SELECT NOT EXISTS (SELECT 1 FROM change_log WHERE entity = ANY($1))`,
+		[]string{
+			EntityPhases, EntitySponsors, EntityBudgetItems,
+			EntityProgrammeEntries, EntityTasks, EntityNotes,
+		}).Scan(&plan.Pristine); err != nil {
+		return Plan{}, fmt.Errorf("change_log: %w", err)
 	}
 
 	links, err := sponsorLinks(ctx, tx)
