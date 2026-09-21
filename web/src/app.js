@@ -4606,7 +4606,12 @@
       }
 
       var tdItem = textCell('item', 'c.item', 'item-cell');
-      var tdUnit = numCell('unit', 'c.unit', '1');
+      // Money steps by "any". A quote with cents is an ordinary quote, and a
+      // whole-unit step made every one of them a step mismatch: the browser
+      // then reports a good figure as invalid, which a screen reader reads
+      // out, and the spinner arrows round it away. The arrows still move by a
+      // whole unit either way.
+      var tdUnit = numCell('unit', 'c.unit', 'any');
       // Three decimals rather than whole cases: a third of a case and a
       // per-head figure divided out are both ordinary, and the column keeps
       // them.
@@ -4615,7 +4620,7 @@
       var tdTotal = document.createElement('td');
       tdTotal.className = 'calc strong';
 
-      var tdPaid = numCell('paid', 'f.paid', '1');
+      var tdPaid = numCell('paid', 'f.paid', 'any');
 
       var tdOwing = document.createElement('td');
       tdOwing.className = 'calc';

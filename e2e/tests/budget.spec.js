@@ -186,6 +186,28 @@ test('a line paid to the cent is settled, not a rounding error short', async ({ 
   await expect(page.locator('#sumOwingAlt')).toHaveText('€0');
 });
 
+test('a figure with cents is a valid figure, not one the browser calls invalid', async ({ page }) => {
+  // The same 45.33 the line above reckons with. The field used to declare a
+  // step of one whole unit, which makes every price with cents a step
+  // mismatch: a browser then reports the field as invalid, a screen reader
+  // reads that out on a perfectly good quote, and the spinner arrows round it
+  // to 46 on the way past.
+  const row = await addBudgetLine(page, { item: 'Catering', unit: 45.33, qty: 2.5, paid: 22.5 });
+
+  const validity = (locator) => locator.evaluate((el) => ({
+    invalid: el.matches(':invalid'), stepMismatch: el.validity.stepMismatch,
+  }));
+  expect(await validity(row.unit)).toEqual({ invalid: false, stepMismatch: false });
+  expect(await validity(row.paid)).toEqual({ invalid: false, stepMismatch: false });
+  // Quantity carries three decimals, which is what the column stores.
+  expect(await validity(row.qty)).toEqual({ invalid: false, stepMismatch: false });
+
+  // And the arrows still move by a whole unit rather than a cent at a time.
+  await row.unit.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(row.unit).toHaveValue('46.33');
+});
+
 // Reported from the first real deployment, by people on desktop monitors: "add
 // a remove button". There was one. The page was capped at 1000px and the
 // table's columns add up to more, so Remarks and the remove button were cut
