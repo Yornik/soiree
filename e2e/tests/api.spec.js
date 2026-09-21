@@ -202,6 +202,41 @@ test('money crosses the wire as a decimal string in major units', async ({ page,
   await expect.poll(async () => (await apiPlan(request)).settings.ceiling).toBe('10000.00');
 });
 
+/*
+ * The quantity column is `numeric(12,3)` and the server refuses a fourth
+ * decimal rather than rounding it away, because a figure it rounded would come
+ * back as one the client never sent and be written again on every pass. The
+ * page had no such limit: a third of a case, divided out by hand, went up as
+ * typed and was refused, and a refusal parks the whole row until something in
+ * it changes. On a line still being created that is the line itself, name and
+ * amounts and all, never reaching the plan; on one the server has, it is a
+ * total on this screen computed from a number the plan does not hold.
+ */
+test('a quantity with more decimals than the column keeps is held to it, not refused', async ({ page, request }) => {
+  await openSharedPlanner(page);
+  await gotoTab(page, 'budget');
+
+  // Typed into a line that does not exist yet, which is the ordinary way a row
+  // is filled in: a refused create takes the whole line with it.
+  const line = await addBudgetLine(page, { item: 'Wine', unit: 10000, qty: 0.3333, paid: 0 });
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.qty]))
+    .toEqual([['Wine', 0.333]]);
+
+  // And again on the line as the server now has it, which is the patch rather
+  // than the create.
+  await line.qty.fill('12.7777');
+  await line.qty.blur();
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems.map((i) => [i.item, i.qty]))
+    .toEqual([['Wine', 12.778]]);
+
+  // The money on this screen is the money the plan holds: 10,000 x 12.778,
+  // and not the 127,777 that a quantity nobody else can see works out at.
+  await expectFigures(page, { committed: 127780, paid: 0, outstanding: 127780, forecast: 127780 });
+  await expect(page.locator('#dataMsg')).not.toHaveText(/would not accept/);
+});
+
 test('a row created here and the row the server made are one row', async ({ page, request }) => {
   await openSharedPlanner(page);
   await gotoTab(page, 'budget');

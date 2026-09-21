@@ -1061,6 +1061,41 @@
       copy: function (v) { return v; }
     };
   }
+  /* A quantity, held to the column that stores it.
+   *
+   * `numeric(12,3)` keeps three decimals, and the server refuses a fourth
+   * rather than rounding it away: a figure it rounded would come back as one
+   * this page never sent, and the difference between them is one no further
+   * write can close. That refusal parks the whole row until something in it
+   * changes, so a third of a case divided out by hand (0.3333) costs the
+   * line its create and everything typed on it, not merely the decimal.
+   *
+   * So the rounding happens here instead, the way money's does: canon, wire
+   * and the cell that writes the figure all hold the same rounded value, and
+   * the difference converges rather than going again on every pass.
+   */
+  var QTY_SCALE = 1000;
+  var QTY_LIMIT = 999999999.999;
+  function toQty(v) {
+    var n = Number(v) || 0;
+    if (n > QTY_LIMIT) n = QTY_LIMIT;
+    if (n < -QTY_LIMIT) n = -QTY_LIMIT;
+    // Exact over the whole range: under the bound above, n * 1000 is below
+    // 2^53, so the product of a quantity the column can hold is the integer
+    // itself. The two settings rates are bounded the same way and are not:
+    // maxFxRate times its scale is past 2^53, which is why the server counts
+    // their decimals instead of multiplying.
+    return Math.round(n * QTY_SCALE) / QTY_SCALE;
+  }
+  function qtyField(name) {
+    return {
+      name: name,
+      canon: function (r) { return toQty(r[name]); },
+      wire: function (r) { return toQty(r[name]); },
+      read: function (v) { return toQty(v); },
+      copy: function (v) { return v; }
+    };
+  }
   function boolField(name) {
     return {
       name: name,
@@ -1137,7 +1172,7 @@
     {
       key: 'budgetItems', route: 'budget-items', entity: 'budget_items', container: 'budgetBody',
       fields: [
-        textField('item'), moneyField('unit'), numberField('qty'),
+        textField('item'), moneyField('unit'), qtyField('qty'),
         moneyField('paid'), textField('note'), idsField('sponsors')
       ],
       render: function () { renderBudgetTable(); renderBudgetTotals(); renderOverview(); }
@@ -4447,7 +4482,10 @@
         return td;
       }
 
-      function numCell(key, step) {
+      // `hold` is the column's own limit, for the one figure here that is
+      // neither money nor read back through a money parser: without it the
+      // total on this screen is computed from a number the plan cannot store.
+      function numCell(key, step, hold) {
         var td = document.createElement('td');
         td.className = 'num-cell';
         var inp = document.createElement('input');
@@ -4456,7 +4494,7 @@
         if (step) inp.step = step;
         inp.value = Number(item[key]) || 0;
         inp.addEventListener('input', function () {
-          item[key] = Number(inp.value) || 0;
+          item[key] = hold ? hold(inp.value) : (Number(inp.value) || 0);
           save();
           refreshRow(tr, item);
           renderBudgetTotals();
@@ -4468,7 +4506,10 @@
 
       var tdItem = textCell('item', 'item-cell');
       var tdUnit = numCell('unit', '1');
-      var tdQty = numCell('qty', '1');
+      // Three decimals rather than whole cases: a third of a case and a
+      // per-head figure divided out are both ordinary, and the column keeps
+      // them.
+      var tdQty = numCell('qty', '0.001', toQty);
 
       var tdTotal = document.createElement('td');
       tdTotal.className = 'calc strong';
