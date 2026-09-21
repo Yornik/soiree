@@ -1036,6 +1036,57 @@ a.files-name { text-decoration: underline; text-underline-offset: 2px; }
 .files-foot .pop-note { border-top: 0; margin-top: 2px; }
 .files-add { width: 100%; }
 
+/* --- Vendor and decide-by ---
+   The same trick as the paperclip, in the same frozen cell and for the same
+   reason: the grid is full. Its nine columns are measured against the width
+   of the page, so a vendor column and a date column can only come out of the
+   remark and the money, and the button costs neither. */
+.det-btn {
+  appearance: none;
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  z-index: 1;
+}
+.det-btn:hover, .det-btn:focus-visible, .det-btn[aria-expanded="true"] { color: var(--ink); background: var(--tint); }
+.det-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+/* Filled in at full strength, empty only an offer: the paperclip's rule. */
+.det-btn.has-some { color: var(--ink); }
+/* A decision that should have been made by now, in the alarm colour a late
+   task wears: the two deadlines on this page are read for the same reason.
+   The name on the button says it too, for anyone not reading the colour. */
+table.budget tbody tr.late .det-btn { color: var(--alarm); }
+/* The field gives up the width the button takes rather than running under it,
+   and gives up both when the line also carries files. */
+table.budget td.item-cell textarea { width: calc(100% - 30px); }
+table.budget td.item-cell.has-files textarea { width: calc(100% - 70px); }
+table.budget td.item-cell.has-files .det-btn { right: 34px; }
+
+.det-pop { width: min(260px, calc(100vw - 16px)); }
+/* Stacked rather than beside its name, which is what the checkbox rule this
+   inherits from would give it: a date field is as wide as a date. */
+.det-pop .det-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 7px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.det-pop .det-field input { font-size: 13.5px; color: var(--ink); }
+
 .sp-pop .pop-note {
   font-size: 12px;
   color: var(--ink-2);
@@ -1124,7 +1175,7 @@ body.is-archived input:hover,
 body.is-archived select:hover,
 body.is-archived textarea:hover { border-color: transparent; }
 body.is-archived input, body.is-archived textarea, body.is-archived select { color: var(--ink-2); }
-body.is-archived .by-btn { color: var(--ink-2); cursor: default; }
+body.is-archived .by-btn, body.is-archived .det-btn { color: var(--ink-2); cursor: default; }
 body.is-archived .flag textarea { border-color: transparent; resize: none; }
 body.is-archived .ghost-btn:disabled { opacity: 0.45; cursor: default; }
 body.is-archived .ghost-btn:disabled:hover { color: var(--ink-2); border-color: var(--rule-mid); }
@@ -1234,6 +1285,14 @@ body.is-archived .when-data { display: block; }
   /* A step above the 16px floor the touch block gives every other field, so
      the item still leads the entry rather than merely matching it. */
   table.budget td.item-cell textarea { font-size: 18px; font-weight: 600; }
+  /* The vendor-and-date button is the last thing on the line the item leads,
+     not a mark over it. It cannot stay where it sits on a desk: this cell is
+     out of the frozen column here and is no longer a containing block, so an
+     absolutely placed button would land in the same corner of the panel for
+     every line, one on top of the next. Written to outrank the touch block
+     below, which a phone matches too. */
+  table.budget tbody td.item-cell .det-btn { position: static; }
+  table.budget tbody td.item-cell textarea { width: auto; flex: 1 1 auto; }
   table.budget textarea { height: auto; min-height: 44px; }
   table.budget tbody td.calc { padding: 2px 0; }
   table.budget td.empty-cell { display: block; min-height: 0; padding: 18px 0; }
@@ -1336,6 +1395,17 @@ body.is-archived .when-data { display: block; }
   .del-btn { min-width: 44px; min-height: 44px; }
   .files-btn { min-width: 44px; height: 44px; top: 0; right: 0; justify-content: center; }
   td.has-files textarea, td.has-files input[type="text"] { width: calc(100% - 48px); }
+  /* A thumb's worth of button, and the name gives up the width for it. This
+     block is also the one a touchscreen laptop matches at full width, where
+     the grid is still a grid, so the reservation belongs here rather than
+     with the stacking. */
+  .det-btn { min-width: 44px; height: 44px; }
+  table.budget td.item-cell textarea { width: calc(100% - 48px); }
+  table.budget td.item-cell.has-files textarea { width: calc(100% - 96px); }
+  table.budget td.item-cell.has-files .det-btn { right: 48px; }
+  /* The item leads its entry and the fields below it carry labels of their
+     own, so the popup's do not need the small print they get on a desk. */
+  .det-pop .det-field { font-size: 13px; }
   .tab-btn { padding: 14px 2px; }
   .pill, .add-row-btn, .ghost-btn { padding: 13px 16px; }
   .by-btn { min-height: 44px; }
@@ -1639,7 +1709,8 @@ body.role-viewer #plannerWrap textarea:hover { border-color: transparent; }
 body.role-viewer #plannerWrap input,
 body.role-viewer #plannerWrap textarea,
 body.role-viewer #plannerWrap select { color: var(--ink-2); }
-body.role-viewer #plannerWrap .by-btn { color: var(--ink-2); cursor: default; }
+body.role-viewer #plannerWrap .by-btn,
+body.role-viewer #plannerWrap .det-btn { color: var(--ink-2); cursor: default; }
 body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize: none; }
 
 @media screen and (max-width: 720px) {
@@ -1790,6 +1861,7 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   .add-row-btn,
   .del-btn,
   .files-btn,
+  .det-btn,
   .col-grip,
   .row-grip,
   .archive-note .ghost-btn { display: none; }
@@ -1909,6 +1981,11 @@ body.role-viewer #plannerWrap .flag textarea { border-color: transparent; resize
   table.budget thead th:first-child,
   table.budget tbody td.item-cell,
   table.budget tfoot th { position: static; box-shadow: none; }
+  /* The buttons in that cell are not on the sheet, so the name takes the
+     gutter back: the shares above were measured for a column with the whole
+     of it. */
+  table.budget td.item-cell textarea,
+  table.budget td.item-cell.has-files textarea { width: 100%; }
   /* Narrower columns wrap a name onto more lines than the height app.js
      measured on screen, and a field in a tab that was never shown has no
      measured height at all. Where the browser can size a field to its text we

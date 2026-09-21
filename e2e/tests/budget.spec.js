@@ -10,7 +10,10 @@
  * claims to be.
  */
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, addSponsor, budgetRow, expectFigures, gotoTab, money, openPlanner, tagLine } = require('./helpers');
+const {
+  addBudgetLine, addSponsor, budgetRow, expectFigures, flushToStorage, gotoTab, money,
+  openLineDetails, openPlanner, tagLine,
+} = require('./helpers');
 const { BASE_URL } = require('../servers');
 
 test.beforeEach(async ({ page }) => {
@@ -223,6 +226,96 @@ test('a line paid to the cent is settled, not a rounding error short', async ({ 
   await expect(row.outstanding).not.toHaveClass(/owing/);
   await expect(page.locator('#sumOwing')).toHaveText('€0');
   await expect(page.locator('#sumOwingAlt')).toHaveText('€0');
+});
+
+/*
+ * The decide-by date is not the date the money moves: a quote expires or a
+ * slot goes, and the line is late for that decision until something is paid
+ * against it. The reminder digest reads the column by exactly that rule
+ * (internal/reminders/digest.go), so the row on screen and the mail say the
+ * same thing about the same line.
+ */
+test('a decide-by date that has gone by marks the line, until something is paid', async ({ page }) => {
+  const row = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 0 });
+
+  const details = await openLineDetails(row);
+  await details.vendor.fill('The Orangery');
+  await details.lockBy.fill('2020-01-01');
+  await expect(row.row).toHaveClass(/late/);
+  // The row says it where the row has room to: on the button the two fields
+  // are behind, whose name carries it for anyone not reading the colour.
+  await expect(row.details).toHaveAttribute('aria-label', 'Vendor and decide-by date (late)');
+
+  await page.keyboard.press('Escape');
+  await expect(details.pop).toHaveCount(0);
+
+  // Money against the line is the decision having been made, and it is typed
+  // out here rather than in the popup: the marker has to move with the row,
+  // not only with the field that set it.
+  await row.paid.fill('500');
+  await expect(row.row).not.toHaveClass(/late/);
+  await expect(row.details).toHaveAttribute('aria-label', 'Vendor and decide-by date');
+
+  // A date still ahead is not late at all.
+  await row.paid.fill('0');
+  const again = await openLineDetails(row);
+  await again.lockBy.fill('2099-01-01');
+  await expect(row.row).not.toHaveClass(/late/);
+
+  // And both are part of the line like every other field, kept in this
+  // browser with the rest of it.
+  await flushToStorage(page);
+  await page.reload();
+  await gotoTab(page, 'budget');
+  const kept = await openLineDetails(budgetRow(page, 0));
+  await expect(kept.vendor).toHaveValue('The Orangery');
+  await expect(kept.lockBy).toHaveValue('2099-01-01');
+});
+
+/*
+ * Why those two fields are behind a button rather than in columns of their
+ * own, kept honest.
+ *
+ * DEFAULT_COL_WIDTHS adds up to the width of the page, so a tenth and an
+ * eleventh column can only be paid for out of the nine that are there, and
+ * the ones with width to give are the remark and the money. This is what not
+ * taking it bought, and it is measured rather than asserted by eye: an amount
+ * that fits its field, and a remark of five words on one line.
+ */
+test('the grid keeps the width a five-figure amount and a five-word remark need', async ({ page }) => {
+  const row = await addBudgetLine(page, {
+    item: 'Venue deposit', unit: 12500, qty: 1, paid: 12500, note: 'Balance due one month before',
+  });
+  const fits = await row.paid.evaluate((el) => el.scrollWidth <= el.clientWidth);
+  expect(fits).toBe(true);
+
+  // An empty remark on the line below is what one line measures, so the test
+  // does not have a pixel height of its own to go stale.
+  const blank = await addBudgetLine(page, { item: 'Flowers', unit: 300, qty: 1, paid: 0 });
+  const oneLine = await blank.note.evaluate((el) => el.scrollHeight);
+  expect(await row.note.evaluate((el) => el.scrollHeight)).toBe(oneLine);
+});
+
+/*
+ * A touchscreen laptop answers yes to (pointer: coarse) at a width where the
+ * grid is still a grid, and the suite's other browsers never do. That is why
+ * the rule giving the button a thumb's worth of target and the rules that
+ * unwind the entry on a phone are in different media blocks: applied here,
+ * the stacking put the button on a line of its own inside the cell and made
+ * every line 44px taller.
+ */
+test.describe('on a touchscreen at desk width', () => {
+  test.use({ hasTouch: true });
+
+  test('the button sits beside the item name, not under it', async ({ page }) => {
+    const row = await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 0 });
+    const name = await row.item.boundingBox();
+    const btn = await row.details.boundingBox();
+
+    // Beside: on the same line as the name, and clear of its right edge.
+    expect(btn.y).toBeLessThan(name.y + name.height);
+    expect(name.x + name.width).toBeLessThanOrEqual(btn.x);
+  });
 });
 
 test('a figure with cents is a valid figure, not one the browser calls invalid', async ({ page }) => {

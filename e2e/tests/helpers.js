@@ -63,7 +63,24 @@ function budgetRow(page, index) {
     outstanding: row.locator('td').nth(5),
     by: row.locator('td').nth(6).locator('button.by-btn'),
     note: row.locator('td').nth(7).locator('textarea'),
+    details: row.locator('td').nth(0).locator('button.det-btn'),
     remove: row.locator('td').nth(8).locator('button'),
+  };
+}
+
+/**
+ * Opens the vendor and decide-by popup on a line and returns its two fields.
+ * They are not columns: the nine the grid has are measured against the width
+ * of the page, so these live behind a button in the first cell.
+ */
+async function openLineDetails(row) {
+  await row.details.click();
+  const pop = row.row.page().locator('.det-pop');
+  await expect(pop).toBeVisible();
+  return {
+    pop,
+    vendor: pop.locator('input[type="text"]'),
+    lockBy: pop.locator('input[type="date"]'),
   };
 }
 
@@ -493,6 +510,7 @@ module.exports = {
   flushToStorage,
   gotoTab,
   money,
+  openLineDetails,
   openPlanner,
   readSplit,
   readStored,
