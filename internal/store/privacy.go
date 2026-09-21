@@ -360,7 +360,8 @@ type ErasureResult struct {
 // takes them with the account, by cascade. And none of the statements below
 // announces itself: only insertChange issues the notification, so another
 // browser shows the old name until it reloads, and its next edit to the row is
-// refused with a 409 because every statement here bumps the revision.
+// refused with a 409 because every statement that rewrites a row bumps the
+// revision.
 //
 // # No revision check
 //
