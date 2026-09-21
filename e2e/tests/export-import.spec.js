@@ -19,7 +19,10 @@
  */
 const fs = require('fs/promises');
 const { test, expect } = require('@playwright/test');
-const { addBudgetLine, addSponsor, addTask, expectFigures, gotoTab, openPlanner, readSplit, tagLine } = require('./helpers');
+const {
+  addBudgetLine, addSponsor, addTask, budgetRow, expectFigures,
+  gotoTab, openPlanner, readSplit, readStored, tagLine,
+} = require('./helpers');
 
 async function buildPlanner(page) {
   await openPlanner(page);
@@ -271,4 +274,50 @@ test('an import whose copy cannot be saved replaces nothing', async ({ page }, t
   await expect(page.locator('#ceilingInput')).toHaveValue('10000');
   await expect(page.locator('#budgetBody tr')).toHaveCount(2);
   await expectFigures(page, { committed: 4000, paid: 500, outstanding: 3500, forecast: 4160 });
+});
+
+/*
+ * A file written by hand, or trimmed out of a bigger one, is the case the
+ * repair at startup was written for — its comment says so. The import path
+ * repaired a shorter list of its own, and the two had drifted: a row with no
+ * id is drawn like every other row and skipped by everything that syncs, so on
+ * a deployment with a database it reaches nobody and is gone at the next
+ * reload. Both paths now make the same repair.
+ */
+test('a hand-edited file is repaired on the way in, as an older save is on the way up', async ({ page }, testInfo) => {
+  await buildPlanner(page);
+
+  const file = testInfo.outputPath('hand-edited.json');
+  await fs.writeFile(
+    file,
+    JSON.stringify({
+      ceiling: 'not a number',
+      sponsors: [{ code: 'Rose', name: 'Ada' }],
+      budgetItems: [{ item: 'Venue deposit', unit: 2000, qty: 1, paid: 500, sponsors: ['ghost'], note: '' }],
+      tasks: [{ name: 'Confirm the numbers', owner: 'Ada', due: '', status: 'not-started' }],
+      notes: [{ text: 'brought in by hand' }],
+    }),
+  );
+
+  watchDialogs(page, 'accept');
+  const chooserPromise = page.waitForEvent('filechooser');
+  await page.locator('#importData').click();
+  await (await chooserPromise).setFiles(file);
+  await expect(page.locator('#dataMsg')).toHaveText(/^Imported /);
+
+  const stored = await readStored(page);
+  // An id for every row, in all four collections rather than the two the
+  // startup repair used to cover.
+  expect(stored.sponsors[0].id).toMatch(/\S/);
+  expect(stored.budgetItems[0].id).toMatch(/\S/);
+  expect(stored.tasks[0].id).toMatch(/\S/);
+  expect(stored.notes[0].id).toMatch(/\S/);
+  // The attribution to a sponsor the file does not contain is dropped, not
+  // carried in to be sent to a server that would refuse the whole line.
+  expect(stored.budgetItems[0].sponsors).toEqual([]);
+  await gotoTab(page, 'budget');
+  await expect(budgetRow(page, 0).by).toHaveText('Unassigned');
+  // And a ceiling that is not a number is the deployment's default again.
+  expect(typeof stored.ceiling).toBe('number');
+  await expect(page.locator('#ceilingInput')).toHaveValue('');
 });

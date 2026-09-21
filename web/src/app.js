@@ -285,6 +285,7 @@
       'd.carried': 'Changes made in this browser that had not reached the server: {n}. They are going up now.',
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
       'd.session': 'Your session has ended. Sign in again — what you changed is safe in this browser and is sent as soon as you are back.',
+      'd.nostorage': 'This browser is not keeping your changes. Export the planner before you close this tab.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
       'ar.reopen': 'Reopen for editing',
       'ar.open': 'Reopened for editing. Close it again once everything is settled.',
@@ -446,6 +447,7 @@
       'd.carried': 'Wijzigingen in deze browser die de server niet hadden bereikt: {n}. Ze worden nu verstuurd.',
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
       'd.session': 'Je sessie is verlopen. Meld je opnieuw aan — je wijzigingen staan veilig in deze browser en worden verstuurd zodra je terug bent.',
+      'd.nostorage': 'Deze browser bewaart je wijzigingen niet. Exporteer de planner voordat je dit tabblad sluit.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
       'ar.reopen': 'Heropenen om te bewerken',
       'ar.open': 'Weer opengesteld. Sluit de planner zodra alles is afgerekend.',
@@ -606,6 +608,7 @@
       'd.carried': 'Perubahan di browser ini yang belum sampai ke server: {n}. Semuanya dikirim sekarang.',
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
       'd.session': 'Sesimu sudah berakhir. Masuk lagi — perubahanmu aman tersimpan di browser ini dan dikirim begitu kamu kembali.',
+      'd.nostorage': 'Browser ini tidak menyimpan perubahanmu. Ekspor perencana sebelum kamu menutup tab ini.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
       'ar.reopen': 'Buka lagi untuk diubah',
       'ar.open': 'Dibuka lagi untuk diubah. Tutup lagi setelah semuanya beres.',
@@ -959,7 +962,7 @@
    * the three methods below and leave the rest of the file alone.
    *
    *   Store.read()       -> what was saved, or null if nothing was yet
-   *   Store.write(state) -> persist the whole state object
+   *   Store.write(state) -> persist the whole state; false if it was refused
    *   Store.keep()       -> persist it again, because the merge base moved
    *
    * save() is debounced, so the write path is already async-shaped: that is
@@ -986,6 +989,12 @@
    * two writes are two moments, and a state paired on the next load with a
    * base another tab wrote differs from it in ways neither of them edited.
    * ------------------------------------------------------------------ */
+  // Whether the last write got through. A browser that refuses site data for
+  // the origin throws on every setItem, and with no database that write is the
+  // planner: swallowing it left the page looking saved and keeping nothing.
+  // See reportStorage().
+  var storageOk = true;
+
   var Store = {
     key: STORAGE_KEY,
     read: function () {
@@ -995,10 +1004,11 @@
       } catch (e) { return null; }
     },
     write: function (s) {
-      this.put(s);
+      var kept = this.put(s);
       // A no-op until the probe has found an API, so the local-only
       // deployment never touches the network again after it.
       Sync.push();
+      return kept;
     },
     // The base moved with nobody typing: a write was confirmed, or a plan was
     // merged. Kept at once rather than at the next save, because the state and
@@ -1015,7 +1025,13 @@
       var value = shadow
         ? { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys, createBodies: createBodies }
         : s;
-      try { localStorage.setItem(this.key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
+      try {
+        localStorage.setItem(this.key, JSON.stringify(value));
+        storageOk = true;
+      } catch (e) {
+        storageOk = false;
+      }
+      return storageOk;
     },
     clear: function () {
       try { localStorage.removeItem(this.key); } catch (e) { /* storage unavailable */ }
@@ -1052,32 +1068,48 @@
     state = emptyState();
   }
 
-  // Normalise anything missing or malformed, whether from an older save or a
-  // hand-edited import.
-  (function normalise() {
+  /* Normalise anything missing or malformed, whether from an older save or a
+   * hand-edited import. A function rather than the run-once block this used to
+   * be, because the import is the other way in and had grown a shorter repair
+   * of its own beside it. The two had drifted, and the drift was not cosmetic:
+   * a row with no id is drawn like every other row and skipped by everything
+   * that syncs, so an imported one reaches nobody and is replaced by the
+   * server's plan at the next load. One rule, one place, both ways in.
+   */
+  function normalise(s) {
     var base = emptyState();
-    if (!Array.isArray(state.budgetItems)) state.budgetItems = [];
-    if (!Array.isArray(state.tasks)) state.tasks = [];
-    if (!Array.isArray(state.sponsors)) state.sponsors = [];
-    if (!Array.isArray(state.notes)) state.notes = [];
-    if (typeof state.ceiling !== 'number') state.ceiling = base.ceiling;
-    if (typeof state.inflationPct !== 'number') state.inflationPct = 0;
-    if (typeof state.fxRate !== 'number') state.fxRate = 0;
-    if (typeof state.splitEvenly !== 'boolean') state.splitEvenly = false;
-    if (typeof state.reopened !== 'boolean') state.reopened = false;
-    if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) {
-      state.colWidths = DEFAULT_COL_WIDTHS.slice();
+    if (!Array.isArray(s.budgetItems)) s.budgetItems = [];
+    if (!Array.isArray(s.tasks)) s.tasks = [];
+    if (!Array.isArray(s.sponsors)) s.sponsors = [];
+    if (!Array.isArray(s.notes)) s.notes = [];
+    if (typeof s.ceiling !== 'number') s.ceiling = base.ceiling;
+    if (typeof s.inflationPct !== 'number') s.inflationPct = 0;
+    // `eurRate` is what this field was called before the currency became a
+    // setting. No released build has ever written it, so it is here for a file
+    // kept by hand from a copy that predates the name.
+    if (typeof s.fxRate !== 'number') s.fxRate = Number(s.eurRate) || 0;
+    if (typeof s.splitEvenly !== 'boolean') s.splitEvenly = false;
+    if (typeof s.reopened !== 'boolean') s.reopened = false;
+    if (!Array.isArray(s.colWidths) || s.colWidths.length !== DEFAULT_COL_WIDTHS.length) {
+      s.colWidths = DEFAULT_COL_WIDTHS.slice();
     }
-    if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
-    state.budgetItems.forEach(function (i) {
+    if (!s.rowHeights || typeof s.rowHeights !== 'object') s.rowHeights = {};
+    // Sponsors first: the attribution filter below keeps the ids they have by
+    // then, and one minted after it would have every line stripped off it.
+    s.sponsors.forEach(function (sp) { if (!sp.id) sp.id = uid('s'); });
+    s.tasks.forEach(function (k) { if (!k.id) k.id = uid('t'); });
+    s.budgetItems.forEach(function (i) {
       if (!i.id) i.id = uid('b');
       if (!Array.isArray(i.sponsors)) i.sponsors = [];
       i.sponsors = i.sponsors.filter(function (id) {
-        return state.sponsors.some(function (s) { return s.id === id; });
+        return s.sponsors.some(function (sp) { return sp.id === id; });
       });
     });
-    state.notes.forEach(function (n) { if (!n.id) n.id = uid('n'); });
-  })();
+    s.notes.forEach(function (n) { if (!n.id) n.id = uid('n'); });
+    return s;
+  }
+
+  state = normalise(state);
 
   // The planner exactly as this page found it, before anybody touched it. When
   // the plan arrives late — after a sign-in, on a tab reopened a week on — this
@@ -2063,7 +2095,10 @@
         return;
       }
       // 404 is final: with no database those paths are never registered.
-      if (res.status === 404) { connecting = false; noLongerAway(); announceAPI(false); return; }
+      // Reported here as well as on every write: this is the moment it becomes
+      // true that nothing else is keeping the planner, and a person who typed
+      // once and stopped would otherwise not be told until they typed again.
+      if (res.status === 404) { connecting = false; noLongerAway(); announceAPI(false); reportStorage(); return; }
       // 401 is not "no API" — it is an API that wants a session. Falling back
       // to localStorage here would be the worst of both: edits would look
       // saved, live in this browser only, and never reach the plan everybody
@@ -2258,14 +2293,44 @@
   window.soiree = window.soiree || {};
   window.soiree.beforeSignOut = beforeSignOut;
 
-  // Another tab signed out. This one still holds the plan in memory and would
-  // write it straight back the next time it saved or was closed, so it lets go
-  // of it too, and asks auth.js to look at the session — which is gone.
+  /* Another tab wrote the key, or removed it.
+   *
+   * Removed is a sign-out. This tab still holds the plan in memory and would
+   * write it straight back the next time it saved or was closed, so it lets go
+   * of it too, and asks auth.js to look at the session — which is gone.
+   *
+   * Written is another tab saving. With a database that settles itself: the
+   * server is the planner and the stream says what changed. With none, the key
+   * is the planner and each tab writes the whole of it, so what the other tab
+   * saved is simply what there now is, and going on drawing the copy it
+   * replaced is how work disappears without either tab saying anything.
+   *
+   * On the latched 404 only, and `apiMode` is not that question: it is also
+   * false on a deployment that has an API before the first plan arrives,
+   * during a 401 hold, and after a sign-out — and drawing another tab's cached
+   * ledger is the wrong answer to every one of those.
+   *
+   * Not while this tab has a keystroke of its own inside the debounce, either:
+   * that write is the newer one and is about to land.
+   */
   window.addEventListener('storage', function (e) {
-    if (!e || e.key !== STORAGE_KEY || e.newValue !== null || forgotten) return;
-    if (apiMode) haltSync();
-    forgetPlan();
-    doubtSession();
+    if (!e || e.key !== STORAGE_KEY || forgotten) return;
+    if (e.newValue === null) {
+      if (apiMode) haltSync();
+      forgetPlan();
+      doubtSession();
+      return;
+    }
+    if (!(window.soiree && window.soiree.apiAvailable === false) || saveTimer) return;
+    var incoming;
+    try { incoming = JSON.parse(e.newValue); } catch (err) { return; }
+    if (!incoming || typeof incoming !== 'object') return;
+    // A page that had a merge base wrote the state inside a wrapper, which no
+    // local-only one does. Read the way Store.read has to read it anyway.
+    if (incoming.state && incoming.shadow) incoming = incoming.state;
+    state = normalise(incoming);
+    loaded = JSON.parse(JSON.stringify(state));
+    renderAll();
   });
 
   // The digest is pushed to active admins and to nobody else (the store's
@@ -2732,6 +2797,7 @@
     // writing the empty planner back would only put the key there again.
     if (forgotten) return;
     Store.write(state);
+    reportStorage();
   }
   function save() {
     forgotten = false;
@@ -2742,10 +2808,82 @@
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
   }
-  window.addEventListener('pagehide', flushSave);
+  /* A browser that keeps nothing has to say so. With no database behind it
+   * that write is the planner rather than a cache in front of one, so a
+   * setItem the browser refuses — site data blocked for the origin, or no room
+   * left — means the evening's work exists until the tab closes and no longer,
+   * while the page goes on looking saved.
+   *
+   * Held until the origin has answered 404. `apiMode` is not the question:
+   * before the first plan arrives, and during a 401 hold, it is false on a
+   * deployment whose planner is on a server, where the same failed write costs
+   * only the copy that paints first. Told to export, because with no server
+   * there is nowhere else for it to go.
+   */
+  function reportStorage() {
+    if (!(window.soiree && window.soiree.apiAvailable === false)) return;
+    if (!storageOk) setSticky(t('d.nostorage'));
+    else if (stickyMsg === t('d.nostorage')) setSticky('');
+  }
+
+  /* Leaving carries only what this tab has not written yet.
+   *
+   * flushSave() writes the whole state, and in the deployment with no database
+   * the key is the planner: a tab that was merely looked at and switched away
+   * from wrote its own copy over whatever another tab had saved meanwhile, and
+   * the last one hidden or closed won. A pending debounce is the whole of what
+   * "this tab is holding something" means — save() arms it on every mutation,
+   * flushSave() disarms it — so with none there is nothing here to keep and
+   * writing can only take something away.
+   */
+  function leaving() {
+    if (saveTimer) flushSave();
+  }
+
+  /* Coming back to a tab that was left open.
+   *
+   * Nothing between renders reads the clock, and a planner left open is the
+   * ordinary case here rather than the odd one: the page asks to be installed,
+   * and a reminder tapped on the home screen focuses the window that is
+   * already there instead of loading a new one. applyMode() re-reckons the
+   * day, the run-up and the archive lock together, and it is the same call
+   * every plan merge already makes, so nothing new can come of it.
+   *
+   * `now` is for the cases where the absence cannot be measured: the browser's
+   * word that the network is back, and a page restored from the back/forward
+   * cache.
+   */
+  var RESUME_RESYNC_MS = 45000;
+  var hiddenAt = 0;
+
+  function resumed(now) {
+    var away = hiddenAt ? Date.now() - hiddenAt : 0;
+    hiddenAt = 0;
+    applyMode();
+    if (!apiMode || sessionGone) return;
+    // A retry is waiting out a backoff measured against an origin that may
+    // well be reachable again, and runResync() defers itself for as long as
+    // that timer is booked. Cleared rather than reset: the failure count
+    // stays where it is, so the wait resumes if the origin is still away.
+    if (Sync.timer) { clearTimeout(Sync.timer); Sync.timer = null; Sync.run(); }
+    // Only after a real absence. A sleep or a network change can leave the
+    // event stream half-open with no error either side sees, and then this is
+    // the only thing that asks; an alt-tab has no such gap to close, and would
+    // cost a whole-plan read from wherever the origin is.
+    if (now || away > RESUME_RESYNC_MS) scheduleResync();
+  }
+
+  window.addEventListener('pagehide', leaving);
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'hidden') flushSave();
+    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); leaving(); return; }
+    resumed(false);
   });
+  // Restored from the back/forward cache: the document was never torn down, so
+  // it is as far behind as one that was merely hidden, and further.
+  window.addEventListener('pageshow', function (e) { if (e && e.persisted) resumed(true); });
+  // connect() has an 'online' listener of its own for the probe it is still
+  // waiting on. This is the other half: a planner that is already running.
+  window.addEventListener('online', function () { resumed(true); });
 
   /* ---------- Money formatting ----------
    * Formatters are built once. Intl.NumberFormat construction is expensive
@@ -5222,13 +5360,11 @@
         // this browser. Everybody else saw an empty plan.
         forgotten = false;
         dirty = true;
-        state = incoming;
-        if (!Array.isArray(state.sponsors)) state.sponsors = [];
-        if (!Array.isArray(state.notes)) state.notes = [];
-        if (!Array.isArray(state.colWidths) || state.colWidths.length !== 9) state.colWidths = DEFAULT_COL_WIDTHS.slice();
-        if (!state.rowHeights || typeof state.rowHeights !== 'object') state.rowHeights = {};
-        if (typeof state.fxRate !== 'number') state.fxRate = Number(state.eurRate) || 0;
-        if (typeof state.reopened !== 'boolean') state.reopened = false;
+        // The same repair the startup path makes, rather than a shorter one
+        // written out again here. A hand-edited file is exactly what both are
+        // for, and the one thing the copy beside it never did was give a row
+        // an id — which is what everything that syncs goes by.
+        state = normalise(incoming);
         flushSave();
         renderAll();
         flash(t('d.imported', { a: f.name }));

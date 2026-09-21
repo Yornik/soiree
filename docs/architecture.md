@@ -153,14 +153,23 @@ All persistence in `web/src/app.js` goes through one object:
 
 ```js
 Store.read()        // -> what was saved, or null if nothing was yet
-Store.write(state)  // persist the whole state object
+Store.write(state)  // persist the whole state object; false if it was refused
 Store.keep()        // persist it again, because the merge base moved
 ```
 
 Nothing else touches `localStorage`. `save()` wraps `Store.write` and is
-debounced by 500 ms, flushed on `pagehide` and on `visibilitychange`. That seam
-is what let the network be added behind it without touching any of the ~28
+debounced by 500 ms, flushed on `pagehide` and on `visibilitychange` — but only
+where a debounce is actually pending, because the write is the whole state and
+a tab that has typed nothing has nothing to add to what is already there. That
+seam is what let the network be added behind it without touching any of the ~28
 mutation sites: they call `save()` and know nothing about where the state goes.
+
+A `setItem` the browser refuses is answered rather than swallowed. Site data
+blocked for the origin throws on every write, and in the deployment with no
+database that write is the planner: the page used to carry on looking saved and
+keep nothing at all. Once the origin's `404` says there is no server either,
+the status line says so and asks for an export, and takes it back when a write
+gets through again.
 
 ### Two modes, decided once at startup
 
@@ -216,7 +225,10 @@ never asked about twice.
 
 - **No API.** `localStorage` is the planner. One browser, one copy, no network
   after the probe. A self-hoster without Postgres, and `docker run` with no
-  arguments, both land here and both work.
+  arguments, both land here and both work. One copy means one copy between the
+  tabs too: each holds the whole state and each save writes the whole of it, so
+  a tab that hears another one save reads what is now there rather than going
+  on drawing what it replaced — see the `storage` event below.
 - **API.** The server is the planner. `localStorage` stays as the cached copy
   that paints before the plan arrives, plus the handful of fields that have no
   column behind them, plus the shadow that copy was last agreed against — see
@@ -225,6 +237,26 @@ never asked about twice.
 `localStorage` is written synchronously and *first* in both modes. `pagehide`
 has no time to wait on a promise, and the whole point of a deferred write is
 that the round trip is not on the interaction path.
+
+### A tab that was left open
+
+The page asks to be installed, and a reminder tapped on the home screen focuses
+the window that is already there rather than loading a new one, so a planner
+open for days is the ordinary case. Nothing between renders reads the clock: a
+tab open across midnight kept yesterday's "days to go", and the day after the
+event it did not close the ledger. So `visibilitychange` to visible, a
+`pageshow` from the back/forward cache and the browser's `online` all call
+`applyMode()`, which re-reckons the day, the run-up and the archive lock
+together and is the same call every plan merge already makes.
+
+Where there is a database they also catch the page up. A pending write retry is
+brought forward — cleared first, because the resync defers itself for as long
+as that timer is booked, and without resetting the failure count, so the wait
+resumes if the origin is still away — and after an absence of more than 45
+seconds the plan is re-read. Most sleeps and network changes end with the
+browser noticing the dead socket and reconnecting, and every connection opens
+with a `resync`; the case this covers is the socket that is half-open, where
+`onerror` never fires and the heartbeat is a comment no script can see.
 
 ### Signing out forgets the plan
 
@@ -236,6 +268,15 @@ server's plan rather than a merge against a shadow of something it no longer
 holds. Other tabs of the same browser hear about it through the `storage` event
 and let go as well; otherwise the first one to save would write it straight
 back.
+
+The same listener answers the other thing that event reports, a tab that
+*wrote* the key. With a database that settles itself and is ignored here: the
+server is the planner and the stream says what changed. With none it is adopted
+— parsed, normalised and drawn — because the key is the planner, and the tab
+that wrote it last is simply what there now is. On the latched `404` only, not
+on `apiMode`, which is also false before the first plan arrives and during a
+`401` hold; and not while this tab has a keystroke of its own inside the
+debounce, since that write is the newer one.
 
 It is the one action in the page that can destroy an edit, so it goes in a fixed
 order. `auth.js` asks `window.soiree.beforeSignOut()`, which flushes the
