@@ -856,6 +856,49 @@ paths:
         '500':
           $ref: '#/components/responses/LinkFailed'
 
+  /users/{id}/revoke-credentials:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    post:
+      tags: [accounts]
+      operationId: revokeCredentials
+      summary: Take away every way into an account.
+      description: |
+        An admin calls this after an account has been got into. It ends the
+        account's sessions, removes its passkeys and any registration in
+        flight, and spends whatever set-password link was outstanding.
+
+        This is wider than sending a fresh link, and that is the point.
+        Registering a passkey needs only a live session, so a credential
+        somebody else added from a borrowed one survives a new password, mints
+        a fresh session on every use, and comes back when a disabled account is
+        enabled again.
+
+        The password is left alone: the account is still its owner's to come
+        back to. Call `POST /users/{id}/invite` afterwards to let them set a
+        new one.
+
+        Nothing is reported about what was found. There is no admin view of
+        anybody's passkeys, and taking them all away needs none.
+
+        Not on your own account: your passkeys and sessions are yours to manage
+        from `GET /auth/passkeys` and `DELETE /auth/passkeys/{id}`.
+      responses:
+        '204':
+          description: Nothing is left to sign in with.
+        '400':
+          description: The account is your own (`self_change`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   ############################################################################
   # The plan
   ############################################################################

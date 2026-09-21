@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Session is one logged-in browser. TokenHash is the SHA-256 of the cookie's
@@ -88,6 +89,55 @@ func (s *Store) DeleteSessionByToken(ctx context.Context, tokenHash []byte) erro
 // change, a disable and a password reset all reduce to.
 func (s *Store) DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) (int64, error) {
 	return s.exec(ctx, "sessions", `DELETE FROM sessions WHERE user_id = $1`, userID)
+}
+
+// RevokeCredentials takes away everything an account can be signed in with:
+// its sessions, its passkeys, the registrations in flight, and every
+// set-password link still outstanding.
+//
+// Wider than a password reset, and for one reason. A reset ends the sessions
+// and leaves the passkeys, so a credential somebody else registered from a
+// borrowed session outlives it: nothing later revokes it, each login with it
+// mints a fresh session so the absolute cap never reaches it, and disabling
+// the account only parks it until somebody enables the account again. Before
+// this, removing one meant deleting the account.
+//
+// One transaction, because half of this is not a revocation at all: a session
+// that outlives the credentials could register a new passkey with what it
+// still holds, and an outstanding link that outlives the sessions is a way
+// back in for whoever has it.
+//
+// Links are consumed rather than deleted, the way IssuePasswordToken
+// supersedes them: a spent row is the only evidence a link existed, and an
+// account this was run on is looked into afterwards.
+//
+// The password is left alone, which is the difference between this and
+// disabling: what comes back is an account its owner can still log in to.
+func (s *Store) RevokeCredentials(ctx context.Context, userID uuid.UUID) error {
+	_, err := inTx(ctx, s, func(tx pgx.Tx) (struct{}, error) {
+		var done struct{}
+		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+			return done, fmt.Errorf("sessions: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM passkey_credentials WHERE user_id = $1`, userID); err != nil {
+			return done, fmt.Errorf("passkey_credentials: %w", err)
+		}
+		// A registration in flight is a passkey a minute from now. Only a
+		// registration has a user_id; a login ceremony is begun by nobody in
+		// particular and belongs to no account to revoke.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM passkey_challenges WHERE user_id = $1`, userID); err != nil {
+			return done, fmt.Errorf("passkey_challenges: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE password_tokens SET consumed_at = now()
+			  WHERE user_id = $1 AND consumed_at IS NULL`, userID); err != nil {
+			return done, fmt.Errorf("password_tokens: %w", err)
+		}
+		return done, nil
+	})
+	return err
 }
 
 // DeleteExpiredSessions removes sessions past their idle window or older than
