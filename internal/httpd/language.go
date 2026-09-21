@@ -8,7 +8,7 @@ import "strings"
 // database on purpose: which languages exist is a fact about the templates
 // compiled into this package, so this is the one place that can know.
 //
-// Adding one means adding it here, a case to inviteMessage, and a column to
+// Adding one means adding it here, a case to accountMail, and a column to
 // the tables in web/src/app.js and web/src/auth.js. A test holds the first two
 // together; the page's own tests hold the rest.
 var languages = []string{"en", "nl", "id"}

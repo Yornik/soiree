@@ -152,6 +152,10 @@ type AuthOptions struct {
 	// here: it is what a mail is written in when whoever asked for it did not
 	// say, which keeps the mail in step with the page its link opens.
 	Locale string
+
+	// EventName is what the mails say they are about. Empty is legal and
+	// falls back to wording that names nothing, the way the digest does.
+	EventName string
 }
 
 // Auth is the accounts, sessions and roles surface.
@@ -165,6 +169,9 @@ type Auth struct {
 	// defaultLanguage is the deployment's language, resolved once. See
 	// mailLanguage.
 	defaultLanguage string
+
+	// eventName is what the mails are about. See inviteMessage.
+	eventName string
 
 	loginIP         *limiter
 	loginAcct       *limiter
@@ -207,6 +214,7 @@ func NewAuth(o AuthOptions) *Auth {
 		trustProxy: o.TrustProxyHeaders,
 
 		defaultLanguage: languageOfLocale(o.Locale),
+		eventName:       o.EventName,
 
 		loginIP:         newLimiter(loginIPBurst, loginIPWindow),
 		loginAcct:       newLimiter(loginAcctBurst, loginAcctWindow),
@@ -545,7 +553,9 @@ func (a *Auth) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 		if user.Status == store.StatusInvited {
 			purpose = store.PurposeInvite
 		}
-		if _, err := a.issueToken(ctx, user, purpose, language); err != nil {
+		// Nobody to hand it to but the mailer: this is the anonymous route,
+		// and its link has no reader other than the address it is sent to.
+		if _, err := a.issueToken(ctx, user, purpose, language, false); err != nil {
 			a.log.Error("could not issue a reset link", "user", user.ID, "err", err)
 		}
 	})
@@ -670,14 +680,17 @@ type createUserRequest struct {
 	// admin typed once. Omitted or null, the mail is in the deployment's
 	// language.
 	Language *string `json:"language"`
+	// Deliver is who this one link is for. See chosenDelivery.
+	Deliver string `json:"deliver"`
 }
 
 // createUserResponse carries the new account, and the link when — and only
-// when — there is no mail to send it by.
+// when — the admin is the one who has to carry it.
 type createUserResponse struct {
 	User userDTO `json:"user"`
-	// SetPasswordURL is present only on a deployment with no SMTP. With a
-	// relay configured the link goes to the person it belongs to and nowhere
+	// SetPasswordURL is present on a deployment with no SMTP, and when an
+	// admin asked for the link instead of the mail. With a relay configured
+	// and nobody asking, it goes to the person it belongs to and nowhere
 	// else, because an admin who never sees it cannot use it.
 	SetPasswordURL string `json:"setPasswordUrl,omitempty"`
 	// MailSent says whether delivery was attempted, so the admin knows
@@ -713,6 +726,12 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Before the account exists, so that a misspelled delivery does not leave
+	// an address taken by a request that was refused.
+	toAdmin, ok := a.chosenDelivery(w, req.Deliver)
+	if !ok {
+		return
+	}
 
 	user, err := a.store.CreateUser(r.Context(), store.User{
 		Email:     email,
@@ -731,7 +750,7 @@ func (a *Auth) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	a.log.Info("account created", "user", user.ID, "role", user.Role, "by", actor.ID)
 
-	a.respondWithInvite(w, r, user, store.PurposeInvite, language, http.StatusCreated)
+	a.respondWithInvite(w, r, user, store.PurposeInvite, language, toAdmin, http.StatusCreated)
 }
 
 // handleInvite issues a fresh link for an existing account: the first one
@@ -769,12 +788,18 @@ func (a *Auth) handleInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	a.respondWithInvite(w, r, user, purpose, language, http.StatusOK)
+	toAdmin, ok := a.chosenDelivery(w, req.Deliver)
+	if !ok {
+		return
+	}
+	a.respondWithInvite(w, r, user, purpose, language, toAdmin, http.StatusOK)
 }
 
 type inviteRequest struct {
 	// Language is the language of this one mail. See createUserRequest.
 	Language *string `json:"language"`
+	// Deliver is who this one link is for. See chosenDelivery.
+	Deliver string `json:"deliver"`
 }
 
 // chosenLanguage reads the language an admin picked for a mail. Nil and true
@@ -793,9 +818,48 @@ func (a *Auth) chosenLanguage(w http.ResponseWriter, asked *string) (*string, bo
 	return &l, true
 }
 
+// chosenDelivery reads who an admin asked the link to go to. "mail", or
+// nothing at all, is the default and the one that sends it. "link" holds the
+// mail back and returns the link for the admin to carry.
+//
+// It exists because a mail a relay drops is a dead end: the invited person has
+// nothing, re-inviting sends the same mail down the same pipe, and until this
+// no route handed the link over. An admin could already reach the same place
+// by pointing the account at a mailbox of their own and re-inviting, which
+// yields the same link and records nothing about how it was got. So this is
+// the honest version of something that was possible anyway: explicit, asked
+// for, and logged.
+func (a *Auth) chosenDelivery(w http.ResponseWriter, asked string) (toAdmin, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(asked)) {
+	case "", "mail":
+		return false, true
+	case "link":
+		return true, true
+	}
+	writeError(w, http.StatusBadRequest, "invalid_deliver", "deliver must be mail or link")
+	return false, false
+}
+
 // respondWithInvite mints the link and decides who gets to see it.
-func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user store.User, purpose store.TokenPurpose, language *string, status int) {
-	link, err := a.issueToken(r.Context(), user, purpose, language)
+func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user store.User, purpose store.TokenPurpose, language *string, toAdmin bool, status int) {
+	// The half of the rule that is worth keeping. An account somebody is
+	// already using has a password, a session and a history in the activity
+	// log to impersonate, so its link goes to its owner and to nobody else;
+	// otherwise taking over a live account, another admin's included, would be
+	// a button. An account that has never set a password has none of those and
+	// is where the dead end actually is. Nothing to weigh when there is no
+	// relay: every link already comes back to the admin there.
+	//
+	// On the hash rather than on the status, which is close to the same answer
+	// and not the same fact: an admin may write a status, and an account moved
+	// back to invited keeps the password it had.
+	if toAdmin && a.mailer != nil && user.PasswordHash != nil {
+		writeError(w, http.StatusConflict, "account_active",
+			"a link for an account that has set a password goes to its owner by mail")
+		return
+	}
+
+	link, err := a.issueToken(r.Context(), user, purpose, language, toAdmin)
 	if err != nil {
 		a.log.Error("could not issue a set-password link", "user", user.ID, "err", err)
 		// The account exists; only the link failed. Say so rather than
@@ -805,23 +869,36 @@ func (a *Auth) respondWithInvite(w http.ResponseWriter, r *http.Request, user st
 		return
 	}
 
-	res := createUserResponse{User: toDTO(user), MailSent: a.mailer != nil}
-	if a.mailer == nil {
+	res := createUserResponse{User: toDTO(user), MailSent: a.mailer != nil && !toAdmin}
+	if a.mailer == nil || toAdmin {
 		// The documented degraded mode: no SMTP, so the admin passes the link
 		// on by hand. A deployment without mail is inconvenient, not broken.
+		// And the same by request, for the one case where the mail is the
+		// thing that failed.
 		res.SetPasswordURL = link
+	}
+	if toAdmin {
+		// The link itself is never logged. Who took one out is, because this
+		// is the one way a credential leaves here in somebody else's hands.
+		actor, _ := UserFrom(r.Context())
+		a.log.Info("account link issued to admin", "user", user.ID, "by", actor.ID)
 	}
 	writeJSON(w, status, res)
 }
 
 // issueToken records a single-use token and sends the link, returning it.
 //
-// The return value is a credential. It goes into a response only on the
-// no-SMTP path, and it is never logged anywhere.
+// The return value is a credential. It goes into a response on the no-SMTP
+// path and when an admin asked to carry it themselves, and it is never logged
+// anywhere.
+//
+// toAdmin holds the mail back: the caller is taking the link instead of
+// sending it, and two links where one was expected is one link nobody can
+// account for.
 //
 // language is whatever whoever asked for the mail said it should be in, or nil.
 // It shapes this mail and this link and is kept nowhere.
-func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.TokenPurpose, language *string) (string, error) {
+func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.TokenPurpose, language *string, toAdmin bool) (string, error) {
 	token, err := auth.NewToken()
 	if err != nil {
 		return "", err
@@ -836,8 +913,8 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 	}
 
 	link := a.setPasswordURL(token, language)
-	if a.mailer != nil {
-		subject, body := inviteMessage(purpose, link, a.mailLanguage(language))
+	if a.mailer != nil && !toAdmin {
+		subject, body := inviteMessage(purpose, link, a.mailLanguage(language), a.eventName, a.baseURL)
 		a.background(func(ctx context.Context) {
 			if err := a.mailer.Send(ctx, user.Email, subject, body); err != nil {
 				// The error, never the message. The body is the link.
@@ -874,43 +951,122 @@ func (a *Auth) setPasswordURL(token string, language *string) string {
 
 // inviteMessage composes the two mails this surface sends.
 //
-// Plain text and short: the link is the message. None of them names the event
-// or the admin who sent it, and a consequence worth keeping when editing them
-// is that a mail sent to a mistyped address tells a stranger nothing about
-// whose planner this is.
-func inviteMessage(purpose store.TokenPurpose, link, language string) (subject, body string) {
+// Plain text and short: the link is the message. They name the event, which
+// they deliberately did not until this was reversed. The old reasoning was
+// that a mail to a mistyped address should tell a stranger nothing about whose
+// planner this is; what it protected turned out to be nothing, because the
+// link's own hostname is in the mail and the page behind it hands the event's
+// name and date to any anonymous visitor, and the stranger is holding a
+// working credential besides. What the omission did cost was borne by the
+// person the mail was meant for, who had an unsigned account mail from an
+// unfamiliar domain to judge on twenty words and a tokenised URL. The digest
+// has named the event in its subject all along. The admin who sent it is still
+// deliberately unnamed.
+//
+// Only the invitation carries the line about an expired link. Whoever asked
+// for a reset has just used the control it points at.
+//
+// site is the deployment's own address, and it never goes in front of the
+// link: the first https:// in the body is how a reader, and every test here,
+// finds the thing to click.
+func inviteMessage(purpose store.TokenPurpose, link, language, eventName, site string) (subject, body string) {
+	m := accountMail(language, purpose)
+
+	subject, lede := m.subject, m.lede
+	if eventName != "" {
+		subject = fmt.Sprintf(m.subjectNamed, eventName)
+		lede = fmt.Sprintf(m.ledeNamed, eventName)
+	}
+	tail := m.tail
+	// Configuration refuses mail without a base URL, so an empty site is a
+	// caller inside this package rather than a deployment. Say nothing rather
+	// than point at nowhere.
+	if m.expired != "" && site != "" {
+		tail += " " + fmt.Sprintf(m.expired, site)
+	}
+	return subject, lede + "\n\n" + link + "\n\n" + tail + "\n"
+}
+
+// mailText is one language's wording for one of the two mails.
+//
+// The named halves take the event name and are what a deployment sends; the
+// bare ones are the fallback for a deployment that has emptied
+// SOIREE_EVENT_NAME, the way internal/reminders/render.go falls back for the
+// digest's subject. Adding a language means adding a case to accountMail, and
+// leaving a field empty there is caught by TestEveryLanguageHasItsOwnMails.
+type mailText struct {
+	subject, subjectNamed string // subjectNamed takes the event name
+	lede, ledeNamed       string // what stands above the link
+	tail                  string // what stands below it
+	expired               string // takes the site; the invitation only
+}
+
+func accountMail(language string, purpose store.TokenPurpose) mailText {
 	reset := purpose == store.PurposeReset
 	switch language {
 	case "nl":
 		if reset {
-			return "Stel een nieuw wachtwoord in",
-				"Iemand heeft gevraagd om een nieuw wachtwoord voor je account in te stellen.\n\n" +
-					link + "\n\nDe link werkt één keer en verloopt na 24 uur. " +
-					"Was jij dit niet, dan is er niets veranderd en kun je dit bericht negeren.\n"
+			return mailText{
+				subject:      "Stel een nieuw wachtwoord in",
+				subjectNamed: "%s: stel een nieuw wachtwoord in",
+				lede:         "Iemand heeft gevraagd om een nieuw wachtwoord voor je account in te stellen.",
+				ledeNamed:    "Iemand heeft gevraagd om een nieuw wachtwoord voor je account voor %s in te stellen.",
+				tail: "De link werkt één keer en verloopt na 24 uur. " +
+					"Was jij dit niet, dan is er niets veranderd en kun je dit bericht negeren.",
+			}
 		}
-		return "Je account staat klaar",
-			"Er is een account voor je aangemaakt. Kies hier een wachtwoord:\n\n" +
-				link + "\n\nDe link werkt één keer en verloopt na 24 uur.\n"
+		return mailText{
+			subject:      "Je account staat klaar",
+			subjectNamed: "%s: kies een wachtwoord",
+			lede:         "Er is een account voor je aangemaakt. Kies hier een wachtwoord:",
+			ledeNamed:    "Je bent toegevoegd aan de planner voor %s. Kies hier een wachtwoord:",
+			tail:         "De link werkt één keer en verloopt na 24 uur.",
+			expired: "Is de link verlopen, ga dan naar %s en kies " +
+				"\"Mail me een link om een nieuw wachtwoord in te stellen\"; " +
+				"je krijgt er dan een nieuwe op dit adres.",
+		}
 	case "id":
 		if reset {
-			return "Buat kata sandi baru",
-				"Seseorang meminta pembuatan kata sandi baru untuk akunmu.\n\n" +
-					link + "\n\nTautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam. " +
-					"Kalau ini bukan kamu, tidak ada yang berubah dan pesan ini bisa diabaikan.\n"
+			return mailText{
+				subject:      "Buat kata sandi baru",
+				subjectNamed: "%s: buat kata sandi baru",
+				lede:         "Seseorang meminta pembuatan kata sandi baru untuk akunmu.",
+				ledeNamed:    "Seseorang meminta pembuatan kata sandi baru untuk akunmu di %s.",
+				tail: "Tautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam. " +
+					"Kalau ini bukan kamu, tidak ada yang berubah dan pesan ini bisa diabaikan.",
+			}
 		}
-		return "Akunmu sudah siap",
-			"Sebuah akun telah dibuat untukmu. Buat kata sandi di sini:\n\n" +
-				link + "\n\nTautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam.\n"
+		return mailText{
+			subject:      "Akunmu sudah siap",
+			subjectNamed: "%s: buat kata sandi",
+			lede:         "Sebuah akun telah dibuat untukmu. Buat kata sandi di sini:",
+			ledeNamed:    "Kamu telah ditambahkan ke perencana %s. Buat kata sandi di sini:",
+			tail:         "Tautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam.",
+			expired: "Kalau sudah kedaluwarsa, buka %s lalu pilih " +
+				"\"Kirimi saya tautan untuk membuat kata sandi baru\" " +
+				"agar tautan baru dikirim ke alamat ini.",
+		}
 	}
 	if reset {
-		return "Set a new password",
-			"Someone asked to set a new password on your account.\n\n" +
-				link + "\n\nThe link works once and expires in 24 hours. " +
-				"If this was not you, nothing has changed and you can ignore this.\n"
+		return mailText{
+			subject:      "Set a new password",
+			subjectNamed: "%s: set a new password",
+			lede:         "Someone asked to set a new password on your account.",
+			ledeNamed:    "Someone asked to set a new password on your account for %s.",
+			tail: "The link works once and expires in 24 hours. " +
+				"If this was not you, nothing has changed and you can ignore this.",
+		}
 	}
-	return "Your account is ready",
-		"An account has been created for you. Choose a password here:\n\n" +
-			link + "\n\nThe link works once and expires in 24 hours.\n"
+	return mailText{
+		subject:      "Your account is ready",
+		subjectNamed: "%s: choose your password",
+		lede:         "An account has been created for you. Choose a password here:",
+		ledeNamed:    "You have been added to the planner for %s. Choose a password here:",
+		tail:         "The link works once and expires in 24 hours.",
+		expired: "If it has expired, open %s and choose " +
+			"\"Email me a link to set a new password\" " +
+			"to have a fresh one sent to this address.",
+	}
 }
 
 // handleRevokeCredentials takes away every way into somebody's account: their

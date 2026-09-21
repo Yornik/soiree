@@ -145,8 +145,11 @@ for themselves is written in the language they were reading the sign-in screen
 in.
 
 With SMTP configured the link goes to the person it belongs to and nowhere else
-— an admin who never sees it cannot use it. Without SMTP the screen shows the
-link once, for the admin to pass on by another route. *Send the link again*
+— an admin who never sees it cannot use it — unless an admin asks for it
+instead of the mail, which is `"deliver": "link"` on a create or an invite, is
+accepted only for an account that has not set a password yet, and is logged as
+`account link issued to admin`. Without SMTP the screen shows the link once,
+for the admin to pass on by another route. *Send the link again*
 issues a fresh one when the first expires or goes to a mailbox nobody reads;
 issuing supersedes whatever was outstanding, so it is also how a leaked link is
 revoked.
@@ -171,7 +174,8 @@ curl -b cookies.txt -X POST https://soiree.example.test/api/v1/users \
 ```
 
 `"mailSent": true` in that response means the link was handed to the mailer;
-`false` means there is no mailer and the response carries `setPasswordUrl`.
+`false` means the response carries `setPasswordUrl` instead, because there is
+no mailer or because the request asked for the link.
 
 ### Who may do what
 

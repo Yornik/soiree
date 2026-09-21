@@ -14,12 +14,28 @@ import (
 // created, and somebody would be written to in the wrong language with no
 // error anywhere. So the list and the templates are held together here.
 func TestEveryLanguageHasItsOwnMails(t *testing.T) {
-	const link = "https://soiree.example.test/#/set-password?token=abc"
+	const site = "https://soiree.example.test"
+	const link = site + "/#/set-password?token=abc"
+	const event = "A Celebration"
 
 	for _, purpose := range []store.TokenPurpose{store.PurposeInvite, store.PurposeReset} {
-		enSubject, enBody := inviteMessage(purpose, link, "en")
+		enSubject, enBody := inviteMessage(purpose, link, "en", event, site)
 		for _, lang := range languages {
-			subject, body := inviteMessage(purpose, link, lang)
+			subject, body := inviteMessage(purpose, link, lang, event, site)
+			// Naming the event is what tells the reader, and the filter, that
+			// this is a mail somebody was expecting. A translation that drops
+			// it reads like the phishing it is shaped like.
+			if !strings.Contains(subject, event) || !strings.Contains(body, event) {
+				t.Errorf("%s/%s does not name the event: %q / %q", lang, purpose, subject, body)
+			}
+			// The invitation offers somewhere to go when the link has gone
+			// stale, and that somewhere cannot be the link itself: it works
+			// once and is gone in a day.
+			if purpose == store.PurposeInvite {
+				if rest := strings.ReplaceAll(body, link, ""); !strings.Contains(rest, site) {
+					t.Errorf("%s/%s offers nothing but the link itself: %q", lang, purpose, body)
+				}
+			}
 			if strings.TrimSpace(subject) == "" || strings.TrimSpace(body) == "" {
 				t.Errorf("%s/%s: empty subject or body", lang, purpose)
 			}
@@ -40,8 +56,15 @@ func TestEveryLanguageHasItsOwnMails(t *testing.T) {
 	// A tag this binary has no template for is answered in English rather than
 	// with nothing. languageFor keeps one from getting this far; this is the
 	// floor underneath it.
-	if subject, _ := inviteMessage(store.PurposeInvite, link, "xx"); subject != "Your account is ready" {
+	if subject, _ := inviteMessage(store.PurposeInvite, link, "xx", event, site); subject != event+": choose your password" {
 		t.Errorf("an unknown language produced %q", subject)
+	}
+
+	// A deployment that has emptied its event name still sends a mail, and it
+	// is the wording these mails had before they named anything.
+	subject, body := inviteMessage(store.PurposeInvite, link, "en", "", site)
+	if subject != "Your account is ready" || !strings.Contains(body, "An account has been created for you") {
+		t.Errorf("with no event name the invitation reads %q / %q", subject, body)
 	}
 }
 

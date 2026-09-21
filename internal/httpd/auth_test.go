@@ -75,6 +75,16 @@ func newFixture(t *testing.T, withMail bool) *fixture {
 // decides the language an account with none of its own is written to in.
 func newFixtureIn(t *testing.T, withMail bool, locale string) *fixture {
 	t.Helper()
+	return newFixtureFor(t, withMail, locale, "")
+}
+
+// newFixtureFor is newFixtureIn on a deployment that has an event name, which
+// every real one has, since SOIREE_EVENT_NAME carries a default. It is what
+// the account mails are written around. The other two leave it empty on
+// purpose, so that they go on reading the wording a deployment with no name
+// falls back to.
+func newFixtureFor(t *testing.T, withMail bool, locale, eventName string) *fixture {
+	t.Helper()
 
 	pool := pgtest.Pool(t)
 	if _, err := migrate.Run(t.Context(), pool, nil); err != nil {
@@ -88,7 +98,10 @@ func newFixtureIn(t *testing.T, withMail bool, locale string) *fixture {
 		mailer = fake
 	}
 
-	a := NewAuth(AuthOptions{Store: st, Mailer: mailer, BaseURL: "https://soiree.example.test/", Locale: locale})
+	a := NewAuth(AuthOptions{
+		Store: st, Mailer: mailer, BaseURL: "https://soiree.example.test/",
+		Locale: locale, EventName: eventName,
+	})
 	a.params = cheapParams
 	// Synchronous, so "did this send a mail?" is answerable without sleeping
 	// and the race detector has nothing in flight at the end of a test.
@@ -567,6 +580,149 @@ func TestCreateUserMailsTheLinkAndDoesNotReturnIt(t *testing.T) {
 		map[string]string{"email": "LINUS@example.test", "role": "admin"}, admin)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate address: status %d, want 409", rec.Code)
+	}
+}
+
+// A mail the relay drops leaves an invited person with nothing and an admin
+// with no way to help: re-inviting sends the same mail down the same pipe, and
+// no route here hands the link over. So an admin can ask for the link instead
+// of the mail, and the asking is logged.
+func TestAnAdminCanAskForTheLinkInsteadOfTheMail(t *testing.T) {
+	f := newFixture(t, true) // a relay is configured, so the link is normally never returned
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users",
+		map[string]string{"email": "grace@example.test", "role": "editor", "deliver": "link"}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	created := decodeTestBody[createUserResponse](t, rec)
+	if created.SetPasswordURL == "" {
+		t.Fatalf("no link came back for an admin who asked to carry it: %s", rec.Body)
+	}
+	if created.MailSent {
+		t.Error("mailSent is true although the mail was the thing being skipped")
+	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Errorf("%d mails sent for a link the admin asked to pass on by hand", n)
+	}
+
+	// A real link, not a decoration: it is the account's one live token.
+	rec = f.do(t, http.MethodPost, "/api/v1/auth/set-password",
+		map[string]string{"token": tokenFromLink(t, created.SetPasswordURL), "password": goodPassword}, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("the link the admin was given does not work: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The half of the rule that is worth keeping. An account somebody is already
+// using has a password and a history to impersonate, so its link goes to its
+// owner and nowhere else, and an admin cannot take it over in one click.
+func TestALinkToPassOnIsRefusedForAnAccountInUse(t *testing.T) {
+	f := newFixture(t, true)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	grace := f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/invite",
+		map[string]string{"deliver": "link"}, admin)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "account_active") {
+		t.Fatalf("status = %d, body %s; want 409 account_active", rec.Code, rec.Body)
+	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Errorf("a refused request sent %d mails", n)
+	}
+
+	// The same route still mails the account itself a reset, as it always did.
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/invite", nil, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("re-invite: status %d, body %s", rec.Code, rec.Body)
+	}
+	if sent := decodeTestBody[createUserResponse](t, rec); sent.SetPasswordURL != "" {
+		t.Error("the ordinary re-invite handed the admin the link")
+	}
+	if n := len(f.mail.messages()); n != 1 {
+		t.Errorf("%d mails sent, want 1", n)
+	}
+}
+
+// And it stays refused for an account somebody has parked back at invited. A
+// status is an admin's to write; whether a password was ever set is not, and
+// that is the fact the refusal turns on.
+func TestALinkToPassOnIsRefusedForAnAccountParkedBackAtInvited(t *testing.T) {
+	f := newFixture(t, true)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	grace := f.seed(t, "grace@example.test", store.RoleEditor, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPatch, "/api/v1/users/"+grace.ID.String(),
+		map[string]any{"revision": grace.Revision, "status": "invited"}, admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("parking the account at invited: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = f.do(t, http.MethodPost, "/api/v1/users/"+grace.ID.String()+"/invite",
+		map[string]string{"deliver": "link"}, admin)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "account_active") {
+		t.Fatalf("status = %d, body %s; want 409 account_active", rec.Code, rec.Body)
+	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Errorf("a refused request sent %d mails", n)
+	}
+}
+
+// A delivery nobody implements is refused before the account it names exists,
+// or an admin correcting a typo finds the address already taken by the request
+// that was refused.
+func TestAnUnknownDeliveryLeavesNoAccountBehind(t *testing.T) {
+	f := newFixture(t, true)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users",
+		map[string]string{"email": "linus@example.test", "role": "viewer", "deliver": "carrier pigeon"}, admin)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_deliver") {
+		t.Fatalf("status = %d, body %s; want 400 invalid_deliver", rec.Code, rec.Body)
+	}
+	if _, err := f.store.UserByEmail(t.Context(), "linus@example.test"); err == nil {
+		t.Error("a refused request created the account anyway")
+	}
+	if n := len(f.mail.messages()); n != 0 {
+		t.Errorf("a refused request sent %d mails", n)
+	}
+}
+
+// What an invited person has to go on is this one mail, and it asks them to
+// type a password into a site they may never have heard of. So it names the
+// event it is an invitation to, and it names somewhere to go when the link has
+// gone stale: not the link, which works once and is gone in a day.
+func TestAnInvitationSaysWhatItIsAnInvitationTo(t *testing.T) {
+	const event = "A Celebration"
+	f := newFixtureFor(t, true, "en-US", event)
+	f.seed(t, "ada@example.test", store.RoleAdmin, goodPassword)
+	admin := f.login(t, "ada@example.test", goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/users",
+		map[string]string{"email": "grace@example.test", "role": "editor"}, admin)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	sent := f.mail.messages()
+	if len(sent) != 1 {
+		t.Fatalf("mails = %d, want 1", len(sent))
+	}
+	if !strings.Contains(sent[0].subject, event) {
+		t.Errorf("the subject does not name the event: %q", sent[0].subject)
+	}
+	if !strings.Contains(sent[0].body, event) {
+		t.Errorf("the body does not name the event: %q", sent[0].body)
+	}
+	// The deployment's own address, somewhere other than inside the one link
+	// the mail carries.
+	rest := strings.ReplaceAll(sent[0].body, linkFromMail(t, sent[0].body), "")
+	if !strings.Contains(rest, "https://soiree.example.test") {
+		t.Errorf("an expired link leaves this invitation with nothing to offer: %q", sent[0].body)
 	}
 }
 

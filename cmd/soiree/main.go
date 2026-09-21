@@ -113,6 +113,7 @@ func main() {
 			BaseURL:           cfg.BaseURL,
 			TrustProxyHeaders: cfg.TrustProxyHeaders,
 			Locale:            cfg.Locale,
+			EventName:         cfg.EventName,
 		})
 		if err := accounts.WithPasskeys(cfg); err != nil {
 			// Logged and carried on with, never fatal. Passkeys are additive:
