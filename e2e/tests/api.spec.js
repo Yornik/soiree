@@ -588,6 +588,8 @@ test('removing a line somebody had just changed still removes it, and says so', 
  * what the page does with one, not which one it was.
  */
 test('a change the server will not take is parked, said out loud, and not counted once the line goes', async ({ page, request }) => {
+  // Waiting out the flash below is most of the room in the default budget.
+  test.setTimeout(45_000);
   await noReReads(page);
 
   await openSharedPlanner(page);
@@ -606,8 +608,22 @@ test('a change the server will not take is parked, said out loud, and not counte
   });
 
   await budgetRow(page, 0).note.fill('Balance due one month before');
-  await expect(page.locator('#dataMsg')).toHaveText(/would not accept/);
+  const msg = page.locator('#dataMsg');
+  await expect(msg).toHaveText(/would not accept/);
   await expect(budgetRow(page, 0).note).toHaveValue('Balance due one month before');
+
+  // A row that exists in one browser only is a condition, not news: it is
+  // still true a minute later, so the line is marked as a problem rather than
+  // being left to look like "Exported soiree-2030-06-12.json" at the foot of
+  // the page.
+  await expect(msg).toHaveClass(/problem/);
+
+  // The one wait on a clock in this file that is the point of the test: the
+  // flash lasts six seconds, and what is under test is that the message is
+  // still there when it has gone.
+  await page.waitForTimeout(7000);
+  await expect(msg).toHaveText(/would not accept/);
+  await expect(msg).toHaveClass(/problem/);
 
   // And then the line goes. The parked write can never be made again, so the
   // question at the door of a shared computer must not go on counting it: it
@@ -2805,4 +2821,28 @@ test('a deployment with no bucket draws no paperclip at all', async ({ page }) =
   await page.click('#addBudgetRow');
   await expect(page.locator('#budgetBody .del-cell .del-btn')).toHaveCount(1);
   await expect(page.locator('.files-btn')).toHaveCount(0);
+});
+
+/*
+ * The day after, for somebody who may only read.
+ *
+ * The archive lock is a guard against editing a record by accident, and the
+ * way back out of it is kept in the browser that took it. Offering that button
+ * to a viewer offers them nothing: auth.js locks the fields again a tick
+ * later, and the reckoning they came to read is only drawn while the planner
+ * is closed.
+ */
+test('a viewer is not offered the button that unlocks a closed ledger', async ({ page, request }) => {
+  const viewer = await ensureEditor(request, API_URL, 'vera', 'viewer');
+  await adoptSession(page, await freshSession(request, API_URL, viewer));
+  // setFixedTime, not install: the app's debounced save runs on a timer, and
+  // faking that would fail this for a reason that is not the archive.
+  await page.clock.setFixedTime(new Date('2030-06-14T09:00:00Z'));
+  await awaitPlan(page, () => page.goto('/'));
+
+  await expect(page.locator('body')).toHaveClass(/role-viewer/);
+  await expect(page.locator('#archiveNote')).toBeVisible();
+  await expect(page.locator('#archiveLine')).toContainText('This event has passed');
+  await expect(page.locator('#reopenPlanner')).toBeHidden();
+  await expect(page.locator('.settlement')).toBeVisible();
 });

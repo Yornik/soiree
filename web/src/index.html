@@ -174,9 +174,9 @@
 
     <div class="when-data">
       <!-- The one section that belongs only to a finished event: not what is
-           left to do, but what each person ended up covering. -->
+           left to do, but what each person took on, paid and still owes. -->
       <section class="block settlement">
-        <h2><span data-i18n="ar.settle">The final reckoning</span><span class="h2-note" data-i18n="ar.settlenote">what each person covered</span></h2>
+        <h2><span data-i18n="ar.settle">The final reckoning</span><span class="h2-note" data-i18n="ar.settlenote">what each person took on, shared lines split evenly</span></h2>
         <ul class="split-list" id="settleList"></ul>
         <p class="empty-note" id="settleEmpty" data-i18n="ar.nothing">Nothing was recorded.</p>
       </section>
@@ -203,6 +203,10 @@
             <span class="fig-label" data-i18n="f.outstanding">Outstanding</span>
             <span class="fig-num owing" id="mOutstanding">–</span>
             <span class="fig-sub" id="mOutstandingEur">–</span>
+            <!-- Only ever shown while a line has more against it than it
+                 committed, which is the one case where Committed - Paid is
+                 not Outstanding. -->
+            <span class="fig-sub over" id="mOverpaid" hidden></span>
           </div>
           <div class="fig">
             <span class="fig-label" data-i18n="f.committed">Committed</span>

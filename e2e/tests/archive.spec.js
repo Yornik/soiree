@@ -59,6 +59,21 @@ async function openAt(page, when, state = SETTLED, base = '/') {
   await expect(page.locator('body')).not.toHaveClass(/is-empty/);
 }
 
+/** The final reckoning as plain data: one row per name, three figures. */
+async function readSettlement(page) {
+  const rows = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('#settleList li')).map((li) => ({
+      who: li.children[0].textContent,
+      amount: li.querySelector('.amt').textContent,
+      paid: li.querySelector('.settle-paid').textContent,
+      open: li.querySelector('.settle-open').textContent,
+    })),
+  );
+  return rows.map((r) => ({
+    who: r.who, amount: money(r.amount), paid: money(r.paid), open: money(r.open),
+  }));
+}
+
 test('on the day itself nothing has changed', async ({ page }) => {
   await openAt(page, EVENT_DAY);
 
@@ -89,22 +104,64 @@ test('the day after, the planner reads as a record rather than a plan', async ({
   await expect(page.locator('#archiveLine')).toContainText('This event has passed');
   await expect(page.locator('#reopenPlanner')).toHaveText('Reopen for editing');
 
-  // The final reckoning: the four figures, and what each person covered.
+  // The final reckoning: the four figures, and what each person took on.
   await expect(page.locator('.settlement')).toBeVisible();
-  const settle = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('#settleList li')).map((li) => ({
-      who: li.children[0].textContent,
-      amount: li.querySelector('.amt').textContent,
-    })),
-  );
-  expect(settle.map((r) => ({ who: r.who, amount: money(r.amount) }))).toEqual([
-    { who: 'Rose — Ada', amount: 2000 },
-    { who: 'Ivy — Grace', amount: 1000 },
+  // The heading says what the figure beside each name is, because a list
+  // headed "what each person paid" over a list of commitments is a lie about
+  // money in the permanent record of the evening.
+  await expect(page.locator('.settlement .h2-note'))
+    .toHaveText('what each person took on, shared lines split evenly');
+
+  const settle = await readSettlement(page);
+  expect(settle).toEqual([
+    { who: 'Rose — Ada', amount: 2000, paid: 2000, open: 0 },
+    { who: 'Ivy — Grace', amount: 1000, paid: 400, open: 600 },
   ]);
 
   // And what was left outstanding, which is the figure an archive exists for.
   expect(money(await page.locator('#mOutstanding').textContent())).toBe(600);
   expect(money(await page.locator('#mPaid').textContent())).toBe(2400);
+
+  // The per-person columns are the same money as the headline figures, so
+  // the two halves of the record cannot tell different stories.
+  expect(settle.reduce((sum, r) => sum + r.open, 0)).toBe(600);
+  expect(settle.reduce((sum, r) => sum + r.paid, 0)).toBe(2400);
+});
+
+test('a shared line divides what has been paid on it the way it divides the cost', async ({ page }) => {
+  // One line, two names, part-paid: without a record of who handed the 400
+  // over, the only figure the page can honestly put against each name is the
+  // same even split it already uses for the cost, and it says so in the
+  // heading.
+  await openAt(page, DAY_AFTER, {
+    ...SETTLED,
+    budgetItems: [
+      { id: 'b1', item: 'Catering', unit: 1000, qty: 1, paid: 400, sponsors: ['s1', 's2'], note: '' },
+    ],
+  });
+
+  expect(await readSettlement(page)).toEqual([
+    { who: 'Rose — Ada', amount: 500, paid: 200, open: 300 },
+    { who: 'Ivy — Grace', amount: 500, paid: 200, open: 300 },
+  ]);
+});
+
+test('a share rounded up is never a share that owes less than nothing', async ({ page }) => {
+  // Halves. Each name took on 10.50 and one of them has paid it. The two
+  // columns are rounded to whole units against different totals, so the
+  // payment can land a unit above the share it stands against, and "still
+  // open -€1" is not a figure anybody can settle from.
+  await openAt(page, DAY_AFTER, {
+    ...SETTLED,
+    budgetItems: [
+      { id: 'b1', item: 'Flowers', unit: 10.5, qty: 1, paid: 0, sponsors: ['s1'], note: '' },
+      { id: 'b2', item: 'Candles', unit: 10.5, qty: 1, paid: 10.5, sponsors: ['s2'], note: '' },
+    ],
+  });
+
+  const settle = await readSettlement(page);
+  expect(settle).toHaveLength(2);
+  expect(settle.filter((r) => r.open >= 0 && r.paid <= r.amount)).toEqual(settle);
 });
 
 test('a closed ledger offers nothing to edit, but everything to read', async ({ page }) => {
@@ -149,8 +206,11 @@ test('reopening is one deliberate click, and it sticks', async ({ page }) => {
 
   await expect(page.locator('body')).not.toHaveClass(/is-archived/);
   await expect(page.locator('body')).toHaveClass(/is-reopened/);
-  await expect(page.locator('#archiveLine')).toContainText('Reopened for editing');
-  await expect(page.locator('#reopenPlanner')).toHaveText('Close the planner');
+  // The unlock is kept in this browser and nowhere else, so the banner says
+  // which browser it is talking about rather than implying the ledger has
+  // been reopened for everybody reading it.
+  await expect(page.locator('#archiveLine')).toContainText('Reopened for editing in this browser');
+  await expect(page.locator('#reopenPlanner')).toHaveText('Close it again here');
   await expect(page.locator('#daysLabel')).toHaveText('the day has passed');
 
   await gotoTab(page, 'budget');
@@ -158,7 +218,7 @@ test('reopening is one deliberate click, and it sticks', async ({ page }) => {
   const cell = page.locator('#budgetBody tr').first().locator('td').nth(4).locator('input');
   await expect(cell).not.toHaveAttribute('readonly', '');
   await cell.fill('2100');
-  await expect(page.locator('#budgetBody tr').first().locator('td').nth(5)).toHaveText('-€100');
+  await expect(page.locator('#budgetBody tr').first().locator('td').nth(5)).toHaveText('€100 overpaid');
 
   // Written straight through rather than on the debounce: this is the setting
   // someone changes and then closes the tab.
