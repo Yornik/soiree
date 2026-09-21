@@ -29,7 +29,10 @@ type ActivityEntry struct {
 	// budget line's item, a task's name, a file's name — or nil for settings,
 	// which is one row with no name. It comes from the log itself, so a row
 	// that no longer exists still has one, and a renamed row reads as what it
-	// was called at the time rather than what it is called today.
+	// was called at the time rather than what it is called today. Where the
+	// name was somebody's and they have been erased, it reads as the tombstone
+	// (see redactLog in privacy.go), because the log no longer holds the name
+	// either.
 	Label *string `db:"label"`
 }
 

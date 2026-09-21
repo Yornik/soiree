@@ -340,7 +340,7 @@ What works end to end:
   which line or task, and each value before and after, in the reader's
   language and with amounts as the planner shows them. It is a screen over the
   change history the server has kept all along, and a row that has since been
-  deleted still has its name there.
+  deleted still has its name there, unless the person it named has been erased.
 - **The release, very small,** at the foot of the screens a signed-in person
   can open. The public page still does not name its build.
 - **The API is described** in [`api/openapi.yaml`](api/openapi.yaml), and the
@@ -366,7 +366,8 @@ What is not there, stated rather than left to be discovered:
 - **Subject export, erasure and the retention purge** are implemented and
   tested in `internal/store/privacy.go`, but nothing calls them: there is no
   route and no subcommand, so honouring a request today means writing Go or
-  SQL.
+  SQL. An erasure reaches the change history as well as the rows; the export
+  does not read it, and says so.
 
 Most of the rest of the original roadmap has landed, including the parts listed
 as coming after a working demo: the audit trail, vulnerability disclosure, the
@@ -441,7 +442,7 @@ internal/reminders/   the deadline digest and its scheduler
 internal/s3test/      throwaway MinIO for the tests
 internal/sheetimport/ .ods / .csv reader
 internal/store/       typed data access (pgx), history, LISTEN/NOTIFY
-migrations/           numbered SQL, embedded and append-only, at 0012
+migrations/           numbered SQL, embedded and append-only, at 0013
 web/src/              frontend sources, embedded via //go:embed
 e2e/                  Playwright specs against the running binary
 ```

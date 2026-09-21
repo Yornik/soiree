@@ -577,3 +577,63 @@ func TestSettingsHistoryUsesTheNilID(t *testing.T) {
 		t.Errorf("ceiling = %d, want 700000 minor units", got)
 	}
 }
+
+// TestTheChangeLogTakesARedactionAndNothingElse. Migration 0013 lets an
+// erasure strike a name out of the history, which is the second mutation this
+// table has ever allowed. The whole value of the exception is how narrow it
+// is: the trigger has to be able to tell a redaction from an edit wearing one
+// as a disguise, from the rows alone and with nothing to take anybody's word
+// for.
+func TestTheChangeLogTakesARedactionAndNothingElse(t *testing.T) {
+	s := newStore(t)
+	ctx := t.Context()
+
+	note, err := s.CreateNote(ctx, store.Note{Text: "Ada is chasing the venue"})
+	if err != nil {
+		t.Fatalf("create note: %v", err)
+	}
+	entries := history(t, s, store.EntityNotes, note.ID)
+	if len(entries) != 1 {
+		t.Fatalf("history has %d entries, want the create", len(entries))
+	}
+	id := entries[0].ID
+
+	refused := []struct {
+		what string
+		set  string
+	}{
+		{"another value in place of the name", `changes = jsonb_set(changes, '{text,new}', '"Grace is chasing the venue"')`},
+		{"another column moved with the redaction", `changes = jsonb_set(changes, '{text,new}', '"(erased)"'), actor_label = 'system'`},
+		{"a field dropped from the diff", `changes = changes - 'text'`},
+		{"a field invented in it", `changes = changes || '{"owner": {"old": null, "new": "(erased)"}}'::jsonb`},
+		{"a value the change never had", `changes = jsonb_set(changes, '{text,old}', '"(erased)"')`},
+		{"the entry moved to another row", `changes = jsonb_set(changes, '{text,new}', '"(erased)"'), entity_id = gen_random_uuid()`},
+	}
+	for _, c := range refused {
+		if _, err := s.Pool().Exec(ctx,
+			`UPDATE change_log SET `+c.set+` WHERE id = $1`, id); err == nil {
+			t.Errorf("the log accepted %s", c.what)
+		}
+	}
+	if _, err := s.Pool().Exec(ctx, `DELETE FROM change_log WHERE id = $1`, id); err == nil {
+		t.Error("a history entry was deleted")
+	}
+
+	// And the one edit it is for: the recorded value replaced by the tombstone
+	// and nothing else touched.
+	if _, err := s.Pool().Exec(ctx,
+		`UPDATE change_log SET changes = jsonb_set(changes, '{text,new}', '"(erased)"') WHERE id = $1`,
+		id); err != nil {
+		t.Fatalf("the log refused a redaction: %v", err)
+	}
+	after := history(t, s, store.EntityNotes, note.ID)
+	if len(after) != 1 {
+		t.Fatalf("history has %d entries, want the create", len(after))
+	}
+	if got := asString(t, after[0].Changes["text"].New); got != store.Tombstone {
+		t.Errorf("text = %q, want %q", got, store.Tombstone)
+	}
+	if _, ok := after[0].Changes["position"]; !ok {
+		t.Error("the rest of the diff went with the redaction")
+	}
+}

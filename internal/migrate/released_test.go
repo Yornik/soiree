@@ -24,6 +24,7 @@ var releasedChecksums = map[string]string{
 	"0010_push_subscriptions.sql":           "4e7786cbff40d368d78f0b40dbac6b3ae9292dbe1dd6a07586e5af78fb276324",
 	"0011_passkeys.sql":                     "2098c39a7c6001d2ea51c67a89e8968722b905e577076578a5f3e76a2238bd15",
 	"0012_attachments.sql":                  "e79e48b0b6542cee5b1227c323a5767f20e267f36957cdd395a0fef1148b9a1c",
+	"0013_change_log_redaction.sql":         "e91f8a54a2656b605a381764b929de10b3e341eb09f1c1c94f3d30c042372de7",
 }
 
 // TestReleasedMigrationsAreUnchanged is the guard behind the house rule, and

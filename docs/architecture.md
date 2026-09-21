@@ -770,14 +770,23 @@ Done:
     package, so honouring a request today means writing Go or SQL against a
     production database. The way in is not the only thing missing, either. That
     file was written against the schema as it stood at migration 0005 and has
-    never been taught about the personal data added since: `change_log` (0007),
-    `sessions` and `password_tokens` (0008), `push_subscriptions` (0010),
+    since been taught about one of the tables added after it, `change_log`
+    (0007), which held every name, owner cell, sentence and address the rows
+    ever carried: erasure strikes the person out of those entries and the
+    purge strikes every name a person can be known by out of them, both
+    through the one exception migration 0013 makes to the append-only
+    trigger. Those names, and not figures. The redaction reaches the text
+    fields and leaves the rest of the entry as it was written, so every
+    recorded amount, quantity, date, position and row id survives a purge,
+    and the shape of a purged plan is still readable in its history with
+    nobody in it named. Whether those go too is a retention decision nobody
+    has taken. The tables `privacy.go` still does not know about: `sessions`
+    and `password_tokens` (0008), `push_subscriptions` (0010),
     `passkey_credentials` (0011) and `attachments` (0012). So the export is
-    short by all of them and says so in its caveats, the erasure leaves the
-    name standing in the change log and, when it anonymises rather than
-    deletes, leaves the account's session, token, passkey and push rows behind,
-    and the purge leaves the change log, which is a full copy of the plan it
-    has just emptied.
+    short by all of them and says so in its caveats, an erasure that
+    anonymises rather than deletes leaves the account's session, token,
+    passkey and push rows behind, and a file keeps the name it was uploaded
+    under.
 11. ~~Vulnerability disclosure.~~ `SECURITY.md`, and a documented verification
     command that the release workflow itself re-runs.
 13. ~~Mobile budget grid.~~
@@ -811,15 +820,19 @@ Open, in the order they matter:
 - **A way to invoke the data-protection functions.** Export, erasure and purge
   exist and nothing calls them. An admin-only route or a subcommand, either
   would do for the way in; what there must not be is a documented obligation
-  that can only be met by hand-written SQL. The way in is the smaller half,
-  though. The functions have to learn about the tables listed under item 10
-  first, and one of those, `change_log`, refuses every UPDATE and DELETE by
-  trigger. Striking a name out of the history, or dropping the history with
-  the plan, therefore starts with a migration that relaxes that trigger on
-  purpose: a decision about whether an erasure outranks the evidence, which
-  the trigger's own comment in `migrations/0007_audit.sql` asks to be made
-  deliberately. Wiring a route before it is made ships an erasure that does
-  not erase.
+  that can only be met by hand-written SQL. The hardest half is done: an
+  erasure now reaches `change_log`, which refused every UPDATE and DELETE by
+  trigger, because migration 0013 made the decision that trigger's own comment
+  asked to be made deliberately. What is left before a route is worth wiring
+  is the rest of the list under item 10, none of which needs a decision: the
+  export has to read the tables it admits it does not, and an anonymising
+  erasure has to take the account's sessions, passkeys and push subscriptions
+  with it rather than leaving them disabled in place. One question there does
+  need a decision, and it is not in the way of a route: a purge strikes the
+  names out of the history and leaves every amount, quantity and date
+  standing, so what a purged plan cost is still readable even though nobody
+  in it is named. That is either retention working as intended or a second
+  thing to strike out, and it is a policy call rather than a defect.
 - **Restore drill.** Backups that have never been restored are not backups.
   Restore into a scratch namespace, confirm the data, write down the steps.
 - **The budget table's sizing pass.** `fitBudgetText()` forces two layouts per
@@ -993,6 +1006,7 @@ The remaining tables belong to features documented in their own sections:
 | 0010 | `push_subscriptions` | One row per device, not per person: a phone and a laptop are separate subscriptions with separate keys. |
 | 0011 | `passkey_credentials`, `passkey_challenges` | One row per authenticator, plus the in-flight ceremonies. Public keys only — this database holds nothing that can log in. |
 | 0012 | `attachments`, `attachment_garbage` | One row per file on a budget line or a task: which row it belongs to, its name and size, and whether the upload was ever confirmed. The bytes are in the bucket. `attachment_garbage` collects the keys of rows a cascade removed, so their objects can be deleted afterwards. See *Attachments*. |
+| 0013 | (no table) | The second mutation `change_log` allows by name: a redaction, where every column but `changes` is unchanged, the same keys are there afterwards, and a recorded value may only become the tombstone. It is what lets an erasure strike a person out of the history, and it is shaped so that the trigger can tell a redaction from an edit without being told. Deleting entries stays refused. Roadmap item 10 has the rest. |
 
 Three decisions worth stating explicitly:
 
@@ -1999,7 +2013,9 @@ written into an append-only table would outlive the erasure meant to remove it,
 so the actor's address comes from `users` on each read and is absent once that
 account is gone; the page shows those entries as a deleted account. The row's
 label does come from the log, which is what lets an entry about a line that has
-since been deleted still say which line it was.
+since been deleted still say which line it was. Where that label was somebody's
+name and they have been erased, it reads as `(erased)`: the erasure strikes the
+name out of the entries themselves, which is what migration 0013 exists for.
 
 ### Build and supply chain (track 6)
 

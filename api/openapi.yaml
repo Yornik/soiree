@@ -1642,7 +1642,8 @@ paths:
       description: |
         This is the history of the whole plan. Each write to the plan makes one
         entry. An entry says who made the change, when, to which row, and the
-        value of each field before and after.
+        value of each field before and after. A recorded value that a later
+        erasure struck out reads `(erased)` rather than what was written.
 
         Only an admin reads this. An entry names an account, and only an admin
         reads the list of accounts.
@@ -2380,7 +2381,8 @@ components:
           description: |
             The name of the row after this change: the item of a budget item,
             the name of a task, the email of an account. It is the name at that
-            time, and not the name now. It is `null` for `settings`. A long
+            time, and not the name now, unless a later erasure struck that name
+            out: then it reads `(erased)`. It is `null` for `settings`. A long
             name is cut to 120 characters.
         actor:
           type: object

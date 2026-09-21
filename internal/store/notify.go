@@ -28,7 +28,12 @@ import (
 //   - insertChange is the single funnel every write in this package already
 //     goes through to record its history. Emitting from there means a change
 //     cannot be announced without also being recorded, and cannot be recorded
-//     without also being announced. There is no third path to keep in step.
+//     without also being announced.
+//
+// Erasure is the one exception, and it goes the one way that is safe: it
+// announces without recording. An entry for it would hold the value being
+// erased, so announceErasure in privacy.go calls notifyChange directly. The
+// rule that matters is unbroken, because nothing is recorded in silence.
 //
 // What travels is identifiers, never the row. PostgreSQL caps a NOTIFY payload
 // at 8000 bytes and a budget note alone can approach that, but the more
