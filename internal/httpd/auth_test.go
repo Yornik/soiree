@@ -314,6 +314,67 @@ func TestLoginIssuesASessionCookie(t *testing.T) {
 	}
 }
 
+// A deployment that keeps the event out of the page anybody can fetch has to
+// tell a signed-in page instead, or it has no name on its masthead, no
+// countdown and no archive. It is told on the two answers the page already
+// waits for: the one that signs somebody in, and the one a reload asks for.
+// Nobody without a session is told anything.
+func TestSigningInSaysWhoseEveningThisIs(t *testing.T) {
+	f := newFixture(t, false)
+	// What cmd/soiree hands over from config.SessionEventDetails() when
+	// SOIREE_PUBLIC_EVENT_DETAILS is off.
+	f.a.event = &config.EventDetails{
+		Name:    "Ada's Retirement",
+		Tagline: "Dinner and speeches",
+		Date:    "2030-01-13T00:00:00+09:00",
+	}
+	f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)
+
+	says := func(t *testing.T, what string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d, body %s", what, rec.Code, rec.Body)
+		}
+		body := decodeTestBody[sessionJSON](t, rec)
+		if body.Email != "ada@example.test" {
+			t.Errorf("%s stopped describing the account: %+v", what, body.userDTO)
+		}
+		if body.Event == nil {
+			t.Fatalf("%s says nothing about the event, and the page has no other way to learn it", what)
+		}
+		if *body.Event != *f.a.event {
+			t.Errorf("%s carries %+v, want the event as configured", *body.Event, *f.a.event)
+		}
+	}
+
+	says(t, "logging in", f.do(t, http.MethodPost, "/api/v1/auth/login",
+		map[string]string{"email": "ada@example.test", "password": goodPassword}, nil))
+	cookie := f.login(t, "ada@example.test", goodPassword)
+	says(t, "the session", f.do(t, http.MethodGet, "/api/v1/auth/session", nil, cookie))
+
+	// And the point of the exercise: with no session there is nothing to read.
+	rec := f.do(t, http.MethodGet, "/api/v1/auth/session", nil, nil)
+	if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "Retirement") {
+		t.Errorf("a caller with no session got %d and %s", rec.Code, rec.Body)
+	}
+}
+
+// The default deployment's page says already, so the session does not repeat
+// it. Two copies of the event in two places is two things to keep in step.
+func TestSigningInRepeatsNothingThePageAlreadySays(t *testing.T) {
+	f := newFixture(t, false)
+	f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)
+
+	rec := f.do(t, http.MethodPost, "/api/v1/auth/login",
+		map[string]string{"email": "ada@example.test", "password": goodPassword}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: status %d, body %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), `"event"`) {
+		t.Errorf("the session carries an event the page already names: %s", rec.Body)
+	}
+}
+
 func TestLoginRefusesEverythingItShould(t *testing.T) {
 	f := newFixture(t, false)
 	f.seed(t, "ada@example.test", store.RoleEditor, goodPassword)

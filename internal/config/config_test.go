@@ -171,6 +171,100 @@ func TestEventDateKeepsTheOffsetItWasWrittenIn(t *testing.T) {
 	}
 }
 
+// The shell is served to anybody who has the URL, so a deployment can ask for
+// it to name nothing. What the browser is handed then carries no event at all
+// (not the name, not the tagline, not the day, not the figure the budget is
+// measured against), while the signals that decide what the page can draw stay
+// exactly where they were.
+func TestTheEventCanBeKeptOutOfThePage(t *testing.T) {
+	publicKey, privateKey := vapidPair(t)
+	t.Setenv("DATABASE_URL", "postgres://soiree@db.example.test/soiree")
+	t.Setenv("SOIREE_EVENT_NAME", "Ada's Retirement")
+	t.Setenv("SOIREE_EVENT_TAGLINE", "Dinner and speeches")
+	t.Setenv("SOIREE_EVENT_DATE", "2030-01-13T00:00:00+09:00")
+	t.Setenv("SOIREE_BUDGET_CEILING", "25000")
+	t.Setenv("SOIREE_VAPID_PUBLIC_KEY", publicKey)
+	t.Setenv("SOIREE_VAPID_PRIVATE_KEY", privateKey)
+	t.Setenv("SOIREE_VAPID_SUBJECT", "ada@example.test")
+	t.Setenv("SOIREE_PUBLIC_EVENT_DETAILS", "false")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+
+	raw, err := c.ClientJSON()
+	if err != nil {
+		t.Fatalf("ClientJSON(): %v", err)
+	}
+	for _, said := range []string{"Ada's Retirement", "Dinner and speeches", "2030-01-13", "25000"} {
+		if strings.Contains(raw, said) {
+			t.Errorf("the page still tells every visitor %q: %s", said, raw)
+		}
+	}
+
+	cc := c.Client()
+	if cc.Currency != "EUR" || cc.Locale != "en-US" {
+		t.Errorf("the deployment's own settings went with the event: %+v", cc)
+	}
+	if cc.VAPIDPublicKey != publicKey {
+		t.Error("the push key went with the event, so nothing can subscribe")
+	}
+
+	// The shell and the manifest are one rendering for everybody, so they are
+	// titled with the product rather than with the event.
+	if c.ShellEventName() != "soiree" || c.ShellTagline() != "" {
+		t.Errorf("the shell is titled %q / %q, want it to name nobody", c.ShellEventName(), c.ShellTagline())
+	}
+
+	// And the page is told whose evening it is once it has a session.
+	ev := c.SessionEventDetails()
+	if ev == nil {
+		t.Fatal("nothing is sent on the session, so a signed-in page never learns the date")
+	}
+	if ev.Name != "Ada's Retirement" || ev.Tagline != "Dinner and speeches" || ev.Date != "2030-01-13T00:00:00+09:00" {
+		t.Errorf("the session carries %+v, want the event as configured", *ev)
+	}
+}
+
+// The documented default, which every deployment before this switch existed
+// has: the page names its event, and a session adds nothing to it.
+func TestTheEventIsInThePageByDefault(t *testing.T) {
+	t.Setenv("SOIREE_EVENT_NAME", "Ada's Retirement")
+	t.Setenv("SOIREE_EVENT_TAGLINE", "Dinner and speeches")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if c.Client().EventName != "Ada's Retirement" || c.ShellEventName() != "Ada's Retirement" {
+		t.Error("the default deployment stopped naming its event")
+	}
+	if c.ShellTagline() != "Dinner and speeches" {
+		t.Errorf("ShellTagline() = %q, want the configured tagline", c.ShellTagline())
+	}
+	if c.SessionEventDetails() != nil {
+		t.Error("the session repeats what the page already says")
+	}
+}
+
+// Asking for it where it cannot be carried out is refused rather than ignored.
+// With no database nobody signs in, so there is no session to put the details
+// on: a page that did not get them from its shell would have no name and no
+// countdown for ever.
+func TestKeepingTheEventOutOfThePageNeedsADatabase(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("SOIREE_PUBLIC_EVENT_DETAILS", "false")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("accepted with no database, so the page would never learn the event")
+	}
+	if !strings.Contains(err.Error(), "SOIREE_PUBLIC_EVENT_DETAILS") || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Errorf("Load() failed for some other reason: %v", err)
+	}
+}
+
 func TestInvalidValuesRejected(t *testing.T) {
 	cases := []struct {
 		name, key, val string
@@ -182,6 +276,7 @@ func TestInvalidValuesRejected(t *testing.T) {
 		{"demo data not a bool", "SOIREE_DEMO_DATA", "yes please"},
 		{"date unparseable", "SOIREE_EVENT_DATE", "next spring"},
 		{"csp neither on nor off", "SOIREE_CSP", "report-only"},
+		{"public event details not a bool", "SOIREE_PUBLIC_EVENT_DETAILS", "private"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

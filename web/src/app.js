@@ -89,8 +89,8 @@
    * the same on every screen, and the count turns over when the day turns
    * over where the event is.
    */
-  var EVENT = (function () {
-    var m = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(String(CONFIG.eventDate || ''));
+  function eventDay(text) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(String(text || ''));
     if (!m) return null;
     var day = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     if (isNaN(day)) return null;
@@ -99,8 +99,78 @@
       offset = (Number(m[4].slice(1, 3)) * 60 + Number(m[4].slice(4, 6))) * (m[4].charAt(0) === '-' ? -1 : 1);
     }
     return { day: day, offsetMinutes: offset };
-  })();
+  }
+  var EVENT = eventDay(CONFIG.eventDate);
   var EVENT_DATE = EVENT ? new Date(EVENT.day) : null;
+
+  /* ------------------------------------------------------------------
+   * WHOSE EVENING THIS IS
+   * ------------------------------------------------------------------
+   * The shell is served to anybody who has the URL, so a deployment can keep
+   * the event's name, tagline and date out of it, by turning
+   * SOIREE_PUBLIC_EVENT_DETAILS off, and send them on the session instead:
+   * the first answer that knows who is asking, and one the page was waiting
+   * for anyway, so nothing costs a round trip. Everywhere else the shell
+   * still says, the session carries no event, and none of this moves.
+   *
+   * What the shell arrived with is kept, because putting it back is what
+   * signing out has to do: on such a deployment that is the neutral title
+   * again, and on every other it is the event's own name, which a sign-out
+   * must not wipe off the masthead.
+   *
+   * The name and the tagline are read off the page rather than out of the
+   * block, because the block is the half the deployment emptied and the
+   * masthead is where the neutral name it was rendered with is written down.
+   * Taking them from the block would leave a signed-out page blank where a
+   * fresh load of the same URL says "soiree". They are the same string
+   * everywhere else, which is why nothing moves there.
+   * ------------------------------------------------------------------ */
+  function shellText(id) {
+    var el = document.getElementById(id);
+    return el ? el.textContent : '';
+  }
+
+  var SHELL_EVENT = {
+    title: document.title,
+    name: shellText('eventName'),
+    tagline: shellText('eventTagline'),
+    date: CONFIG.eventDate
+  };
+
+  /* What the session last told this page, and null where the page itself
+   * said. Kept beside the plan in localStorage, because the plan is painted
+   * from that copy before anything is asked: without it every repeat visit
+   * would flash a blank masthead with no countdown, and worse, isPast()
+   * is false while the date is missing, so a settled planner would be offered
+   * as editable for as long as the answer took, or for ever if it never
+   * arrived because this browser is offline. */
+  var eventDetails = null;
+
+  /* Take the details, or put back what the shell was rendered with. Answers
+   * whether anything moved, so a caller can leave the page alone when nothing
+   * did, which is every deployment whose shell names its event. */
+  function useEventDetails(ev) {
+    var name = ev ? String(ev.name || '') : SHELL_EVENT.name;
+    var tagline = ev ? String(ev.tagline || '') : SHELL_EVENT.tagline;
+    var date = ev ? String(ev.date || '') : SHELL_EVENT.date;
+    if (name === CONFIG.eventName && tagline === CONFIG.tagline && date === CONFIG.eventDate) return false;
+
+    eventDetails = ev || null;
+    CONFIG.eventName = name;
+    CONFIG.tagline = tagline;
+    CONFIG.eventDate = date;
+    EVENT = eventDay(date);
+    EVENT_DATE = EVENT ? new Date(EVENT.day) : null;
+    // The tab's own title is the one place the name shows with no element to
+    // write through, and the shell's title is what a nameless page is called.
+    document.title = name || SHELL_EVENT.title;
+    setText('eventName', name);
+    setText('eventTagline', tagline);
+    // The line above "Sign in", which is how somebody following a link from a
+    // mail knows which planner they have arrived at.
+    setText('authEvent', name);
+    return true;
+  }
 
   /* ------------------------------------------------------------------
    * INTERFACE LANGUAGE
@@ -1056,9 +1126,15 @@
       // The base travels with the state or not at all: with no database there
       // is no base, and a bare state is also what every save before this one
       // looks like, which Store.read has to go on accepting.
-      var value = shadow
-        ? { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys, createBodies: createBodies }
-        : s;
+      var value = s;
+      if (shadow) {
+        value = { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys, createBodies: createBodies };
+        // Only where the page was not told whose evening this is, so every
+        // other deployment goes on writing exactly the value it always has.
+        // They are as much the plan as anything in it and go the same way:
+        // this key is what Store.clear() takes away on a sign-out.
+        if (eventDetails) value.event = eventDetails;
+      }
       try {
         localStorage.setItem(this.key, JSON.stringify(value));
         storageOk = true;
@@ -1095,6 +1171,10 @@
       savedIdMap = saved.idMap;
       savedCreateKeys = saved.createKeys;
       savedCreateBodies = saved.createBodies;
+      // Before the first render, which is the whole reason they are kept:
+      // the page paints this copy and only then asks anybody anything. See
+      // useEventDetails.
+      if (saved.event) useEventDetails(saved.event);
       saved = saved.state;
     }
     state = saved || (CONFIG.demoData ? demoState() : emptyState());
@@ -2346,6 +2426,11 @@
     attachments = [];
     uploads = [];
 
+    // Whose evening it was, where the page itself does not say. Back to the
+    // shell everybody who has the URL is served; on every other deployment
+    // that is the name already on the masthead, so nothing moves.
+    useEventDetails(null);
+
     setSticky('');
     renderAll();
   }
@@ -2401,6 +2486,13 @@
   document.addEventListener('soiree:session', function (e) {
     var signedIn = !!(e && e.detail && e.detail.signedIn);
     sessionRole = signedIn ? String(e.detail.role || '') : '';
+
+    // Whose evening this is, on a deployment that keeps it off the page
+    // anybody can fetch. Nothing is written here: this is a sign-in, so the
+    // plan is about to arrive, and adopt() persists the pair it leaves behind
+    // as it always has. A write from here would be one made at a moment
+    // nothing else writes at, for a name.
+    if (signedIn && e.detail.event && useEventDetails(e.detail.event)) renderAll();
     if (!signedIn) {
       // Only once there is something to halt. Before the first plan arrives
       // this is the ordinary "nobody is signed in yet" and connect() is

@@ -110,6 +110,12 @@ func New(cfg config.Config, srcFS fs.FS, opts ...Option) (*Server, error) {
 }
 
 // indexData is the template context for the HTML shell.
+//
+// EventName and Tagline are what the shell may say rather than what this
+// deployment is called: both come from config.ShellEventName, which answers
+// with the product's name on a deployment that keeps the event's own off a
+// page anybody with the URL can fetch. See config.SessionEventDetails for
+// where they travel instead.
 type indexData struct {
 	EventName  string
 	Tagline    string
@@ -146,7 +152,7 @@ func (s *Server) renderManifest(srcFS fs.FS) error {
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, indexData{
-		EventName: s.cfg.EventName,
+		EventName: s.cfg.ShellEventName(),
 		assets:    s.assets,
 	}); err != nil {
 		return fmt.Errorf("render manifest: %w", err)
@@ -170,8 +176,8 @@ func (s *Server) renderIndex(srcFS fs.FS) error {
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, indexData{
-		EventName: s.cfg.EventName,
-		Tagline:   s.cfg.Tagline,
+		EventName: s.cfg.ShellEventName(),
+		Tagline:   s.cfg.ShellTagline(),
 		// Safe as template.JS: this is our own marshalled struct, and it
 		// lands inside a non-executable application/json data block.
 		ConfigJSON: template.JS(cfgJSON),

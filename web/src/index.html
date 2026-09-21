@@ -87,8 +87,14 @@
        count down to. -->
   <header class="masthead">
     <div class="masthead-id">
-      <h1>{{ .EventName }}</h1>
-      <p class="tagline">{{ .Tagline }}</p>
+      <!-- The product's name and no tagline at all on a deployment that keeps
+           the event's details off a page anybody with the URL can fetch;
+           app.js writes the event's own in once the session says which event
+           this is, and puts these back when somebody signs out. Hence the
+           ids: they are what it writes through, and what it reads to know
+           what the shell was rendered with. -->
+      <h1 id="eventName">{{ .EventName }}</h1>
+      <p class="tagline" id="eventTagline">{{ .Tagline }}</p>
     </div>
     <!-- The run-up: from today to the day, with what is due pinned along it.
          Everything in planning an evening is measured against one date, so
@@ -411,7 +417,7 @@
      else. -->
 <div class="auth-wrap" id="authScreen" hidden>
   <header class="auth-head">
-    <p class="auth-event">{{ .EventName }}</p>
+    <p class="auth-event" id="authEvent">{{ .EventName }}</p>
     <h1 class="auth-title" id="authTitle" data-i18n-auth="signin">Sign in</h1>
     <p class="auth-lede" id="authLede"></p>
   </header>

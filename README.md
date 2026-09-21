@@ -64,15 +64,16 @@ exists in the source, which is what lets one public image serve any event.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SOIREE_EVENT_NAME` | `A Celebration` | Page title and hero heading. Also the Relying Party display name shown in a passkey prompt. |
+| `SOIREE_EVENT_NAME` | `A Celebration` | Page title and hero heading, unless `SOIREE_PUBLIC_EVENT_DETAILS` is off. Also the Relying Party display name shown in a passkey prompt, which is not affected by that switch: it is shown to somebody registering a passkey, who is signed in. |
 | `SOIREE_EVENT_TAGLINE` | *(empty)* | Subtitle under the heading |
 | `SOIREE_EVENT_DATE` | *(empty)* | RFC3339 **written in the event's own timezone**, e.g. `2027-06-12T19:00:00+09:00`. The date in it is the day everybody is shown, and the offset decides when "today" turns over. Drives the countdown and the archive. Omit for no countdown. |
 | `SOIREE_CURRENCY` | `EUR` | Primary currency, ISO 4217. Decides the minor-unit exponent the API speaks in. |
 | `SOIREE_LOCALE` | `en-US` | Number and date formatting, and the *fallback* language when its primary subtag is one of `en`, `nl` or `id`: what the interface is in for a visitor whose browser asks for none of those, and what a mail is in when nobody chose. A visitor's own browser comes first, a flag they click comes before that, and `?lang=nl` on a link before everything. |
 | `SOIREE_SECONDARY_CURRENCY` | *(unset)* | Optional second readout. Unset hides the column and the rate field. |
 | `SOIREE_SECONDARY_LOCALE` | *primary locale* | Formatting for the second currency |
-| `SOIREE_BUDGET_CEILING` | `0` | The ceiling a *fresh* browser starts with, in whole major units. Once a database is in play the stored `settings.ceiling` is authoritative and replaces it as soon as the plan arrives. |
+| `SOIREE_BUDGET_CEILING` | `0` | The ceiling a *fresh* browser starts with, in whole major units. Once a database is in play the stored `settings.ceiling` is authoritative and replaces it as soon as the plan arrives, and with `SOIREE_PUBLIC_EVENT_DETAILS` off the seed is not published at all. |
 | `SOIREE_DEMO_DATA` | `false` | Seed obviously-fake sample data in the browser |
+| `SOIREE_PUBLIC_EVENT_DETAILS` | `true` | Whether the page itself says which event it is for. On by default, which is what every deployment has always served. Off takes the name, the tagline, the date and the ceiling seed out of the HTML shell, the manifest and the configuration block, all of which anybody with the address can fetch, and sends them on the session instead, so the page names the event only to somebody signed in. Needs `DATABASE_URL`, and the process refuses to start without one: with no accounts there is no session to send them on. Three costs to know about: an installed app is named `soiree`, because the manifest is one rendering for everybody; somebody following a set-password link is not told which event they are joining until they are in; and the account mails go on naming the event in their subject and first line, deliberately, so an invitation to a mistyped address still says whose planner it is. |
 
 ### Serving
 

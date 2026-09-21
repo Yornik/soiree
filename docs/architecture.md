@@ -143,6 +143,52 @@ event. The event is on a calendar day in a place; the page takes the day from
 the text and reckons "today" at the event's offset, so neither depends on where
 the reader is or on UTC.
 
+### The shell is a page anybody can fetch
+
+Inlining that block also puts the event's name, tagline and date into a page
+served to whoever has the address. For most deployments that is what a masthead
+is for. For a deployment that treats the event's identity as personal it is
+not: such a deployment keeps the name, the day and the place out of everything
+it can, and its hostname is then usually the one thing about it that is public.
+One visit to that hostname hands all three back. `SOIREE_ALLOW_INDEXING` does
+not help, because `X-Robots-Tag` says nothing to somebody who already has the
+URL.
+
+So the decision above was revisited and this switch approved, with the default
+left exactly where it was: `SOIREE_PUBLIC_EVENT_DETAILS`, on unless an operator
+turns it off. Off:
+
+- The shell, the manifest and the config block are rendered with the product's
+  name and nothing else, and `ClientConfig` carries no event name, tagline,
+  date or ceiling seed. The capability signals stay, because they say what this
+  deployment can do rather than whose evening it is.
+- `GET /api/v1/auth/session` and the two logins carry an `event` object
+  instead. Those three because the page is waiting for one of them anyway
+  before it knows who is reading, so the round trip the inline block exists to
+  save is still saved. It is a different audience, not a different cost: the
+  shell answers a stranger, this answers a session.
+- The page keeps those fields beside the plan in `localStorage` and reads them
+  before the first render, because it paints the cached copy first and asks
+  afterwards. Without that, a repeat visit flashes a nameless heading; worse,
+  `isPast()` is false while the date is missing, so a settled planner would
+  offer itself as editable to a browser that is offline. They are cleared with
+  the plan when somebody signs out.
+- It needs `DATABASE_URL`. With no accounts nothing could ever deliver them, so
+  the process refuses to start rather than quietly publishing what an operator
+  has just asked to keep back.
+
+Three things the switch cannot do, and all of them are worth knowing before
+turning it on. The manifest is one rendering for everybody, so an installed app
+is named "soiree". Somebody following a set-password link is not told which
+event they are joining until they are signed in. And the account mails go on
+naming the event, in the subject and in the first line, because they are
+written that way deliberately: see the mail section below. So an invitation to
+a mistyped address still tells a stranger whose planner this is. Of the two
+reasons that naming was judged to cost nothing, this switch takes one away, in
+that the page behind the link no longer names the event to an anonymous
+visitor. The other stands: a stranger holding a mistyped invitation is holding
+a working credential besides.
+
 ## The `Store` seam
 
 Everything in this section describes `web/src/app.js` as it stands at the 1.0.0
@@ -1274,7 +1320,11 @@ account that has not set a password yet. They named nothing until that was
 reversed. The omission was meant to keep a mail to a mistyped address from
 telling a stranger whose planner this is, and it protected nothing, because the
 link's hostname is in the mail and the page behind it gives the event's name and
-date to any anonymous visitor. Who sent the invitation is still unnamed.
+date to any anonymous visitor. On a deployment with
+`SOIREE_PUBLIC_EVENT_DETAILS` off that page gives neither, and what is left of
+the argument is the credential in the stranger's hands. The mails name the
+event there too; the switch is about the page. Who sent the invitation is still
+unnamed.
 
 **The first account is the exception, and needs its own way in.** Every route
 that hands back a set-password link is admin-only, and `password-reset` issues

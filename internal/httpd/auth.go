@@ -170,6 +170,11 @@ type AuthOptions struct {
 	// EventName is what the mails say they are about. Empty is legal and
 	// falls back to wording that names nothing, the way the digest does.
 	EventName string
+
+	// Event is the event's own identity, for a deployment that keeps it out of
+	// the page anybody can fetch. Nil everywhere else, because the shell
+	// already says. See sessionJSON.
+	Event *config.EventDetails
 }
 
 // Auth is the accounts, sessions and roles surface.
@@ -186,6 +191,10 @@ type Auth struct {
 
 	// eventName is what the mails are about. See inviteMessage.
 	eventName string
+
+	// event is what a session is told about the event, nil unless this
+	// deployment keeps that out of the page. See sessionJSON.
+	event *config.EventDetails
 
 	loginIP         *limiter
 	loginAcct       *limiter
@@ -230,6 +239,7 @@ func NewAuth(o AuthOptions) *Auth {
 
 		defaultLanguage: languageOfLocale(o.Locale),
 		eventName:       o.EventName,
+		event:           o.Event,
 
 		loginIP:         newLimiter(loginIPBurst, loginIPWindow),
 		loginAcct:       newLimiter(loginAcctBurst, loginAcctWindow),
@@ -349,6 +359,28 @@ func toDTO(u store.User) userDTO {
 	}
 }
 
+// sessionJSON is the account, and what the page may now be told about the
+// event it is looking at.
+//
+// The shell is served to anybody who has the URL; this is served to a session.
+// So a deployment that keeps the event's name, tagline and date out of the
+// page (SOIREE_PUBLIC_EVENT_DETAILS=false) sends them here instead, on an
+// answer the page was waiting for anyway, which is what keeps the round trip
+// the inline config block exists to avoid from coming back.
+//
+// Embedded rather than nested, so the account is on the wire exactly where it
+// was before, and `event` is absent altogether wherever the shell already
+// says. The two logins answer with this for the same reason the session does:
+// a page that has just signed in does not ask again.
+type sessionJSON struct {
+	userDTO
+	Event *config.EventDetails `json:"event,omitempty"`
+}
+
+func (a *Auth) session(u store.User) sessionJSON {
+	return sessionJSON{userDTO: toDTO(u), Event: a.event}
+}
+
 // --- logging in -------------------------------------------------------------
 
 type loginRequest struct {
@@ -466,7 +498,7 @@ func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !a.startSession(w, r, user, "password") {
 		return
 	}
-	writeJSON(w, http.StatusOK, toDTO(user))
+	writeJSON(w, http.StatusOK, a.session(user))
 }
 
 // startSession is the one place a session comes into existence.
@@ -529,7 +561,7 @@ func (a *Auth) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "")
 		return
 	}
-	writeJSON(w, http.StatusOK, toDTO(u))
+	writeJSON(w, http.StatusOK, a.session(u))
 }
 
 // --- setting a password -----------------------------------------------------
@@ -1130,11 +1162,14 @@ func (a *Auth) setPasswordURL(token string, language *string) string {
 // planner this is; what it protected turned out to be nothing, because the
 // link's own hostname is in the mail and the page behind it hands the event's
 // name and date to any anonymous visitor, and the stranger is holding a
-// working credential besides. What the omission did cost was borne by the
-// person the mail was meant for, who had an unsigned account mail from an
-// unfamiliar domain to judge on twenty words and a tokenised URL. The digest
-// has named the event in its subject all along. The admin who sent it is still
-// deliberately unnamed.
+// working credential besides. On a deployment with
+// SOIREE_PUBLIC_EVENT_DETAILS off that page hands over nothing, so only the
+// credential is left of that reasoning; these mails name the event there too,
+// because the reason they do is about their reader rather than about the page.
+// What the omission did cost was borne by the person the mail was meant for,
+// who had an unsigned account mail from an unfamiliar domain to judge on
+// twenty words and a tokenised URL. The digest has named the event in its
+// subject all along. The admin who sent it is still deliberately unnamed.
 //
 // Only the invitation carries the line about an expired link. Whoever asked
 // for a reset has just used the control it points at.

@@ -758,6 +758,65 @@ func TestTheServiceWorkerIsTheSameOnEveryStart(t *testing.T) {
 	}
 }
 
+// A deployment can serve a shell that names nobody.
+//
+// The page is served to anybody who has the URL (noindex keeps it out of a
+// search engine, not away from whoever has the address), so on a deployment
+// that treats the event as personal, every place the shell says whose evening
+// this is has to say nothing instead: the tab's title, the masthead, the line
+// above the sign-in form, the manifest a phone puts under the icon, and the
+// configuration block. A session is what tells the page, and nothing there is
+// reachable without one.
+func TestTheShellCanBeServedWithoutNamingTheEvent(t *testing.T) {
+	h := newTestServer(t, config.Config{
+		EventName:        "Ada's Retirement",
+		Tagline:          "Dinner and speeches",
+		EventDate:        "2030-01-13T00:00:00+09:00",
+		Ceiling:          25000,
+		DatabaseURL:      "postgres://soiree@db.example.test/soiree",
+		HideEventDetails: true,
+	})
+
+	res := get(t, h, "/", nil)
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	page := string(body)
+
+	for _, said := range []string{"Retirement", "Dinner and speeches", "2030-01-13", "25000"} {
+		if strings.Contains(page, said) {
+			t.Errorf("the shell still tells every visitor %q", said)
+		}
+	}
+	if !strings.Contains(page, "<title>soiree</title>") {
+		t.Error("the shell has no title of its own to fall back on")
+	}
+	// What decides whether a control can be drawn at all stays: it says what
+	// this deployment can do, not whose evening it is.
+	if !strings.Contains(page, `"passkeys"`) || !strings.Contains(page, `"currency":"EUR"`) {
+		t.Error("the configuration block lost more than the event")
+	}
+
+	manifestURL := regexp.MustCompile(`/assets/manifest\.[a-f0-9]+\.webmanifest`).FindString(page)
+	if manifestURL == "" {
+		t.Fatal("the page links no manifest")
+	}
+	res = get(t, h, manifestURL, nil)
+	body, _ = io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		t.Fatalf("the manifest is not JSON: %v", err)
+	}
+	// One rendering for everybody, so an installed app is named after the
+	// product rather than after the evening. That is a cost of this switch,
+	// and it is why it is a switch.
+	if manifest.Name != "soiree" {
+		t.Errorf("the manifest names the event %q", manifest.Name)
+	}
+}
+
 // The manifest is JSON, and what it names is what stands under the icon on a
 // phone. An event called "Ada's 90th" has to arrive as that, not as
 // "Ada&#39;s 90th", and a name with a quote or a backslash in it must not
