@@ -35,9 +35,11 @@ FROM scratch
 
 # Inbound traffic is plain HTTP behind a TLS-terminating proxy, but the binary
 # makes outbound TLS connections of its own — SMTP for the reminder digest and
-# account mail — so it needs a trust store. On scratch there is none, and the
-# failure is an unhelpful "certificate signed by unknown authority" at the
-# moment the first mail is sent, long after deploy.
+# account mail, the browser vendors' push services for a notification, and the
+# attachments bucket to confirm or remove an upload — so it needs a trust
+# store. On scratch there is none, and the failure is an unhelpful "certificate
+# signed by unknown authority" at whichever of those comes first, long after
+# deploy.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 COPY --from=build /out/soiree /soiree

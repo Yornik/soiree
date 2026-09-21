@@ -10,10 +10,11 @@
  * Two rules, inherited from the rest of the suite and worth restating because
  * a networked test is where they are easiest to break:
  *
- *  - Never wait on a clock. Every assertion below either acts (which
- *    Playwright waits for) or polls a condition — usually the plan itself,
- *    read back over the API, which is the only witness that says whether an
- *    edit left the browser.
+ *  - Wait on a condition wherever there is one. Every assertion below either
+ *    acts (which Playwright waits for) or polls a condition — usually the
+ *    plan itself, read back over the API, which is the only witness that says
+ *    whether an edit left the browser. The few waits on a clock left over are
+ *    the ones playwright.config.js accounts for.
  *  - Never assert on an exact Intl string when the point is the arithmetic.
  *
  * These tests share one database, so they run serially and wipe the plan
@@ -1627,11 +1628,12 @@ test('once the session has ended the page stops asking', async ({ page, request 
   await expect(page.locator('#authScreen')).toBeVisible();
 
   /*
-   * The one place in this suite that waits on a clock, because the claim is
-   * that something does NOT happen and there is no event for that. The window
-   * is longer than the longest first retry the page used to make — the stream
-   * reopened after 2.5 to 7.5 seconds, the write loop after one — so the old
-   * behaviour cannot fit a quiet spell inside it.
+   * The longest wait on a clock in this suite, and the one with no condition
+   * available at all: the claim is that something does NOT happen, and there
+   * is no event that stands for that. The window is longer than the longest
+   * first retry the page used to make — the stream reopened after 2.5 to 7.5
+   * seconds, the write loop after one — so the old behaviour cannot fit a
+   * quiet spell inside it.
    */
   const asked = [];
   const note = (r) => { if (r.url().includes('/api/v1/')) asked.push(`${r.method()} ${new URL(r.url()).pathname}`); };

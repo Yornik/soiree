@@ -242,9 +242,10 @@ func main() {
 	}
 
 	// The deadline digest. Off unless SOIREE_REMINDER_ENABLED is true, and a
-	// no-op when SMTP is unconfigured, so this costs nothing in a deployment
-	// that does not want it. It holds a Postgres advisory lock while sending,
-	// which is what stops three replicas mailing the same digest three times.
+	// no-op when neither mail nor Web Push is configured, so this costs
+	// nothing in a deployment that does not want it. It holds a Postgres
+	// advisory lock while sending, which is what stops three replicas mailing
+	// the same digest three times.
 	// It counts its runs on the metrics registry, because the one job whose
 	// value is that it arrives without anyone checking is also the one whose
 	// failure nobody is looking for.
@@ -393,10 +394,13 @@ func openDatabase(ctx context.Context, cfg config.Config, log *slog.Logger) (*pg
 	log.Info("database ready", "migrationsApplied", len(applied))
 
 	if cfg.BootstrapAdmin != "" {
-		// Creates an `invited` admin with no password and no link: the person
-		// named picks their own password through the normal flow. It exists
-		// only so that "every account is created by an admin" has somewhere to
-		// start on an empty database.
+		// Creates the first admin, so that "every account is created by an
+		// admin" has somewhere to start on an empty database. Without
+		// SOIREE_BOOTSTRAP_PASSWORD that account is `invited` with no password
+		// and no link, and the person named picks their own through the normal
+		// flow; with one it is `active` and can be logged into at once, which
+		// is the way in when mail is broken. EnsureBootstrapAdmin carries the
+		// reasoning for that second door.
 		//
 		// Hashing here rather than in the store keeps the Argon2id policy in
 		// one place: an initial password gets exactly the parameters every

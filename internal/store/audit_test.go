@@ -257,9 +257,10 @@ func TestActorIsRecorded(t *testing.T) {
 		t.Fatalf("create budget item: %v", err)
 	}
 
-	// No account anywhere: recorded as unknown rather than refused. Accounts are
-	// a separate milestone and holding writes hostage to it would mean no
-	// history at all until it lands.
+	// No account anywhere: recorded as unknown rather than refused. A write
+	// still reaches this package with no session behind it, the bootstrap at
+	// startup or a test, and refusing those would leave the edit unmade and
+	// the trail no better informed.
 	if got := history(t, s, store.EntityBudgetItems, item.ID)[0]; got.ActorID != nil || got.ActorLabel != "unknown" {
 		t.Errorf("actor = %v/%q, want nobody and %q", got.ActorID, got.ActorLabel, "unknown")
 	}
