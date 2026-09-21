@@ -4102,10 +4102,12 @@
 
   /* Who is down for what: every name, and what nobody has taken on.
    *
-   * One list, read by the figures beside the names and by the final
-   * reckoning, so the two cannot disagree. The unassigned row belongs in it
-   * even though the sponsor grid has no line for it: it is part of the
-   * committed total, and an allocation that left it out would hand its
+   * One list in one order, read by the figures beside the names and by the
+   * final reckoning. Both hand out their whole units in the order this
+   * returns them and sort for display only afterwards, which is what stops
+   * the same name reading a unit apart in the two lists. The unassigned row
+   * belongs in it even though the sponsor grid has no line for it: it is part
+   * of the committed total, and an allocation that left it out would hand its
    * rounding to somebody who is not down for it.
    */
   function sponsorRows() {
@@ -4182,13 +4184,21 @@
     var list = document.getElementById('splitList');
     list.innerHTML = '';
     var grand = totals().totalMinor;
-    order.sort(function (a, b) { return groups[b] - groups[a]; });
+    // Allocated in the order the rows were gathered, which in the even mode
+    // is the order sponsorRows uses, and sorted for display only once the
+    // figures are decided. Sorting first and handing the sorted array to the
+    // allocation gives the leftover unit to whoever is at the top of this
+    // list rather than to the same row the grid gives it to, and one name
+    // then reads a whole unit apart in two lists on one screen.
     var shown = allocateRows(order.map(function (k) { return groups[k]; }), grand);
-    order.forEach(function (k, at) {
+    var entries = order.map(function (k, at) { return { key: k, shown: shown[at] }; });
+    entries.sort(function (a, b) { return groups[b.key] - groups[a.key]; });
+    entries.forEach(function (e) {
+      var k = e.key;
       var li = document.createElement('li');
-      var share = shown[at].pct;
+      var share = e.shown.pct;
       li.appendChild(cell('span', '', k));
-      li.appendChild(cell('span', 'amt', fmtCur(shown[at].amount)));
+      li.appendChild(cell('span', 'amt', fmtCur(e.shown.amount)));
       li.appendChild(cell('span', 'pct', share + '%'));
       // The share again, as a length: five percentages in a column have to be
       // read and compared, five bars are compared by looking.
@@ -4239,8 +4249,6 @@
     // a line carries one Paid figure and no payer, and guessing is worse than
     // saying which rule is in force, which the heading does.
     var rows = sponsorRows();
-    rows.sort(function (a, b) { return b.committedMinor - a.committedMinor; });
-
     var paidMinor = rows.reduce(function (sum, r) { return sum + r.paidMinor; }, 0);
     var shown = allocateRows(rows.map(function (r) { return r.committedMinor; }), totals().totalMinor);
     var paidShown = allocateRows(rows.map(function (r) { return r.paidMinor; }), paidMinor);
@@ -4250,27 +4258,33 @@
     // Nobody can settle from "still open -1", so the payment is the figure
     // that gives way. It reads as a unit less paid, never as more owed than
     // was taken on.
-    rows.forEach(function (r, at) {
-      if (paidShown[at].amount > shown[at].amount) paidShown[at].amount = shown[at].amount;
+    var entries = rows.map(function (r, at) {
+      var paid = Math.min(paidShown[at].amount, shown[at].amount);
+      return { row: r, shown: shown[at], paid: paid };
     });
+    // Largest share at the top, and only now that every figure is decided.
+    // Allocating the sorted list instead would hand the leftover unit to a
+    // different name here than beside the names in the sponsor grid, and the
+    // record of the evening would say two things about one person.
+    entries.sort(function (a, b) { return b.row.committedMinor - a.row.committedMinor; });
 
     list.innerHTML = '';
-    rows.forEach(function (r, at) {
-      var open = shown[at].amount - paidShown[at].amount;
+    entries.forEach(function (e) {
+      var open = e.shown.amount - e.paid;
       var li = document.createElement('li');
-      li.appendChild(cell('span', '', r.label));
-      li.appendChild(cell('span', 'amt', fmtCur(shown[at].amount)));
-      li.appendChild(cell('span', 'pct', shown[at].pct + '%'));
+      li.appendChild(cell('span', '', e.row.label));
+      li.appendChild(cell('span', 'amt', fmtCur(e.shown.amount)));
+      li.appendChild(cell('span', 'pct', e.shown.pct + '%'));
       // Under the name rather than beside it: three money figures and a
       // percentage in one row is a row nobody can read on a phone.
       var sub = cell('span', 'settle-sub', '');
-      sub.appendChild(cell('span', 'settle-paid', t('ar.paidsofar', { a: fmtCur(paidShown[at].amount) })));
+      sub.appendChild(cell('span', 'settle-paid', t('ar.paidsofar', { a: fmtCur(e.paid) })));
       sub.appendChild(cell('span', 'settle-open' + (open > 0 ? ' owing' : ''), t('ar.stillopen', { a: fmtCur(open) })));
       li.appendChild(sub);
       list.appendChild(li);
     });
     var empty = document.getElementById('settleEmpty');
-    if (empty) empty.style.display = rows.length ? 'none' : 'block';
+    if (empty) empty.style.display = entries.length ? 'none' : 'block';
   }
 
   /* readOnly rather than disabled wherever the control supports it: a closed

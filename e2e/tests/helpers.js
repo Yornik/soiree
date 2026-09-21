@@ -233,6 +233,20 @@ async function readSplit(page) {
   return rows.map((r) => ({ label: r.label, amount: money(r.amount), pct: r.pct }));
 }
 
+/** The figures beside the names in the sponsor editor, by callsign. */
+async function readSponsorGrid(page) {
+  const out = [];
+  const rows = page.locator('#sponsorGrid .sponsor-row');
+  for (let i = 0; i < (await rows.count()); i++) {
+    const row = rows.nth(i);
+    out.push({
+      code: await row.locator('.code-input').inputValue(),
+      amount: money(await row.locator('.sp-amt').textContent()),
+    });
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------
  * The instance with a database behind it
  * ------------------------------------------------------------------
@@ -513,6 +527,7 @@ module.exports = {
   openLineDetails,
   openPlanner,
   readSplit,
+  readSponsorGrid,
   readStored,
   tagLine,
 };

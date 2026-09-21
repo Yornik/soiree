@@ -427,7 +427,15 @@ breakdown divides it between them or reports it as a shared bucket. A share of
 a shared line is allocated in whole minor units, with the remainder going to
 the first names on the line, and the whole-unit figures a list shows are
 allocated against the total above it, so the rows add up to it and the
-percentages to 100.
+percentages to 100. The allocation runs in one fixed order, the sponsors as
+they are listed and then whatever is unassigned, and a list sorts for display
+only once its figures are decided: a leftover unit goes to a row by its
+position, so a list that sorted first would give it to a different name than
+the figure beside that name in the sponsor grid. In the final reckoning the
+paid column is allocated against its own total and then held to the share it
+stands against, so it can add to a whole unit less than the Paid headline.
+That is the lesser of the two, because the alternative reads as a person
+owing less than nothing.
 
 `colWidths`, `rowHeights` and `reopened` have no column behind them and survive
 an adopted plan untouched. For the first two that is a decision: one person

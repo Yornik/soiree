@@ -13,7 +13,7 @@
  * has nothing to do with the archive.
  */
 const { test, expect } = require('@playwright/test');
-const { STORAGE_KEY, gotoTab, money, readStored } = require('./helpers');
+const { STORAGE_KEY, gotoTab, money, readSponsorGrid, readStored } = require('./helpers');
 
 // The fixture instance is dated 2030-06-12.
 const EVENT_DAY = '2030-06-12T09:00:00Z';
@@ -162,6 +162,33 @@ test('a share rounded up is never a share that owes less than nothing', async ({
   const settle = await readSettlement(page);
   expect(settle).toHaveLength(2);
   expect(settle.filter((r) => r.open >= 0 && r.paid <= r.amount)).toEqual(settle);
+});
+
+test('the reckoning and the figure beside the name are one figure', async ({ page }) => {
+  // Two lists on one page, in opposite orders: the reckoning puts the largest
+  // share first, the sponsor grid keeps the order the names were added. Halves
+  // under a total of 31 leave exactly one whole unit to hand out, and a list
+  // that sorts its rows before it allocates gives that unit to the other
+  // person. The record of the evening then says two things about one name.
+  await openAt(page, DAY_AFTER, {
+    ...SETTLED,
+    budgetItems: [
+      { id: 'b1', item: 'Flowers', unit: 10.5, qty: 1, paid: 0, sponsors: ['s1'], note: '' },
+      { id: 'b2', item: 'Candles', unit: 20.5, qty: 1, paid: 0, sponsors: ['s2'], note: '' },
+    ],
+  });
+
+  const settle = await readSettlement(page);
+  expect(settle.map((r) => ({ who: r.who, amount: r.amount }))).toEqual([
+    { who: 'Ivy — Grace', amount: 20 },
+    { who: 'Rose — Ada', amount: 11 },
+  ]);
+  expect(settle.reduce((sum, r) => sum + r.amount, 0)).toBe(31);
+
+  expect(await readSponsorGrid(page)).toEqual([
+    { code: 'Rose', amount: 11 },
+    { code: 'Ivy', amount: 20 },
+  ]);
 });
 
 test('a closed ledger offers nothing to edit, but everything to read', async ({ page }) => {
