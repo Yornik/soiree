@@ -3971,9 +3971,9 @@
   // list arrives with the plan and with nothing else, so on a page painted
   // from this browser's copy, with the origin away, or a session that ended
   // before the reload, or simply the gap before the first read lands, it is
-  // empty because nothing has filled it. A row under an id this browser minted has never
-  // been sent and can have no files whatever the page knows, which is the one
-  // case where the empty list is the truth.
+  // empty because nothing has filled it. A row under an id this browser
+  // minted has never been sent and can have no files whatever the page knows,
+  // which is the one case where the empty list is the truth.
   function filesUncounted(id) {
     return !!FILES && !apiMode && SERVER_ID.test(String(id));
   }
