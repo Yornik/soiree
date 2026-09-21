@@ -1379,10 +1379,6 @@
   var BY_ENTITY = { settings: SETTINGS };
   COLLECTIONS.forEach(function (c) { BY_ENTITY[c.entity] = c; });
 
-  // State key -> the same descriptor, for reading an op key back apart.
-  var BY_KEY = { settings: SETTINGS };
-  COLLECTIONS.forEach(function (c) { BY_KEY[c.key] = c; });
-
   function fieldNamed(coll, name) {
     for (var i = 0; i < coll.fields.length; i++) {
       if (coll.fields[i].name === name) return coll.fields[i];
@@ -1551,7 +1547,11 @@
     return op.coll.fields.map(function (f) { return String(f.canon(row)); }).join('');
   }
 
-  function planOps() {
+  // Every difference between the page and the shadow, parked or not. Split
+  // out from planOps because the two answers below are the same list read
+  // under opposite tests, and a park that is not one of these differences is
+  // a write nothing can make again.
+  function pendingOps() {
     var creates = [], updates = [], deletes = [];
 
     COLLECTIONS.forEach(function (c) {
@@ -1581,7 +1581,11 @@
       updates.push({ kind: 'update', coll: SETTINGS, id: null, fields: settings });
     }
 
-    return creates.concat(updates).concat(deletes).filter(function (op) {
+    return creates.concat(updates).concat(deletes);
+  }
+
+  function planOps() {
+    return pendingOps().filter(function (op) {
       return blocked[opKey(op)] !== opSignature(op);
     });
   }
@@ -2267,25 +2271,29 @@
 
   /* The writes the server refused and this browser has parked.
    *
-   * A park whose row is in neither the page nor the shadow is not one of
-   * them: nothing can produce that op again, so nothing will ever clear the
-   * key, and counting it would speak of a change that exists nowhere at all.
+   * Read from the same differences planOps filters, under exactly the test
+   * planOps filters them by, because a key in `blocked` on its own says
+   * nothing: the person does what the notice asks, the row changes, and the
+   * write goes and is taken while the key it was parked under stays where it
+   * is. What is parked is a write this page would still make and the server
+   * has already refused in that form. A row edited since is not one, and
+   * planOps counts it instead; a row gone from both the page and the shadow
+   * produces no write at all, so nothing could ever clear its key and
+   * counting it would speak of a change that exists nowhere.
    */
   function parkedKeys() {
     if (!apiMode || !shadow) return [];
-    return Object.keys(blocked).filter(function (key) {
-      var c = BY_KEY[key.slice(0, key.indexOf(':'))];
-      if (!c || c.singleton) return true;
-      var id = key.slice(key.indexOf(':') + 1, key.lastIndexOf(':'));
-      return !!findRow(state[c.key], id) || !!shadow[c.key][id];
-    });
+    return pendingOps().filter(function (op) {
+      return blocked[opKey(op)] === opSignature(op);
+    }).map(opKey);
   }
 
   function unsentCount() {
     if (!apiMode || !shadow) return 0;
     // Waiting to be sent, plus refused by the server and parked: both are
-    // edits that exist in this browser and nowhere else.
-    return planOps().length + parkedKeys().length;
+    // edits that exist in this browser and nowhere else, and the two are the
+    // halves this one list splits into.
+    return pendingOps().length;
   }
 
   function beforeSignOut() {

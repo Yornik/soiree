@@ -625,6 +625,18 @@ test('a change the server will not take is parked, said out loud, and not counte
   await expect(msg).toHaveText(/would not accept/);
   await expect(msg).toHaveClass(/problem/);
 
+  // And when the person does what the line asks and changes the row, the
+  // write is no longer the one the server refused: it goes again, it is
+  // taken, and the line has nothing left to say. A notice fixed to the top of
+  // the window for the life of the tab, over a planner that is entirely
+  // saved, is worse than no notice at all.
+  await budgetRow(page, 0).note.fill('Balance due two weeks before');
+  await expect
+    .poll(async () => (await apiPlan(request)).budgetItems[0].note)
+    .toBe('Balance due two weeks before');
+  await expect(msg).toBeEmpty();
+  await expect(msg).not.toHaveClass(/problem/);
+
   // And then the line goes. The parked write can never be made again, so the
   // question at the door of a shared computer must not go on counting it: it
   // would be asking about a change that exists nowhere.

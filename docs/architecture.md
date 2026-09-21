@@ -359,12 +359,16 @@ Five consequences worth stating, because each is easy to undo:
   `localStorage` — and the person is told it has not left the browser, for as
   long as it has not: a parked row is a condition rather than news, so it holds
   the status line the way "the server is away" does instead of passing in a
-  six-second flash. A `404` is the exception, because it is not about the edit
-  at all: somebody else removed the line, and the re-read that the same removal
-  announces takes the row off this screen too. There is nowhere left to keep
-  the work, because the row has no server side to write it to and posting it
-  back would undo a removal somebody meant, so the person is told the changes
-  went with the line rather than promised a copy the next read will drop.
+  six-second flash. Which is why what is parked is read back out of the
+  differences the page is holding rather than out of the list of refusals: the
+  person changes the row, the write is no longer the one that was refused, it
+  goes and is taken, and the line has to have nothing left to say. A `404` is
+  the exception, because it is not about the edit at all: somebody else removed
+  the line, and the re-read that the same removal announces takes the row off
+  this screen too. There is nowhere left to keep the work, because the row has
+  no server side to write it to and posting it back would undo a removal
+  somebody meant, so the person is told the changes went with the line rather
+  than promised a copy the next read will drop.
 - **Ids are reconciled, not assumed.** The page mints an optimistic id the
   moment a row appears, because the row has to be addressable before any round
   trip could have answered. The `POST` also carries a uuid the page chose for
