@@ -219,9 +219,16 @@ func (s *Server) servePlan(w http.ResponseWriter, r *http.Request) {
 	writeJSONCompressed(w, r, http.StatusOK, encodePlan(s.cfg.Currency, plan))
 }
 
+// handleCreate stores a new row, under the id the caller named if it named
+// one. Naming it is what makes the request safe to repeat: see alreadyCreated.
 func handleCreate[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 	body, ok := readBody(w, r)
 	if !ok {
+		return
+	}
+	id, err := idFromBody(body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errBadRequest, err.Error())
 		return
 	}
 	row, err := e.decode(e.blank, body)
@@ -229,12 +236,64 @@ func handleCreate[T any](w http.ResponseWriter, r *http.Request, e entity[T]) {
 		writeError(w, http.StatusBadRequest, errBadRequest, err.Error())
 		return
 	}
+	// The same stamp a patch makes, at the revision a create starts from: no
+	// INSERT reads that field, and the nil uuid is the store's own way of
+	// saying the database should choose the id.
+	e.key(&row, id, 0)
+
 	out, err := e.create(r.Context(), row)
 	if err != nil {
+		if stored, done := alreadyCreated(r.Context(), e, id, err); done {
+			writeJSON(w, http.StatusOK, e.encode(stored))
+			return
+		}
 		writeStoreError(w, r, e, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, e.encode(out))
+}
+
+// alreadyCreated recognises a create this server has already done.
+//
+// A POST that commits and whose answer is lost on the way back is sent again
+// by the browser, which cannot tell that from a request which never arrived.
+// With nothing to recognise it by, the second one is an ordinary create, and
+// the budget line it adds is counted twice in every total with nothing
+// anywhere saying so. A create that named its id can be recognised: the
+// duplicate key is itself the proof that this exact row is already stored, so
+// the caller gets that row and a 200.
+//
+// It is the row as stored rather than the body that was sent. A retry may
+// carry what somebody typed while the first answer was not arriving, and that
+// difference is an ordinary patch afterwards, at a revision the caller can
+// now see. Merging it in here would be a write made from a body whose
+// revision means nothing.
+//
+// The primary key only. Every other unique violation is a *different* row
+// colliding with one that is there (a second programme entry against the same
+// budget line, an address already taken), and those keep the 409 they always
+// had. The name is matched by its suffix rather than against each
+// table, which the load makes safe: the insert ran in a transaction that has
+// since rolled back, so a row under this id is one an earlier request stored.
+// A duplicate key raised by a row's attributions leaves nothing to find and
+// falls through to the ordinary answer.
+//
+// A row deleted in the meantime is created again rather than recognised,
+// because by then there is nothing left to recognise.
+func alreadyCreated[T any](ctx context.Context, e entity[T], id uuid.UUID, err error) (T, bool) {
+	var zero T
+	if id == uuid.Nil {
+		return zero, false
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" || !strings.HasSuffix(pgErr.ConstraintName, "_pkey") {
+		return zero, false
+	}
+	stored, err := e.load(ctx, id)
+	if err != nil {
+		return zero, false
+	}
+	return stored, true
 }
 
 // handlePatch applies a partial update: read the row, merge the fields the body
@@ -354,6 +413,37 @@ func revisionFromBody(body []byte) (int64, bool) {
 		return 0, false
 	}
 	return *envelope.Revision, true
+}
+
+// idFromBody pulls the id out of a create body.
+//
+// Read separately from every other field, for the reason revisionFromBody is:
+// the decoder is shared with a patch, where the path names the row and an
+// echoed id has to go on being ignored. On a create it is the caller's own
+// name for the row, and naming it is what makes the request repeatable.
+//
+// Absent, null and the nil uuid all mean "no id", which is the store's own
+// reading of the zero value: the database chooses one instead. Anything else
+// that is not a uuid is refused rather than quietly replaced, because a client
+// that meant to name its row and misspelt the id would otherwise lose the
+// protection it was asking for and find out on its first retry.
+func idFromBody(body []byte) (uuid.UUID, error) {
+	var envelope struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || len(envelope.ID) == 0 {
+		// A body that does not parse at all is decodeBody's complaint to make,
+		// and it names the field that broke.
+		return uuid.Nil, nil
+	}
+	var id *uuid.UUID
+	if err := json.Unmarshal(envelope.ID, &id); err != nil {
+		return uuid.Nil, errors.New("id must be a uuid")
+	}
+	if id == nil {
+		return uuid.Nil, nil
+	}
+	return *id, nil
 }
 
 // bodyFor is the contract every request DTO satisfies: merge yourself onto a

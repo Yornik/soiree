@@ -219,7 +219,10 @@ func asAny[T, D any](f func(T) D) func(T) any {
 // would also reject the obvious client — read a row, change one field, send the
 // whole thing back — so the fields that round-trip are named here and dropped.
 // The revision is read separately, by revisionFromBody: it is not a field of
-// the row, it is the caller's claim about which version they edited.
+// the row, it is the caller's claim about which version they edited. So is the
+// id, by idFromBody, and only on a create, where it is the caller's own name
+// for the row it is storing. On a PATCH it is dropped here, because the path
+// names the row.
 type echoed struct {
 	ID        json.RawMessage `json:"id"`
 	Revision  json.RawMessage `json:"revision"`

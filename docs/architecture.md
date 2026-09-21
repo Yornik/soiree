@@ -309,9 +309,19 @@ Five consequences worth stating, because each is easy to undo:
   rather than promised a copy the next read will drop.
 - **Ids are reconciled, not assumed.** The page mints an optimistic id the
   moment a row appears, because the row has to be addressable before any round
-  trip could have answered. `POST` returns a uuid, and adopting it is a rename
-  everywhere the old id was referred to — otherwise a budget line keeps pointing
-  at a sponsor id that only ever existed in this browser.
+  trip could have answered. The `POST` also carries a uuid the page chose for
+  the row, and the server stores the row under it: nothing in the browser can
+  tell an answer that never arrived from a request that never went, so a create
+  whose answer is lost is sent again, and a create this server has already done
+  then comes back as the row it stored, with a `200`, rather than as a second
+  line that every total counts. The optimistic id keeps its own shape and is
+  not that uuid, because the shape is what tells a reload which rows have ever
+  been sent. Adopting the id the answer carries is a rename everywhere the old
+  id was referred to — otherwise a budget line keeps pointing at a sponsor id
+  that only ever existed in this browser. The rename also lets go of a copy of
+  the row that a plan read brought in under that uuid while the answer was
+  missing, because one id held by two rows is a difference no later pass can
+  settle.
 - **Collections are sent in dependency order.** Sponsors before budget items,
   because a line tagged with a sponsor created in the same debounce window has
   to reach a server that already knows that sponsor, or the attribution is a
