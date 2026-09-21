@@ -36,9 +36,6 @@ func TestMinorUnitsZeroDecimal(t *testing.T) {
 	if got := store.ToMinor(currency, 750000); got != 750000 {
 		t.Errorf("ToMinor(%s, 750000) = %d, want 750000", currency, got)
 	}
-	if got := store.ToMajor(currency, 750000); got != 750000 {
-		t.Errorf("ToMajor(%s, 750000) = %v, want 750000", currency, got)
-	}
 	if got := store.FormatMajor(currency, 750000); got != "750000" {
 		t.Errorf("FormatMajor(%s, 750000) = %q, want \"750000\"", currency, got)
 	}
@@ -63,9 +60,6 @@ func TestMinorUnitsTwoDecimal(t *testing.T) {
 
 	if got := store.ToMinor(currency, 1234.56); got != 123456 {
 		t.Errorf("ToMinor(%s, 1234.56) = %d, want 123456", currency, got)
-	}
-	if got := store.ToMajor(currency, 123456); math.Abs(got-1234.56) > 1e-9 {
-		t.Errorf("ToMajor(%s, 123456) = %v, want 1234.56", currency, got)
 	}
 	if got := store.FormatMajor(currency, 123456); got != "1234.56" {
 		t.Errorf("FormatMajor(%s, 123456) = %q, want \"1234.56\"", currency, got)

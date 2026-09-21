@@ -57,18 +57,16 @@ func Exponent(currency string) int {
 // The float is the lossy step, not the conversion: 1.005 is already slightly
 // below 1.005 by the time it arrives. Where the input is text — an import, a
 // form field, a JSON body — use ParseMajor, which never sees a float at all.
+//
+// So nothing in the binary calls this. It stays for the store's own fixtures,
+// written the way a planner would say an amount out loud, and rewriting three
+// dozen of those to be rid of a float that already carries its warning is how
+// a money bug gets in.
 func ToMinor(currency string, major float64) int64 {
 	if math.IsNaN(major) || math.IsInf(major, 0) {
 		return 0
 	}
 	return int64(math.Round(major * math.Pow10(Exponent(currency))))
-}
-
-// ToMajor converts stored minor units back to major units. Exact for any
-// amount a planner will ever type; use FormatMajor when the result is going to
-// be displayed or compared.
-func ToMajor(currency string, minor int64) float64 {
-	return float64(minor) / math.Pow10(Exponent(currency))
 }
 
 // FormatMajor renders minor units as a plain decimal string with exactly the
