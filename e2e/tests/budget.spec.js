@@ -228,9 +228,11 @@ test('a line paid to the cent is settled, not a rounding error short', async ({ 
 test('a figure with cents is a valid figure, not one the browser calls invalid', async ({ page }) => {
   // The same 45.33 the line above reckons with. The field used to declare a
   // step of one whole unit, which makes every price with cents a step
-  // mismatch: a browser then reports the field as invalid, a screen reader
-  // reads that out on a perfectly good quote, and the spinner arrows round it
-  // to 46 on the way past.
+  // mismatch: a browser then reports the field as invalid and a screen reader
+  // reads that out on a perfectly good quote. These are text fields read by
+  // parseAmount now, so there is no step left to mismatch and the only thing
+  // that can be wrong with a figure is that it cannot be read at all, which
+  // number-input.spec.js covers.
   const row = await addBudgetLine(page, { item: 'Catering', unit: 45.33, qty: 2.5, paid: 22.5 });
 
   const validity = (locator) => locator.evaluate((el) => ({
@@ -241,10 +243,12 @@ test('a figure with cents is a valid figure, not one the browser calls invalid',
   // Quantity carries three decimals, which is what the column stores.
   expect(await validity(row.qty)).toEqual({ invalid: false, stepMismatch: false });
 
-  // And the arrows still move by a whole unit rather than a cent at a time.
-  await row.unit.focus();
-  await page.keyboard.press('ArrowUp');
-  await expect(row.unit).toHaveValue('46.33');
+  // And the cents are still there after the field has been left, rather than
+  // rounded away by a control that had opinions about whole units.
+  await row.unit.click();
+  await row.unit.blur();
+  await expect(row.unit).toHaveValue('45.33');
+  await expect(row.committed).toHaveText('€113');
 });
 
 // Reported from the first real deployment, by people on desktop monitors: "add
