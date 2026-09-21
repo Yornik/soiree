@@ -4,8 +4,11 @@ One Go binary serves the whole application. The frontend is embedded with
 `//go:embed` and processed at startup; there is no separate asset build and no
 runtime disk access.
 
+The main pieces:
+
 ```
 cmd/soiree/main.go      wiring, signals, graceful shutdown
+cmd/soiree-import/      the spreadsheet importer, a separate binary
 internal/config/        environment parsing and validation
 internal/httpd/
   assets.go             hashing, compression, content addressing
@@ -14,8 +17,11 @@ internal/httpd/
   api_entities.go       one descriptor per table
   api_json.go           wire types; money, dates, partial updates
   api_settings.go       the singleton's own PATCH
+  activity.go           the admin's read of the change history
+  attachments.go        the signed upload and download surface
   auth.go               login, set-password, the admin's view of accounts
   authmw.go             session resolution, roles, per-IP limits
+  ratelimit.go          the per-IP buckets those limits are kept in
   passkeys.go           the WebAuthn surface
   push.go               storing and removing a browser's push subscription
   sse.go                the change fan-out behind GET /api/v1/events
@@ -24,10 +30,15 @@ internal/store/         typed data access, change history, LISTEN/NOTIFY
 internal/reminders/     the deadline digest and its scheduler
 internal/push/          the Web Push transport
 internal/mailer/        the SMTP transport
+internal/objstore/      presigned S3 addresses, no SDK
+internal/sheetimport/   the .ods / .csv reader behind cmd/soiree-import
 internal/auth/          Argon2id hashing, one-time token minting
 internal/migrate/       advisory-locked migration runner
+internal/pgtest/        a throwaway Postgres for the tests
+internal/s3test/        a throwaway MinIO for the tests
 web/embed.go            //go:embed of web/src
-web/src/                index.html, styles.css, app.js, sw.js, fonts/
+web/src/                index.html, styles.css, app.js, auth.js, sw.js,
+                        the manifest, fonts/ and icons/
 ```
 
 Three things are attached rather than built in, and each is nil when the
@@ -61,11 +72,12 @@ ever reaching its method-not-allowed branch.
 
 Order matters, because assets reference each other by name:
 
-1. **Leaf assets** — the font and favicon are hashed first.
+1. **Leaf assets** — the font, the favicon and the four PNG icons are hashed
+   first.
 2. **Stylesheet** — its `url('bricolage-display.woff2')` is rewritten to the
    font's hashed filename, *then* the stylesheet itself is hashed. Doing it in
    this order is what keeps the font reference from 404ing.
-3. **Application script** — hashed.
+3. **Application scripts** — `app.js` and `auth.js`, each hashed.
 4. **Manifest** — templated (it names the event and references the hashed
    icons), then hashed.
 5. **HTML shell** — templated with the config and the hashed asset URLs.
@@ -102,13 +114,16 @@ Two consequences worth stating explicitly:
 
 The block is a purpose-built struct rather than the whole configuration, so a
 variable cannot be published by being added. What it carries beyond the event's
-own details is exactly two capability signals: the VAPID **public** key, and
-only when the server could actually send with it, and a boolean saying whether
-to offer a passkey button. The private key is deliberately absent from the type,
-and the passkey flag names no domain and carries no key — it reveals nothing a
-request to the login page would not. That flag also has to agree with whether
-the routes are actually mounted, which is why `cmd/soiree` clears it when there
-is no database: a button whose route is a 404 is worse than no button.
+own details is capability signals, one per subsystem the page can only draw a
+control for when the deployment has it: the VAPID **public** key, and only when
+the server could actually send with it; a boolean saying whether to offer a
+passkey button; and, when files can be attached, the per-file size limit. The
+private key is deliberately absent from the type, the passkey flag names no
+domain and carries no key, and the attachment entry names no bucket and no
+endpoint. None of them reveals anything a request to the login page would not.
+The passkey flag also has to agree with whether the routes are actually
+mounted, which is why `cmd/soiree` clears it when there is no database: a
+button whose route is a 404 is worse than no button.
 
 The database DSN is `DATABASE_URL` and not `SOIREE_DATABASE_URL`, deliberately.
 It is the name every Postgres tool and the CloudNativePG connection secret
@@ -401,9 +416,11 @@ constraint drives the design:
    Nothing else is: an error is too small to pay for the encoder's header, and
    a compressed `/events` would be a buffered one.
 
-Measured at 1.2.0, brotli, from a running server: shell 4.5 kB, stylesheet
-11 kB, planner script 46 kB, accounts script 25 kB, font 69 kB. Both scripts
-are `defer`, so first paint needs the shell and stylesheet only — about 16 kB.
+What each of those costs in bytes is measured and tabulated in the README,
+under *Design notes*, with the command to check the figures against the build
+in hand. Both scripts are `defer`, so first paint is the shell and the
+stylesheet and nothing else. The figures live in one place because they were
+written down in three and the three disagreed.
 
 ### Deliberately excluded
 
@@ -522,7 +539,7 @@ Done:
 6. ~~Build and supply chain.~~ See below; two items there belong elsewhere.
 7. ~~Design pass.~~ See below.
 8. ~~Audit trail.~~ Append-only `change_log`, written in the same transaction as
-   the change it records.
+   the change it records, and the screen an admin reads it on. See *Activity*.
 9. ~~Deadline reminders~~, by mail and by web push. See *Web push*.
 10. **Data protection** — half done. `internal/store/privacy.go` implements
     subject export, erasure and a retention purge, with their own tests. Nothing
@@ -931,6 +948,9 @@ The full surface:
 | `PATCH /api/v1/settings` | The plan-wide knobs: ceiling, inflation buffer, fx rate, split-evenly |
 | `POST`, `PATCH /{id}`, `DELETE /{id}` on `/api/v1/budget-items`, `/sponsors`, `/tasks`, `/notes`, `/phases`, `/programme-entries` | The collections |
 | `POST`, `DELETE /api/v1/push/subscriptions` | A device asking to be notified. Session required; mounted only when the deployment has accounts. |
+| `POST /api/v1/attachments`, `POST /{id}/complete`, `GET /{id}/content`, `DELETE /{id}` | Files on a line or a task. See *Attachments*. |
+| `GET /api/v1/activity` | The change history, read. Admin only. See *Activity*. |
+| `GET /api/v1/version` | Which release is running, to anybody signed in. Behind the guard on purpose: the public page does not name its build. |
 | `/api/v1/auth/...`, `/api/v1/users/...` | See *Accounts*. |
 
 `settings` has its own handler because it is the one table the collection
@@ -1077,10 +1097,11 @@ in the database, not as it stood when the session was created.
 The browser's half is `web/src/auth.js`, a second script beside the planner
 rather than part of it: a deployment with no database has no accounts at all,
 and `auth.js` is then a script that finds nothing and draws nothing. It draws
-four screens, routed in the URL fragment so they can be linked to — sign in,
+five screens, routed in the URL fragment so they can be linked to — sign in,
 set a password (where an invitation link lands, with the token taken out of the
 address bar before anything else happens), your own account and its passkeys,
-and the accounts screen for an admin. It enforces nothing; the server does.
+and, for an admin, the accounts screen and the activity screen. It enforces
+nothing; the server does.
 
 It is translated like the planner, and deliberately not *by* the planner. The
 table is `auth.js`'s own — a deployment with no database never draws these
@@ -1457,7 +1478,7 @@ recipients will therefore never receive a notification however well this works.
 It is the reason mail remains the primary channel.
 
 The browser half is two pieces. The page makes the offer — never on load,
-because a denied permission is sticky, but the first time a signed-in editor
+because a denied permission is sticky, but the first time a signed-in admin
 gives a task a due date — and posts the subscription, re-posting whatever the
 device already holds on every load so that a restored database gets its devices
 back. `web/src/sw.js` handles `push` and `notificationclick`: it always shows a
@@ -1655,6 +1676,33 @@ refuses fields it does not know.
 connection starts that file again, which the 25 MB default keeps tolerable.
 Export and the database backup carry records, never bytes. The subject-access
 tooling in `privacy.go` does not look at file names.
+
+### Activity
+
+What everybody has been doing, newest first, for an admin. It is a read of
+`change_log`, the table the audit trail has written to since before there was
+anything to show it with, translated on the way out into the language the rest
+of the API speaks: camelCase fields, and money as decimal strings in major
+units, because a client that learned `"500.00"` from `GET /plan` must not be
+handed `50000` here.
+
+**Why admin-only.** Every entry names an account, and the list of accounts is
+something only an admin can read. A feed open to every editor would hand that
+list out through a second door, annotated with what each person did and when.
+
+**Why an exact path.** `GET /api/v1/activity` is mounted on the main mux rather
+than inside the `/api/v1` subtree, because its rule is stricter than the
+subtree's: `RequireRole(admin)` rather than `RequireWrite`. Go's mux prefers the
+more specific pattern, so this is what answers a `GET`, and any other method
+falls through to the subtree, which has no such route. Moving it inside would
+silently widen it to every signed-in reader.
+
+**Who and what it was called are joined at read time**, not recorded. An address
+written into an append-only table would outlive the erasure meant to remove it,
+so the actor's address comes from `users` on each read and is absent once that
+account is gone; the page shows those entries as a deleted account. The row's
+label does come from the log, which is what lets an entry about a line that has
+since been deleted still say which line it was.
 
 ### Build and supply chain (track 6)
 
