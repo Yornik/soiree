@@ -1468,7 +1468,10 @@
   var onScreen;   // undefined until the first render; null is the planner
 
   function enterScreen(id, title) {
-    document.title = id && title ? title + ' · ' + EVENT_TITLE : EVENT_TITLE;
+    var named = id && title ? title + ' · ' + EVENT_TITLE : EVENT_TITLE;
+    // Guarded like the lede, and for the same reason: assigning the title it
+    // already has is still a change as far as a screen reader is concerned.
+    if (document.title !== named) document.title = named;
     var moved = onScreen !== undefined && onScreen !== id;
     onScreen = id;
     if (!moved) return;
@@ -1911,6 +1914,14 @@
     heldFocus = control ? { id: p.id, act: control.getAttribute('data-act') || '' } : null;
   }
 
+  /* A hold let go because nothing was redrawn.
+   *
+   * There is no rebuilt row to put focus back into, and a hold left standing
+   * is spent on the next redraw instead, whatever that redraw was for: a
+   * refused removal followed by an account created would land focus on the
+   * "Remove" of the row that was not removed. */
+  function forgetFocus() { heldFocus = null; }
+
   function rowIndex(list, id) {
     var rows = list.querySelectorAll('li[data-id]');
     for (var i = 0; i < rows.length; i += 1) {
@@ -1938,10 +1949,8 @@
   }
 
   function loadPeople() {
-    // Built from scratch, so there is nothing to put focus back on: a hold
-    // taken before a request that ended in a sign-out must not be spent on
-    // whatever list is drawn next.
-    heldFocus = null;
+    // Built from scratch, so there is nothing to put focus back on.
+    forgetFocus();
     request('GET', '/users').then(function (res) {
       if (signedOut(res)) { sessionEnded(); return; }
       if (res.status !== 200 || !res.body) {
@@ -2161,6 +2170,7 @@
           adminSays(t('person.gone'), true);
           return;
         }
+        forgetFocus();
         adminSays(problem(res, {}), true);
       });
   }
@@ -2173,6 +2183,7 @@
       if (control) control.disabled = false;
       if (res.status === 200 && res.body) {
         if (res.body.user) adoptPerson(res.body.user);
+        else forgetFocus();
         afterInvite(res.body, p.email);
         return;
       }
@@ -2182,6 +2193,7 @@
         adminSays(t('person.gone'), true);
         return;
       }
+      forgetFocus();
       adminSays(problem(res, {}), true);
     });
   }

@@ -65,6 +65,8 @@ async function mountAccounts(page, opts = {}) {
     // How many /activity requests are refused before one is answered. The
     // screen's own retry is what is being tested, so the failure has to stop.
     activityFails: opts.activityFails || 0,
+    // The same, for removals: a refusal that leaves the row where it was.
+    removeFails: opts.removeFails || 0,
     calls: [],
   };
 
@@ -173,6 +175,10 @@ async function mountAccounts(page, opts = {}) {
       return json(route, 200, who);
     }
     if (one && req.method() === 'DELETE') {
+      if (state.removeFails > 0) {
+        state.removeFails -= 1;
+        return json(route, 500, { error: 'internal' });
+      }
       state.users = state.users.filter((u) => u.id !== one[1]);
       return route.fulfill({ status: 204, body: '' });
     }
@@ -967,6 +973,34 @@ test('removing somebody lands on the row that took their place, never on a Remov
   // keystroke from removing the next.
   await expect(page.locator('.person', { hasText: LINUS.email }).locator('select.person-role')).toBeFocused();
   expect(await page.evaluate(() => document.activeElement.className)).not.toContain('danger');
+});
+
+test('a refused action leaves no focus owed to a row that is still there', async ({ page }) => {
+  await mountAccounts(page, { session: ADA, users: [ADA, GRACE], removeFails: 1, mailSent: true });
+  await open(page, '/#/admin');
+  page.on('dialog', (d) => d.accept().catch(() => {}));
+
+  // Refused, so nothing is redrawn and there is no rebuilt row to go back to.
+  await page.locator('.person', { hasText: GRACE.email }).getByRole('button', { name: 'Remove' }).click();
+  await expect(page.locator('#adminMsg')).not.toBeEmpty();
+  await expect(page.locator('#peopleList .person')).toHaveCount(2);
+
+  // The next redraw is for something else entirely, and must not spend what
+  // the refusal left behind: that would put focus on the "Remove" of a row
+  // this person had just failed to remove.
+  await page.fill('#newUserEmail', 'linus@example.test');
+  await page.click('#createUserSubmit');
+  await expect(page.locator('#peopleList .person')).toHaveCount(3);
+
+  // Focus stays where the create form itself left it, which is nowhere in
+  // this list and in particular not on a "Remove".
+  expect(await page.evaluate(() => {
+    const at = document.activeElement;
+    return {
+      danger: at.className.indexOf('danger') >= 0,
+      inList: document.getElementById('peopleList').contains(at),
+    };
+  })).toEqual({ danger: false, inList: false });
 });
 
 /* ------------------------------------------------------------------
