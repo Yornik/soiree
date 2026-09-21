@@ -153,7 +153,7 @@ All persistence in `web/src/app.js` goes through one object:
 
 ```js
 Store.read()        // -> what was saved, or null if nothing was yet
-Store.write(state)  // persist the whole state object
+Store.write(state)  // persist the whole state object; false if it was refused
 Store.keep()        // persist it again, because the merge base moved
 ```
 
@@ -161,6 +161,13 @@ Nothing else touches `localStorage`. `save()` wraps `Store.write` and is
 debounced by 500 ms, flushed on `pagehide` and on `visibilitychange`. That seam
 is what let the network be added behind it without touching any of the ~28
 mutation sites: they call `save()` and know nothing about where the state goes.
+
+A `setItem` the browser refuses is answered rather than swallowed. Site data
+blocked for the origin throws on every write, and in the deployment with no
+database that write is the planner: the page used to carry on looking saved and
+keep nothing at all. Once the origin's `404` says there is no server either,
+the status line says so and asks for an export, and takes it back when a write
+gets through again.
 
 ### Two modes, decided once at startup
 

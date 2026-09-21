@@ -284,6 +284,7 @@
       'd.carried': 'Changes made in this browser that had not reached the server: {n}. They are going up now.',
       'd.refused': 'The server would not accept one of your changes. It is still here, but only in this browser — export the planner if it matters.',
       'd.session': 'Your session has ended. Sign in again — what you changed is safe in this browser and is sent as soon as you are back.',
+      'd.nostorage': 'This browser is not keeping your changes. Export the planner before you close this tab.',
       'ar.closed': 'This event has passed. The planner is closed, and the figures below are the final reckoning.',
       'ar.reopen': 'Reopen for editing',
       'ar.open': 'Reopened for editing. Close it again once everything is settled.',
@@ -444,6 +445,7 @@
       'd.carried': 'Wijzigingen in deze browser die de server niet hadden bereikt: {n}. Ze worden nu verstuurd.',
       'd.refused': 'De server accepteerde een van je wijzigingen niet. Hij staat er nog wel, maar alleen in deze browser — exporteer de planner als het belangrijk is.',
       'd.session': 'Je sessie is verlopen. Meld je opnieuw aan — je wijzigingen staan veilig in deze browser en worden verstuurd zodra je terug bent.',
+      'd.nostorage': 'Deze browser bewaart je wijzigingen niet. Exporteer de planner voordat je dit tabblad sluit.',
       'ar.closed': 'Dit feest is geweest. De planner is gesloten; de cijfers hieronder zijn de eindafrekening.',
       'ar.reopen': 'Heropenen om te bewerken',
       'ar.open': 'Weer opengesteld. Sluit de planner zodra alles is afgerekend.',
@@ -603,6 +605,7 @@
       'd.carried': 'Perubahan di browser ini yang belum sampai ke server: {n}. Semuanya dikirim sekarang.',
       'd.refused': 'Server menolak salah satu perubahanmu. Perubahan itu masih ada, tetapi hanya di browser ini — ekspor perencana kalau ini penting.',
       'd.session': 'Sesimu sudah berakhir. Masuk lagi — perubahanmu aman tersimpan di browser ini dan dikirim begitu kamu kembali.',
+      'd.nostorage': 'Browser ini tidak menyimpan perubahanmu. Ekspor perencana sebelum kamu menutup tab ini.',
       'ar.closed': 'Acara ini sudah lewat. Perencana ditutup dan angka di bawah adalah perhitungan akhir.',
       'ar.reopen': 'Buka lagi untuk diubah',
       'ar.open': 'Dibuka lagi untuk diubah. Tutup lagi setelah semuanya beres.',
@@ -868,7 +871,7 @@
    * the three methods below and leave the rest of the file alone.
    *
    *   Store.read()       -> what was saved, or null if nothing was yet
-   *   Store.write(state) -> persist the whole state object
+   *   Store.write(state) -> persist the whole state; false if it was refused
    *   Store.keep()       -> persist it again, because the merge base moved
    *
    * save() is debounced, so the write path is already async-shaped: that is
@@ -895,6 +898,12 @@
    * two writes are two moments, and a state paired on the next load with a
    * base another tab wrote differs from it in ways neither of them edited.
    * ------------------------------------------------------------------ */
+  // Whether the last write got through. A browser that refuses site data for
+  // the origin throws on every setItem, and with no database that write is the
+  // planner: swallowing it left the page looking saved and keeping nothing.
+  // See reportStorage().
+  var storageOk = true;
+
   var Store = {
     key: STORAGE_KEY,
     read: function () {
@@ -904,10 +913,11 @@
       } catch (e) { return null; }
     },
     write: function (s) {
-      this.put(s);
+      var kept = this.put(s);
       // A no-op until the probe has found an API, so the local-only
       // deployment never touches the network again after it.
       Sync.push();
+      return kept;
     },
     // The base moved with nobody typing: a write was confirmed, or a plan was
     // merged. Kept at once rather than at the next save, because the state and
@@ -924,7 +934,13 @@
       var value = shadow
         ? { state: s, shadow: shadow, idMap: idMap, createKeys: createKeys, createBodies: createBodies }
         : s;
-      try { localStorage.setItem(this.key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
+      try {
+        localStorage.setItem(this.key, JSON.stringify(value));
+        storageOk = true;
+      } catch (e) {
+        storageOk = false;
+      }
+      return storageOk;
     },
     clear: function () {
       try { localStorage.removeItem(this.key); } catch (e) { /* storage unavailable */ }
@@ -1988,7 +2004,10 @@
         return;
       }
       // 404 is final: with no database those paths are never registered.
-      if (res.status === 404) { connecting = false; noLongerAway(); announceAPI(false); return; }
+      // Reported here as well as on every write: this is the moment it becomes
+      // true that nothing else is keeping the planner, and a person who typed
+      // once and stopped would otherwise not be told until they typed again.
+      if (res.status === 404) { connecting = false; noLongerAway(); announceAPI(false); reportStorage(); return; }
       // 401 is not "no API" — it is an API that wants a session. Falling back
       // to localStorage here would be the worst of both: edits would look
       // saved, live in this browser only, and never reach the plan everybody
@@ -2657,6 +2676,7 @@
     // writing the empty planner back would only put the key there again.
     if (forgotten) return;
     Store.write(state);
+    reportStorage();
   }
   function save() {
     forgotten = false;
@@ -2667,6 +2687,24 @@
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
   }
+  /* A browser that keeps nothing has to say so. With no database behind it
+   * that write is the planner rather than a cache in front of one, so a
+   * setItem the browser refuses — site data blocked for the origin, or no room
+   * left — means the evening's work exists until the tab closes and no longer,
+   * while the page goes on looking saved.
+   *
+   * Held until the origin has answered 404. `apiMode` is not the question:
+   * before the first plan arrives, and during a 401 hold, it is false on a
+   * deployment whose planner is on a server, where the same failed write costs
+   * only the copy that paints first. Told to export, because with no server
+   * there is nowhere else for it to go.
+   */
+  function reportStorage() {
+    if (!(window.soiree && window.soiree.apiAvailable === false)) return;
+    if (!storageOk) setSticky(t('d.nostorage'));
+    else if (stickyMsg === t('d.nostorage')) setSticky('');
+  }
+
   window.addEventListener('pagehide', flushSave);
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'hidden') flushSave();

@@ -373,3 +373,41 @@ test('a corrupt saved planner is repaired rather than fatal', async ({ page }) =
   await gotoTab(page, 'tasks');
   await expect(page.locator('#tasksBody .empty-cell')).toBeVisible();
 });
+
+/**
+ * Waits until the origin's 404 has landed. The notices and the adoption below
+ * are held until then, because until then this could be a deployment whose
+ * plan lives on a server, and a page that has not made up its mind yet reads
+ * as a failure of either.
+ */
+async function localOnly(page) {
+  await page.waitForFunction(() => !!window.soiree && window.soiree.apiAvailable === false);
+}
+
+/*
+ * A browser that refuses site data throws on every localStorage write. With no
+ * database that write is the planner rather than a cache in front of one, so a
+ * page carrying on as though it had saved is an evening's work lost to closing
+ * a tab, with nothing said at any point.
+ */
+test('a browser that keeps nothing says so rather than looking saved', async ({ page }) => {
+  await page.addInitScript(() => {
+    const setItem = Storage.prototype.setItem;
+    // Only the planner's key: the theme is stored separately, and a browser
+    // that refused both would be testing two things at once.
+    Storage.prototype.setItem = function (key, value) {
+      if (key === 'soiree.v1') throw new DOMException('site data is blocked', 'SecurityError');
+      return setItem.call(this, key, value);
+    };
+  });
+
+  await openPlanner(page);
+  await localOnly(page);
+  await gotoTab(page, 'budget');
+  await addBudgetLine(page, { item: 'Venue deposit', unit: 2500, qty: 1, paid: 500 });
+
+  await expect(page.locator('#dataMsg')).toHaveText(
+    'This browser is not keeping your changes. Export the planner before you close this tab.',
+  );
+  expect(await readStored(page)).toBeNull();
+});
