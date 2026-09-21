@@ -365,6 +365,25 @@ test('the mark counting what is due on the day keeps its number in front of the 
   expect(await overTheCount(page)).toBe('2 tasks, Jun 12');
 });
 
+test('the word under the left end is not read out in front of the date', async ({ page }) => {
+  await openWith(page, CROWDED_NOW, [
+    ['Pay the florist', '2029-12-20', 'Grace'],
+    ['Order the cake', '2030-03-01', 'Grace'],
+  ]);
+  // Both ends of the scale sit in one paragraph, so a reader that has no
+  // scale to look at gets the two labels one after the other - "today" and
+  // then the day, which together say the day is today.
+  const ends = await page.locator('.runup-ends').ariaSnapshot();
+  expect(ends).not.toMatch(/today|overdue/);
+  expect(ends).toContain('June 12, 2030');
+
+  // Both are still on the screen, and what is late is still announced, by the
+  // mark that carries it rather than by the end of the line.
+  await expect(page.locator('#runupFrom')).toBeVisible();
+  await expect(page.locator('#runupFrom')).toHaveText('today – 1 overdue');
+  await expect(page.locator('#runupMarks .runup-mark.late')).toHaveAttribute('aria-label', '1 overdue');
+});
+
 test('the months are ticked where they fall and named where there is room', async ({ page }) => {
   await openWith(page, CROWDED_NOW, CROWDED);
   const ticks = await page.locator('#runupTicks .runup-tick').evaluateAll((els) => els.map((el) => parseFloat(el.style.left)));

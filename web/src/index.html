@@ -94,10 +94,15 @@
          Everything in planning an evening is measured against one date, so
          that distance is the first thing on the page rather than a number in
          a corner. The drawing itself - the line, its two ends, the month
-         ticks - is hidden from assistive technology. The marks are not: each
-         one is a button that says what is due there and opens the list, so
-         they are one toolbar, one stop in the tab order, walked with the
-         arrow keys. -->
+         ticks, the word under the left end - is hidden from assistive
+         technology: on the screen a thousand pixels separate "today" from
+         the date under the right end, in a reading order nothing does, and
+         the two together read as one phrase saying the day is today. The
+         date stays, being the only place the day itself is written out, and
+         anything late is announced by the mark that carries it. The marks
+         are not hidden: each one is a button that says what is due there and
+         opens the list, so they are one toolbar, one stop in the tab order,
+         walked with the arrow keys. -->
     <div class="runup" id="runup">
       <p class="countdown">
         <span class="countdown-num" id="daysNum">–</span>
@@ -111,7 +116,7 @@
         <span class="runup-day" aria-hidden="true"></span>
       </div>
       <p class="runup-ends">
-        <span class="runup-from" id="runupFrom" data-i18n="ru.today">today</span>
+        <span class="runup-from" id="runupFrom" data-i18n="ru.today" aria-hidden="true">today</span>
         <span class="runup-months" id="runupMonths" aria-hidden="true"></span>
         <span class="countdown-date" id="statDaysLabel">–</span>
       </p>
