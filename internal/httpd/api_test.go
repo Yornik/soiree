@@ -575,6 +575,48 @@ func TestAFailureDuringADisconnectIsStillAFailure(t *testing.T) {
 	}
 }
 
+// A class 22 is a value the column would not hold, and 400 is the right answer
+// to it: the caller sent it and the caller is the only one who can act on it.
+// The same class also covers a value this server built itself, and that one is
+// nobody's mistake but ours. There is no access log here and a 400 is nowhere
+// near the 5xx rate an alert reads, so a bound in Go that stopped agreeing
+// with its column would present as an honest editor being refused, with
+// nothing to find it by. Answered, then, and also said out loud.
+func TestAValueTheColumnRefusedIsSaidOutLoud(t *testing.T) {
+	h, _ := newAPIServer(t)
+
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// A NUL byte reaches no bound this API checks; Postgres refuses it as
+	// SQLSTATE 22021.
+	res := call(t, h, http.MethodPost, "/api/v1/budget-items", `{"item":"Ca\u0000ke"}`)
+	if res.status != http.StatusBadRequest {
+		t.Fatalf("-> %d, want 400\n%s", res.status, res.body)
+	}
+	line := logged.String()
+	for _, want := range []string{`"level":"WARN"`, `"sqlstate":"22021"`, `"pattern":"POST /budget-items"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the refusal reached the log without %s:\n%s", want, line)
+		}
+	}
+
+	// The constraints an honest client trips over stay as quiet as they were.
+	// A reference to a row that does not exist is a 400 from the same
+	// translation, and it says nothing about this server.
+	logged.Reset()
+	res = call(t, h, http.MethodPost, "/api/v1/budget-items",
+		`{"item":"Cake","phaseId":"`+uuid.New().String()+`"}`)
+	if res.status != http.StatusBadRequest {
+		t.Fatalf("a phase that does not exist -> %d, want 400\n%s", res.status, res.body)
+	}
+	if logged.Len() != 0 {
+		t.Errorf("a foreign key the caller got wrong was logged:\n%s", logged.String())
+	}
+}
+
 // TestPatchLeavesOmittedFieldsAlone is the reason a patch reads the row first.
 // UpdateBudgetItem writes every column and replaces the sponsor attributions
 // with exactly what it is given, so a patch of one field built from anything
