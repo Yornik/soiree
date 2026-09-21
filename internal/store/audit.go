@@ -50,6 +50,12 @@ import (
 // correct password at raised cost parameters during a login, so the stored
 // bytes change while the password does not. Choosing a password is the change
 // worth recording, and redeeming a link is where that happens.
+//
+// And one whole path records nothing: erasure. It rewrites or removes every
+// row that names somebody, and an entry for that would copy the address, the
+// vendor or the sentence being erased into a table erasure cannot reach
+// afterwards, which is the one thing it must not leave behind. What it changed
+// is reported to its caller in ErasureResult instead.
 
 // Entity names, matching the table each change happened to. They are what
 // ChangeHistory is asked for, so they live as constants rather than as string
