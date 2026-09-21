@@ -586,8 +586,10 @@ answered `400`, which is the right answer to a figure past what its column
 holds, and logged at WARN with the SQLSTATE and the constraint. The same class
 covers a bound in this application that stopped agreeing with the column behind
 it, and nothing else would show that: the caller is refused like any other
-caller and a `400` is not in the 5xx rate. It is the only WARN line here, so a
-saved `level=ERROR` query does not show it.
+caller and a `400` is not in the 5xx rate. It is logged at WARN rather than
+ERROR, so a saved `level=ERROR` query does not show it. Beginning an attachment
+answers the same class the same way without the line: it calls
+`constraintError` directly rather than going through `writeStoreError`.
 
 A handler panic is recovered where the request is counted, so it arrives as one
 ERROR line carrying the route and the stack, and as a `status="500"` sample.
