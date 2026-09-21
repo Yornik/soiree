@@ -152,6 +152,10 @@ type AuthOptions struct {
 	// here: it is what a mail is written in when whoever asked for it did not
 	// say, which keeps the mail in step with the page its link opens.
 	Locale string
+
+	// EventName is what the mails say they are about. Empty is legal and
+	// falls back to wording that names nothing, the way the digest does.
+	EventName string
 }
 
 // Auth is the accounts, sessions and roles surface.
@@ -165,6 +169,9 @@ type Auth struct {
 	// defaultLanguage is the deployment's language, resolved once. See
 	// mailLanguage.
 	defaultLanguage string
+
+	// eventName is what the mails are about. See inviteMessage.
+	eventName string
 
 	loginIP         *limiter
 	loginAcct       *limiter
@@ -207,6 +214,7 @@ func NewAuth(o AuthOptions) *Auth {
 		trustProxy: o.TrustProxyHeaders,
 
 		defaultLanguage: languageOfLocale(o.Locale),
+		eventName:       o.EventName,
 
 		loginIP:         newLimiter(loginIPBurst, loginIPWindow),
 		loginAcct:       newLimiter(loginAcctBurst, loginAcctWindow),
@@ -837,7 +845,7 @@ func (a *Auth) issueToken(ctx context.Context, user store.User, purpose store.To
 
 	link := a.setPasswordURL(token, language)
 	if a.mailer != nil {
-		subject, body := inviteMessage(purpose, link, a.mailLanguage(language))
+		subject, body := inviteMessage(purpose, link, a.mailLanguage(language), a.eventName, a.baseURL)
 		a.background(func(ctx context.Context) {
 			if err := a.mailer.Send(ctx, user.Email, subject, body); err != nil {
 				// The error, never the message. The body is the link.
@@ -874,43 +882,122 @@ func (a *Auth) setPasswordURL(token string, language *string) string {
 
 // inviteMessage composes the two mails this surface sends.
 //
-// Plain text and short: the link is the message. None of them names the event
-// or the admin who sent it, and a consequence worth keeping when editing them
-// is that a mail sent to a mistyped address tells a stranger nothing about
-// whose planner this is.
-func inviteMessage(purpose store.TokenPurpose, link, language string) (subject, body string) {
+// Plain text and short: the link is the message. They name the event, which
+// they deliberately did not until this was reversed. The old reasoning was
+// that a mail to a mistyped address should tell a stranger nothing about whose
+// planner this is; what it protected turned out to be nothing, because the
+// link's own hostname is in the mail and the page behind it hands the event's
+// name and date to any anonymous visitor, and the stranger is holding a
+// working credential besides. What the omission did cost was borne by the
+// person the mail was meant for, who had an unsigned account mail from an
+// unfamiliar domain to judge on twenty words and a tokenised URL. The digest
+// has named the event in its subject all along. The admin who sent it is still
+// deliberately unnamed.
+//
+// Only the invitation carries the line about an expired link. Whoever asked
+// for a reset has just used the control it points at.
+//
+// site is the deployment's own address, and it never goes in front of the
+// link: the first https:// in the body is how a reader, and every test here,
+// finds the thing to click.
+func inviteMessage(purpose store.TokenPurpose, link, language, eventName, site string) (subject, body string) {
+	m := accountMail(language, purpose)
+
+	subject, lede := m.subject, m.lede
+	if eventName != "" {
+		subject = fmt.Sprintf(m.subjectNamed, eventName)
+		lede = fmt.Sprintf(m.ledeNamed, eventName)
+	}
+	tail := m.tail
+	// Configuration refuses mail without a base URL, so an empty site is a
+	// caller inside this package rather than a deployment. Say nothing rather
+	// than point at nowhere.
+	if m.expired != "" && site != "" {
+		tail += " " + fmt.Sprintf(m.expired, site)
+	}
+	return subject, lede + "\n\n" + link + "\n\n" + tail + "\n"
+}
+
+// mailText is one language's wording for one of the two mails.
+//
+// The named halves take the event name and are what a deployment sends; the
+// bare ones are the fallback for a deployment that has emptied
+// SOIREE_EVENT_NAME, the way internal/reminders/render.go falls back for the
+// digest's subject. Adding a language means adding a case to accountMail, and
+// leaving a field empty there is caught by TestEveryLanguageHasItsOwnMails.
+type mailText struct {
+	subject, subjectNamed string // subjectNamed takes the event name
+	lede, ledeNamed       string // what stands above the link
+	tail                  string // what stands below it
+	expired               string // takes the site; the invitation only
+}
+
+func accountMail(language string, purpose store.TokenPurpose) mailText {
 	reset := purpose == store.PurposeReset
 	switch language {
 	case "nl":
 		if reset {
-			return "Stel een nieuw wachtwoord in",
-				"Iemand heeft gevraagd om een nieuw wachtwoord voor je account in te stellen.\n\n" +
-					link + "\n\nDe link werkt één keer en verloopt na 24 uur. " +
-					"Was jij dit niet, dan is er niets veranderd en kun je dit bericht negeren.\n"
+			return mailText{
+				subject:      "Stel een nieuw wachtwoord in",
+				subjectNamed: "%s: stel een nieuw wachtwoord in",
+				lede:         "Iemand heeft gevraagd om een nieuw wachtwoord voor je account in te stellen.",
+				ledeNamed:    "Iemand heeft gevraagd om een nieuw wachtwoord voor je account voor %s in te stellen.",
+				tail: "De link werkt één keer en verloopt na 24 uur. " +
+					"Was jij dit niet, dan is er niets veranderd en kun je dit bericht negeren.",
+			}
 		}
-		return "Je account staat klaar",
-			"Er is een account voor je aangemaakt. Kies hier een wachtwoord:\n\n" +
-				link + "\n\nDe link werkt één keer en verloopt na 24 uur.\n"
+		return mailText{
+			subject:      "Je account staat klaar",
+			subjectNamed: "%s: kies een wachtwoord",
+			lede:         "Er is een account voor je aangemaakt. Kies hier een wachtwoord:",
+			ledeNamed:    "Je bent toegevoegd aan de planner voor %s. Kies hier een wachtwoord:",
+			tail:         "De link werkt één keer en verloopt na 24 uur.",
+			expired: "Is de link verlopen, ga dan naar %s en kies " +
+				"\"Mail me een link om een nieuw wachtwoord in te stellen\"; " +
+				"je krijgt er dan een nieuwe op dit adres.",
+		}
 	case "id":
 		if reset {
-			return "Buat kata sandi baru",
-				"Seseorang meminta pembuatan kata sandi baru untuk akunmu.\n\n" +
-					link + "\n\nTautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam. " +
-					"Kalau ini bukan kamu, tidak ada yang berubah dan pesan ini bisa diabaikan.\n"
+			return mailText{
+				subject:      "Buat kata sandi baru",
+				subjectNamed: "%s: buat kata sandi baru",
+				lede:         "Seseorang meminta pembuatan kata sandi baru untuk akunmu.",
+				ledeNamed:    "Seseorang meminta pembuatan kata sandi baru untuk akunmu di %s.",
+				tail: "Tautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam. " +
+					"Kalau ini bukan kamu, tidak ada yang berubah dan pesan ini bisa diabaikan.",
+			}
 		}
-		return "Akunmu sudah siap",
-			"Sebuah akun telah dibuat untukmu. Buat kata sandi di sini:\n\n" +
-				link + "\n\nTautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam.\n"
+		return mailText{
+			subject:      "Akunmu sudah siap",
+			subjectNamed: "%s: buat kata sandi",
+			lede:         "Sebuah akun telah dibuat untukmu. Buat kata sandi di sini:",
+			ledeNamed:    "Kamu telah ditambahkan ke perencana %s. Buat kata sandi di sini:",
+			tail:         "Tautan ini hanya bisa dipakai sekali dan kedaluwarsa dalam 24 jam.",
+			expired: "Kalau sudah kedaluwarsa, buka %s lalu pilih " +
+				"\"Kirimi saya tautan untuk membuat kata sandi baru\" " +
+				"agar tautan baru dikirim ke alamat ini.",
+		}
 	}
 	if reset {
-		return "Set a new password",
-			"Someone asked to set a new password on your account.\n\n" +
-				link + "\n\nThe link works once and expires in 24 hours. " +
-				"If this was not you, nothing has changed and you can ignore this.\n"
+		return mailText{
+			subject:      "Set a new password",
+			subjectNamed: "%s: set a new password",
+			lede:         "Someone asked to set a new password on your account.",
+			ledeNamed:    "Someone asked to set a new password on your account for %s.",
+			tail: "The link works once and expires in 24 hours. " +
+				"If this was not you, nothing has changed and you can ignore this.",
+		}
 	}
-	return "Your account is ready",
-		"An account has been created for you. Choose a password here:\n\n" +
-			link + "\n\nThe link works once and expires in 24 hours.\n"
+	return mailText{
+		subject:      "Your account is ready",
+		subjectNamed: "%s: choose your password",
+		lede:         "An account has been created for you. Choose a password here:",
+		ledeNamed:    "You have been added to the planner for %s. Choose a password here:",
+		tail:         "The link works once and expires in 24 hours.",
+		expired: "If it has expired, open %s and choose " +
+			"\"Email me a link to set a new password\" " +
+			"to have a fresh one sent to this address.",
+	}
 }
 
 // handleRevokeCredentials takes away every way into somebody's account: their

@@ -1036,6 +1036,15 @@ directly — so a deployment without mail is degraded, not broken. Asking for a
 reset there issues nothing at all: a link nobody can be sent would still
 supersede the one the admin is passing on by hand.
 
+Both mails name the event, in the subject and in the first line, and the
+invitation says where to go once its link has expired: the sign-in screen's
+*Email me a link to set a new password*, which reissues an invitation to an
+account that has not set a password yet. They named nothing until that was
+reversed. The omission was meant to keep a mail to a mistyped address from
+telling a stranger whose planner this is, and it protected nothing, because the
+link's hostname is in the mail and the page behind it gives the event's name and
+date to any anonymous visitor. Who sent the invitation is still unnamed.
+
 **The first account is the exception, and needs its own way in.** Every route
 that hands back a set-password link is admin-only, and `password-reset` issues
 nothing without a mailer — so on an empty database with no working SMTP there
