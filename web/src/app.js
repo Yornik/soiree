@@ -2899,7 +2899,8 @@
 
     askedFor = n.build;
     navigator.serviceWorker.getRegistration().then(function (reg) {
-      if (!reg) return Promise.reject(new Error('no registration'));
+      // Controlled a moment ago and no registration now: nothing was asked.
+      if (!reg) { askedFor = ''; return null; }
       return reg.update();
     }).catch(function () {
       // Asked for is not the same as asked. A /sw.js fetch made at the moment

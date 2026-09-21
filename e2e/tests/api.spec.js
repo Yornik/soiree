@@ -3005,6 +3005,7 @@ test('a plan saved before the order was a field of its own arrives unmoved', asy
     .toEqual([['Venue deposit (final)', 0], ['Flowers', 2]]);
 });
 
+/**
  * A deploy, from the page's side of it.
  *
  * A tab left open for a week is the ordinary way this app is used, and until
