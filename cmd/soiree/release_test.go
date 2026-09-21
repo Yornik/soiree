@@ -260,21 +260,53 @@ func TestATagOffMainIsNotReleased(t *testing.T) {
 	}
 }
 
-// Both publishing jobs write `:latest` and nothing orders them. Two releases
-// cut close together, which is how this project releases, run their checks in
-// parallel and finish in whichever order the runners take, so the floating tag
-// can end up on the earlier digest while the release notes name the later one.
-// Both runs are green and both signatures verify, since each verifies its own
-// digest, so nothing reports it: the symptom is what somebody who followed
-// README.md and pulled `:latest` is running, which SECURITY.md defines as the
-// supported version.
-func TestTwoReleasesDoNotRaceForTheFloatingTag(t *testing.T) {
+// `:latest` is what README.md hands a new reader, and SECURITY.md defines the
+// supported version as "the newest `vX.Y.Z` tag, which is what
+// `ghcr.io/yornik/soiree:latest` points at", so the floating tag has to name
+// the newest release rather than the last one to reach the registry. Those are
+// different whenever the publish order is not the release order: two releases
+// cut minutes apart finish their checks in whichever order their runners take,
+// a re-run of a flaked check publishes after the later release has landed, and
+// a tag pushed at an old commit has nothing to race at all. Nothing reports
+// it, since both runs are green and each verifies its own digest. So the tag
+// list is computed by a step that compares the version being released against
+// the tags on origin, and `:latest` is never in the fixed list a job hands the
+// builder.
+func TestTheFloatingTagFollowsTheNewestRelease(t *testing.T) {
+	for name, jobs := range releaseJobs(t) {
+		for id, j := range jobs {
+			compares := false
+			for _, s := range j.Steps {
+				if strings.Contains(s.Run, "--sort=-v:refname") {
+					compares = true
+				}
+				if strings.Contains(fmt.Sprint(s.With["tags"]), ":latest") {
+					t.Errorf(".github/workflows/%s: job %q hands the builder :latest in a fixed list, so it moves the floating tag whichever version it is publishing",
+						name, id)
+				}
+			}
+			if !compares {
+				t.Errorf(".github/workflows/%s: job %q publishes without comparing the version it releases against the tags on origin, so whichever release reaches the registry last owns :latest",
+					name, id)
+			}
+		}
+	}
+}
+
+// The two publishing jobs share one concurrency group, so they do not write
+// the registry at the same time. That is the whole of what it buys: a job
+// joins its group only once `needs` is satisfied, so the group does not make
+// the publish order the release order, and a re-run of a flaked check joins it
+// long after the later release has landed. Which digest `:latest` ends on is
+// TestTheFloatingTagFollowsTheNewestRelease's subject. What this one keeps is
+// the serialising, and the queueing rather than the replacing.
+func TestTwoReleasesDoNotPublishAtOnce(t *testing.T) {
 	groups := make(map[string]int)
 	for name, jobs := range releaseJobs(t) {
 		for id, j := range jobs {
 			switch {
 			case j.Concurrency.Group == "":
-				t.Errorf(".github/workflows/%s: job %q publishes :latest in no concurrency group, so a release that started later can overtake it and leave the floating tag on the older digest",
+				t.Errorf(".github/workflows/%s: job %q publishes in no concurrency group, so two releases can be pushing and signing at the same moment",
 					name, id)
 			case strings.Contains(j.Concurrency.Group, "${{"):
 				t.Errorf(".github/workflows/%s: job %q is in concurrency group %q, which expands to something different in every run, so it serialises nothing",
@@ -295,7 +327,7 @@ func TestTwoReleasesDoNotRaceForTheFloatingTag(t *testing.T) {
 	// makes a hand-pushed tag and a release-please release wait for each other
 	// rather than each only for itself.
 	if len(groups) > 1 {
-		t.Errorf("the publishing jobs are spread over %d concurrency groups (%v), and a group serialises only against itself, so the two release paths still race",
+		t.Errorf("the publishing jobs are spread over %d concurrency groups (%v), and a group serialises only against itself, so the two release paths can still publish at once",
 			len(groups), groups)
 	}
 }

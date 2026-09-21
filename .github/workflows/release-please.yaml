@@ -51,8 +51,10 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     # The group ci.yaml's release-image job is in, for the reason written
-    # there: both jobs move `:latest`, and a group serialises only against
-    # itself, so the name has to be the same one in both files.
+    # there: it keeps the two jobs out of the registry at the same time, and a
+    # group serialises only against itself, so the name has to be the same one
+    # in both files. Which digest `:latest` ends on is the step below's doing,
+    # not this group's.
     concurrency:
       group: release-image
       cancel-in-progress: false
@@ -73,15 +75,43 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The floating tag moves only for the newest release, for the reason and
+      # with the caveat written beside the same step in ci.yaml. This path
+      # releases what main has just merged, which is usually the highest
+      # version there is, but not when a re-run publishes it after a later
+      # release or when a tag pushed by hand is higher.
+      - name: Decide whether this release moves :latest
+        id: tags
+        env:
+          VERSION: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          newest=$(git ls-remote --tags --refs --sort=-v:refname origin 'v*' |
+            awk 'NR == 1 { sub(/.*refs\/tags\//, "", $2); print $2 }')
+          if [ -z "$newest" ]; then
+            echo "::error::origin carries no vX.Y.Z tag, so there is nothing to compare $VERSION against"
+            exit 1
+          fi
+          highest=$(printf '%s\n%s\n' "$newest" "$VERSION" | sort -V | tail -n 1)
+          {
+            echo 'list<<END_OF_TAG_LIST'
+            echo "${IMAGE}:${VERSION}"
+            if [ "$highest" = "$VERSION" ]; then
+              echo "${IMAGE}:latest"
+            fi
+            echo END_OF_TAG_LIST
+          } >> "$GITHUB_OUTPUT"
+          if [ "$highest" != "$VERSION" ]; then
+            echo "::warning::$newest is a later release than $VERSION, so :latest was left where it is"
+          fi
+
       - name: Build and push release image
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ needs.release-please.outputs.tag_name }}
-            ${{ env.IMAGE }}:latest
+          tags: ${{ steps.tags.outputs.list }}
           build-args: |
             VERSION=${{ needs.release-please.outputs.tag_name }}
             COMMIT=${{ github.sha }}
