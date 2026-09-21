@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -238,5 +241,107 @@ func TestAListenerThatCannotBindStopsTheProcessWithAFailure(t *testing.T) {
 	}
 	if strings.Contains(string(out), "soiree listening") {
 		t.Errorf("the log announced a listener that was never bound:\n%s", out)
+	}
+}
+
+// A shutdown can take a while: http.Server.Shutdown waits for connections to go
+// idle, and the deferred reminder stop that runs after it waits for a digest
+// already in flight. The signal context stayed armed through all of that, so
+// the second Ctrl-C of somebody watching a shutdown that is going nowhere did
+// nothing at all — os/signal keeps a signal captured until its stop function
+// runs, and this one only ran on the way out of main.
+//
+// main() is what is under test, so it runs in a child copy of this test binary,
+// the same way the bind test above does.
+func TestASecondSignalStopsAShutdownThatIsTakingTooLong(t *testing.T) {
+	if os.Getenv("SOIREE_TEST_RUN_MAIN") == "1" {
+		main()
+		return
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locate this test binary: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, self, "-test.run="+t.Name())
+	// Built from nothing rather than inherited, for the reason the bind test
+	// gives. Both listeners ask for port 0 and the two strings still differ,
+	// which is the comparison config makes.
+	child.Env = []string{
+		"SOIREE_TEST_RUN_MAIN=1",
+		"SOIREE_LISTEN_ADDR=127.0.0.1:0",
+		"SOIREE_METRICS_ADDR=localhost:0",
+	}
+	stdout, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatalf("read the child's log: %v", err)
+	}
+	child.Stderr = os.Stderr
+	if err := child.Start(); err != nil {
+		t.Fatalf("start the child: %v", err)
+	}
+	defer func() { _ = child.Process.Kill() }()
+
+	scanner := bufio.NewScanner(stdout)
+	var seen strings.Builder
+	// The log is the only thing this process says about where it has got to, so
+	// it is also how this test waits: no sleep long enough to go flaky under
+	// load, and a failure carries what the child actually said.
+	awaitLog := func(msg string) map[string]any {
+		t.Helper()
+		for scanner.Scan() {
+			line := scanner.Text()
+			seen.WriteString(line + "\n")
+			var entry map[string]any
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				continue
+			}
+			if entry["msg"] == msg {
+				return entry
+			}
+		}
+		t.Fatalf("the child never logged %q:\n%s", msg, seen.String())
+		return nil
+	}
+
+	addr, _ := awaitLog("soiree listening")["addr"].(string)
+	if addr == "" {
+		t.Fatalf("the child did not say which address it took:\n%s", seen.String())
+	}
+
+	// A connection that is accepted and then says nothing is what holds the
+	// shutdown open long enough to signal into: net/http reaps one only once it
+	// has been silent for five seconds, and until then the shutdown is waiting
+	// on it exactly as it waits on a request that is still being served.
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("connect to the child: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("ask the child to stop: %v", err)
+	}
+	// Logged after the signals are handed back, so waiting for this line is
+	// what puts the second one below on a process that is already shutting
+	// down rather than on one that has not noticed the first yet.
+	awaitLog("shutting down")
+
+	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("insist: %v", err)
+	}
+
+	err = child.Wait()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("the child sat out its whole shutdown and exited successfully (err=%v), so the second signal was ignored:\n%s",
+			err, seen.String())
+	}
+	status, ok := exit.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() || status.Signal() != syscall.SIGTERM {
+		t.Errorf("the child left through exit status %v rather than being killed by the second signal:\n%s",
+			exit, seen.String())
 	}
 }

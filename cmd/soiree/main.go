@@ -298,6 +298,15 @@ func main() {
 	}()
 
 	<-ctx.Done()
+	// The signals go back to their default disposition here, so a second
+	// SIGTERM or Ctrl-C from here on kills the process. Held any longer they
+	// are simply swallowed, and everything below this line can take a while:
+	// Shutdown waits ten seconds for connections to go idle, and the deferred
+	// reminder stop after it waits for a digest that is already sending, which
+	// is bounded by the send timeout rather than by the grace period. Somebody
+	// watching a shutdown that is going nowhere should be able to insist, and
+	// that hard stop skipping the deferred cleanup is what they are asking for.
+	stop()
 	log.Info("shutting down")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
