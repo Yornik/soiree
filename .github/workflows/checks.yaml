@@ -184,7 +184,7 @@ jobs:
       #
       # Pinned rather than @latest, like every action in this file: a floating
       # version changes CI with no commit, and Renovate cannot track it.
-      - run: npx --yes @redocly/cli@2.53.3 lint api/openapi.yaml
+      - run: npx --yes @redocly/cli@2.54.2 lint api/openapi.yaml
 
   vuln:
     name: Vulnerabilities (govulncheck)
