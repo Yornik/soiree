@@ -46,7 +46,7 @@ jobs:
           # rule in renovate.json waits for green checks, so the dependency
           # updates would stop along with it. The trailing comment names the
           # package, which is what the customManager in renovate.json reads.
-          version: v2.13.2 # golangci/golangci-lint
+          version: v2.14.0 # golangci/golangci-lint
 
   test:
     name: Test (go test)
