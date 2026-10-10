@@ -4,8 +4,8 @@ go 1.27.1
 
 require (
 	github.com/SherClockHolmes/webpush-go v1.4.0
-	github.com/andybalholm/brotli v1.2.4
-	github.com/fxamacker/cbor/v2 v2.9.4
+	github.com/andybalholm/brotli v1.2.6
+	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
