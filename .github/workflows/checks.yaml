@@ -200,7 +200,7 @@ jobs:
       # Pinned like the rest: the advisory database is fetched when the scanner
       # runs, so a fixed version still reports today's vulnerabilities, and the
       # scanner itself is then one more thing that changes only in a commit.
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   build:
     name: Build image (validate)
