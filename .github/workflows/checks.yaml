@@ -18,7 +18,7 @@ permissions:
 # Keep in step with the Dockerfile, or the tested toolchain differs from the
 # shipped one. Renovate tracks both (see customManagers in renovate.json).
 env:
-  GO_VERSION: '1.27.1'
+  GO_VERSION: '1.27.2'
 
 # Every action is pinned to a commit digest, not a tag: a tag is mutable and
 # whoever can move it can run arbitrary code with this workflow's token. The
