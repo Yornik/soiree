@@ -23,7 +23,7 @@ env:
   # Keep in step with the Dockerfile, like the check jobs. Renovate moves both
   # in one pull request (see customManagers in renovate.json), and a test in
   # cmd/soiree fails if two files ever name different toolchains.
-  GO_VERSION: '1.27.1'
+  GO_VERSION: '1.27.2'
 
 # Every action is pinned to a commit digest, not a tag: a tag is mutable and
 # whoever can move it can run arbitrary code with this workflow's token. The
