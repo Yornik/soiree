@@ -8,7 +8,7 @@
 # not the binary that was signed. Renovate moves the tag, the digest and
 # GO_VERSION in one pull request, and a test in cmd/soiree fails if the
 # Dockerfile and ci.yaml ever name different toolchains.
-FROM golang:1.27.1-alpine@sha256:4cb7ac979db5fcc41cae44b2227ba5ab8a51e8807f40d9ba4dee20a0ad960b5b AS build
+FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS build
 
 WORKDIR /src
 
